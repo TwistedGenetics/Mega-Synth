@@ -186,6 +186,28 @@ struct Biquad
         a1 = -2.0 * c * ia0; a2 = (1.0 - alpha) * ia0;
     }
 
+    // RBJ shelving EQ (slope 1)
+    void setShelf (bool low, double freq, double gainDb, double sampleRate)
+    {
+        const double A = std::pow (10.0, gainDb / 40.0);
+        const double w0 = 2.0 * kPi * clampv (freq, 10.0, sampleRate * 0.45) / sampleRate;
+        const double c = std::cos (w0), sn = std::sin (w0);
+        const double alpha = sn / 2.0 * std::sqrt (2.0);
+        const double sq = 2.0 * std::sqrt (A) * alpha;
+        double a0;
+        if (low)
+        {
+            b0 = A * ((A + 1) - (A - 1) * c + sq); b1 = 2 * A * ((A - 1) - (A + 1) * c); b2 = A * ((A + 1) - (A - 1) * c - sq);
+            a0 = (A + 1) + (A - 1) * c + sq;        a1 = -2 * ((A - 1) + (A + 1) * c);    a2 = (A + 1) + (A - 1) * c - sq;
+        }
+        else
+        {
+            b0 = A * ((A + 1) + (A - 1) * c + sq); b1 = -2 * A * ((A - 1) + (A + 1) * c); b2 = A * ((A + 1) + (A - 1) * c - sq);
+            a0 = (A + 1) - (A - 1) * c + sq;        a1 = 2 * ((A - 1) - (A + 1) * c);      a2 = (A + 1) - (A - 1) * c - sq;
+        }
+        b0 /= a0; b1 /= a0; b2 /= a0; a1 /= a0; a2 /= a0;
+    }
+
     inline float process (float x, int ch)
     {
         const double y = b0 * x + z1[ch];

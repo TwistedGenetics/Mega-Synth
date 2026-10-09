@@ -70,6 +70,29 @@ struct FilterChain
     float ls[2][4] {};
     float lk = 0.0f;
 
+    // Analog warmth (0 = exactly the browser's behaviour)
+    float warm = 0.0f;       // soft, slightly asymmetric input saturation instead of a hard clip
+    float bassKeep = 0.0f;   // lowers high-pass stages and adds low end back around band-pass stages
+    Biquad par[4];           // parallel low-pass for band-pass stages (Bass Keep)
+    float dcX[2] { 0, 0 }, dcY[2] { 0, 0 }, dcR = 0.9987f;
+
+    inline float inputShape (float x, float k) const
+    {
+        if (warm <= 0.0f) return driveShape (x, k);
+        const float c = clampv (x, -1.0f, 1.0f);
+        const float soft = std::abs (x) < 1.5f ? x - (4.0f / 27.0f) * x * x * x : (x > 0 ? 1.0f : -1.0f);
+        float xi = c + (soft - c) * warm;
+        xi += 0.12f * warm * xi * xi;          // a touch of 2nd harmonic
+        return fastTanh (k * xi);
+    }
+
+    inline float dcBlock (float v, int ch)
+    {
+        const float y = v - dcX[ch] + dcR * dcY[ch];
+        dcX[ch] = v; dcY[ch] = y;
+        return y;
+    }
+
     void configure (int newMode);
     void update (float cutoff, float res, double sr);
     void setLadder (float cutoff, float spread, float k, double sr);
@@ -80,7 +103,7 @@ struct FilterChain
     {
         if (ladder)
         {
-            float v = driveShape (x - lk * fbState[ch], drive);
+            float v = inputShape (x - lk * fbState[ch], drive);
             float* s = ls[ch];
             for (int k = 0; k < 4; ++k)
             {
@@ -90,21 +113,27 @@ struct FilterChain
             }
             if (! std::isfinite (v)) { reset(); v = 0.0f; }
             fbState[ch] = v;
-            return v * (1.0f + lk * 0.35f);   // make up some of the bass lost to resonance
+            return dcBlock (v * (1.0f + lk * 0.35f), ch);   // make up some of the bass lost to resonance
         }
 
-        float v = driveShape (x, drive);
+        float v = inputShape (x, drive);
         if (preK > 0.0f)
         {
             if (fbKind == FbToPre) v += fbGain * fbState[ch];
             v = driveShape (v, preK);
         }
-        for (int k = 0; k < numStages; ++k) v = st[k].process (v, ch);
+        for (int k = 0; k < numStages; ++k)
+        {
+            if (types[k] == Biquad::BP && bassKeep > 0.0f)
+                v = st[k].process (v, ch) + bassKeep * par[k].process (v, ch);
+            else
+                v = st[k].process (v, ch);
+        }
         if (! std::isfinite (v)) { reset(); v = 0.0f; }
         fbState[ch] = v;
         if (postK > 0.0f) v = driveShape (v, postK);
         if (limitOut) v = 1.5f * std::tanh (v * (1.0f / 1.5f));
-        return v;
+        return dcBlock (v, ch);
     }
 };
 
@@ -165,6 +194,7 @@ private:
     // oscillator state
     double ph1 = 0, ph2 = 0, ph3 = 0, phSub = 0, phCar = 0, phMod = 0;
     double ssPh[9] {};
+    double driftPh[5] {}; float driftRate[5] {}; float driftCents[5] {};   // Analog Drift (osc1-3, sub, complex)
     double wtPos = 0.0;
     bool wtStopped = false;
     int wave1 = 0, wave2 = 0, wave3 = 0, waveSub = 0, waveA = 0, waveB = 0;
@@ -204,6 +234,8 @@ private:
     int maxBlock = 512;
 
     float masterS = 0.25f;
+    Biquad warmLow, warmHigh;   // Warmth: gentle low-shelf lift and high-shelf softening on the master
+    float lastWarm = -1.0f;
     DelayLine dl[2];
     Biquad tapeLP, tapeHP;
     double wowPh = 0, flutPh = 0;

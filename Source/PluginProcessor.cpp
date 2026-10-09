@@ -9,7 +9,7 @@ namespace
     // Parameters that only exist in the plugin (not in the browser patch format's "params" block)
     bool isBrowserParam (const juce::String& id)
     {
-        return ! (id == "velSens" || id == "bendRange" || id == "seqRun" || id == "seqClock"
+        return ! (id == "velSens" || id == "bendRange" || id == "warmth" || id == "bassKeep" || id == "analogDrift" || id == "seqRun" || id == "seqClock"
                   || id.startsWith ("lfoAssign") || id.startsWith ("envAssign"));
     }
 

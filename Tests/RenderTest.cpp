@@ -276,6 +276,22 @@ int main()
         std::cout << "  ...and without Osc 5/6: " << (cpu / 10.0 * 100.0) << "%" << std::endl;
     }
 
+    // ---- 9. warmth on/off comparison renders
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_WARMCOMPARE", {}).isNotEmpty())
+    {
+        for (int mode : { 0, 2, 3, 4, 9, 10, 12 })
+            for (int on = 0; on < 2; ++on)
+            {
+                auto p = make();
+                setP (*p, P_filterMode, (float) mode);
+                for (int i : { P_delayMix, P_reverbMix, P_chorusMix }) setP (*p, i, 0.0f);
+                if (! on) for (int i : { P_warmth, P_bassKeep, P_analogDrift }) setP (*p, i, 0.0f);
+                juce::AudioBuffer<float> cap;
+                render (*p, 1.2, chord (0.02, 1.0, { 36, 48 }), &cap);
+                writeWav (cap, sr, "warm_" + juce::String (mode).paddedLeft ('0', 2) + (on ? "_on.wav" : "_off.wav"));
+            }
+    }
+
     // ---- 8. editor snapshots (offscreen) for every tab
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_SNAPSHOTS", {}).isNotEmpty())
     {

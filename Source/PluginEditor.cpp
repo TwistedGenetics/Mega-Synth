@@ -586,12 +586,24 @@ void MegaSynthEditor::buildPages()
         auto* fe = sec (page, "Filter Envelope", col::env);
         for (auto [idx, n] : { std::pair<int, const char*> { P_fEnvAmt, "Amount" }, { P_fEnvA, "Attack" }, { P_fEnvD, "Decay" }, { P_fEnvS, "Sustain" }, { P_fEnvR, "Release" } })
             fe->knob (idx, n);
-        page->onResize = [page, f, a, fe]
+        auto* w = sec (page, "Analog Warmth", col::supersaw);
+        w->knob (P_warmth, "Warmth");
+        w->knob (P_bassKeep, "Bass Keep");
+        w->knob (P_analogDrift, "Drift");
+        auto* wInfo = new juce::Label ({}, "Warmth: soft, rounder saturation instead of hard clipping, plus a gentle low lift and smoother top.  "
+                                           "Bass Keep: holds onto low end in filter types with high-pass or band-pass stages.  "
+                                           "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
+        wInfo->setColour (juce::Label::textColourId, col::muted);
+        wInfo->setFont (juce::Font (juce::FontOptions (12.0f)));
+        wInfo->setJustificationType (juce::Justification::topLeft);
+        w->add (wInfo, 470, 84);
+        page->onResize = [page, f, a, fe, w]
         {
             const int g = 10;
             f->setBounds (g, g, 260, 210);
             a->setBounds (280, g, 330, 140);
             fe->setBounds (620, g, 410, 140);
+            w->setBounds (280, 160, 750, 130);
         };
     }
 

@@ -81,6 +81,8 @@ void FilterChain::reset()
     for (auto& s : st) s.reset();
     fbState[0] = fbState[1] = 0;
     for (auto& ch : ls) for (auto& v : ch) v = 0.0f;
+    for (auto& b : par) b.reset();
+    dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
 }
 
 void FilterChain::copyChannel (int from, int to)
@@ -88,6 +90,8 @@ void FilterChain::copyChannel (int from, int to)
     for (auto& s : st) s.copyState (from, to);
     fbState[to] = fbState[from];
     for (int k = 0; k < 4; ++k) ls[to][k] = ls[from][k];
+    for (auto& b : par) b.copyState (from, to);
+    dcX[to] = dcX[from]; dcY[to] = dcY[from];
 }
 
 void FilterChain::setLadder (float c, float spread, float k, double sr)
@@ -105,7 +109,13 @@ void FilterChain::update (float c, float res, double sr)
 {
     auto mx = [] (float a, float b) { return std::max (a, b); };
     auto mn = [] (float a, float b) { return std::min (a, b); };
-    auto S = [&] (int k, float f, float q) { st[k].set (types[k], f, q, sr); };
+    dcR = (float) (1.0 - 2.0 * kPi * 8.0 / sr);
+    auto S = [&] (int k, float f, float q)
+    {
+        if (types[k] == Biquad::HP) f = std::max (20.0f, f * (1.0f - 0.85f * bassKeep));
+        st[k].set (types[k], f, q, sr);
+        if (types[k] == Biquad::BP) par[k].set (Biquad::LP, f, -3.01, sr);   // Butterworth low-pass at the same frequency
+    };
     switch (mode)
     {
         case FM_LP:
@@ -202,6 +212,12 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     stereo = false;
 
     ph1 = ph2 = ph3 = phSub = phCar = phMod = 0.0;
+    if (s.f (P_analogDrift) > 0.001f)
+    {
+        // free-running oscillators: no two notes start with the same phase relationship
+        ph1 = voiceRand01(); ph2 = voiceRand01(); ph3 = voiceRand01(); phSub = voiceRand01();
+    }
+    for (int k = 0; k < 5; ++k) { driftPh[k] = voiceRand01(); driftRate[k] = 0.08f + 0.35f * voiceRand01(); }
     for (auto& p : ssPh) p = voiceRand01();
     std::fill (std::begin (srcVals), std::end (srcVals), 0.0f);
     wtPos = -1.0;          // set on the first control update once loop points are known
@@ -272,10 +288,17 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* wav, const ModSt
     const double pitch = mod[MT_pitch] + bendC;
     auto oscF = [&] (int octP, double cents) { return baseFreq * pow2 (std::round (s.f (octP))) * pow2 (cents / 1200.0); };
 
-    f1.target = (float) oscF (P_osc1Oct, s.f (P_osc1Detune) + pitch);
-    f2.target = (float) oscF (P_osc2Oct, s.f (P_osc2Detune) + pitch);
-    f3.target = (float) oscF (P_osc3Oct, s.f (P_osc3Detune) + pitch);
-    fSub.target = (float) oscF (P_subOct, pitch);
+    // Analog Drift: each oscillator wanders slowly and independently by a few cents
+    const float driftAmt = s.f (P_analogDrift);
+    for (int k = 0; k < 5; ++k)
+    {
+        driftPh[k] = wrap01 (driftPh[k] + driftRate[k] * dtc);
+        driftCents[k] = driftAmt * 6.0f * (float) (0.65 * std::sin (2.0 * kPi * driftPh[k]) + 0.35 * std::sin (2.0 * kPi * (2.37 * driftPh[k] + 0.3 * k)));
+    }
+    f1.target = (float) oscF (P_osc1Oct, s.f (P_osc1Detune) + pitch + driftCents[0]);
+    f2.target = (float) oscF (P_osc2Oct, s.f (P_osc2Detune) + pitch + driftCents[1]);
+    f3.target = (float) oscF (P_osc3Oct, s.f (P_osc3Detune) + pitch + driftCents[2]);
+    fSub.target = (float) oscF (P_subOct, pitch + driftCents[3]);
     f1.step (cPort); f2.step (cPort); f3.step (cPort); fSub.step (cPort);
 
     wave1 = kWaveChoiceToId[clampv (s.i (P_osc1Wave), 0, 9)];
@@ -319,6 +342,8 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* wav, const ModSt
     // --- filter
     const int fmode = s.i (P_filterMode);
     if (fmode != filter.mode) filter.configure (fmode);
+    filter.warm = s.f (P_warmth);
+    filter.bassKeep = s.f (P_bassKeep);
     const float fe = (float) filtEnv.eval (t);
     cutoff.target = clampv (s.f (P_filterCutoff) + filterAccent + s.f (P_fEnvAmt) * fe + mod[MT_cutoff], 20.0f, 18000.0f);
     res.target = clampv (s.f (P_filterRes) + mod[MT_resonance], 0.1f, 30.0f);
@@ -357,7 +382,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* wav, const ModSt
 
     // --- Osc 5: complex oscillator
     const double cDet = clampv (s.f (P_complexDetune) + mod[MT_complexDetune], -50.0f, 50.0f);
-    cBase.target = (float) oscF (P_complexOct, cDet + bendC);
+    cBase.target = (float) oscF (P_complexOct, cDet + bendC + driftCents[4]);
     cRatio.target = clampv (s.f (P_complexRatio) + mod[MT_complexRatio], 0.125f, 8.0f);
     cFm.target = clampv (s.f (P_complexFm) + mod[MT_complexFm], 0.0f, 1500.0f);
     cShapeK = clampv (s.f (P_complexShape) + mod[MT_complexShape], 1.0f, 25.0f);
@@ -639,6 +664,7 @@ void FxBus::reset()
 {
     for (int c = 0; c < 2; ++c) { dl[c].reset(); ch1[c].reset(); ch2[c].reset(); preDl[c].reset(); pitchDl[c].reset(); }
     tapeLP.reset(); tapeHP.reset(); revBP.reset(); revLP.reset(); shimHP.reset();
+    warmLow.reset(); warmHigh.reset(); lastWarm = -1.0f;
     conv.reset();
 }
 
@@ -677,6 +703,14 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
 
     // --- targets
     const float masterT = s.f (P_masterVolume);
+    const float warm = s.f (P_warmth);
+    if (warm != lastWarm)
+    {
+        lastWarm = warm;
+        warmLow.setShelf (true, 120.0, 6.0 * warm, sr);
+        warmHigh.setShelf (false, 8000.0, -3.0 * warm, sr);
+    }
+    const bool doWarm = warm > 0.001f;
 
     const float dSend = hardMuted (s.f (P_delayMix), 0, 1);
     const float dWet = hardMuted (s.f (P_delayMix), mod[MT_delayMix], 1);
@@ -747,7 +781,8 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
         float* io[2] = { L, R };
         for (int c = 0; c < 2; ++c)
         {
-            const float x = io[c][i] * masterS;
+            float x = io[c][i] * masterS;
+            if (doWarm) x = warmHigh.process (warmLow.process (x, c), c);
 
             // tape / BBD delay: tone filters sit inside the feedback loop
             const float y = dl[c].read (dSamp);

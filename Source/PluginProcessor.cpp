@@ -13,7 +13,7 @@ namespace
     bool isNewPluginParam (const juce::String& id)
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
-            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds");
+            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality";
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -458,7 +458,7 @@ void MegaSynthProcessor::readScope (float* dest, int n) const
 void MegaSynthProcessor::updateLatency()
 {
     // the spectral stage delays the output by one FFT frame while it's on; tell the host
-    const int want = raw[P_spOn]->load() > 0.5f ? spectralSize ((int) raw[P_spSize]->load()) : 0;
+    const int want = raw[P_spOn]->load() > 0.5f ? spectralSize (effectiveSpectralSize ((int) raw[P_spSize]->load(), (int) raw[P_quality]->load())) : 0;
     if (want != getLatencySamples()) setLatencySamples (want);
 }
 
@@ -881,6 +881,14 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
 
 void MegaSynthProcessor::resetToDefaults()
 {
+    resetPatchState();
+    setPatchName ("Init");
+    pushHistory ("Init");
+    markOriginal();
+}
+
+void MegaSynthProcessor::resetPatchState()
+{
     for (auto* p : params)
     {
         p->beginChangeGesture();
@@ -898,9 +906,48 @@ void MegaSynthProcessor::resetToDefaults()
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
-    setPatchName ("Init");
-    pushHistory ("Init");
+}
+
+bool MegaSynthProcessor::loadFactoryPreset (int index)
+{
+    const auto& list = tg::factoryPresets();
+    if (index < 0 || index >= (int) list.size()) return false;
+    tg::PresetBuilder b;
+    list[(size_t) index].build (b);
+
+    // Quality and the keyboard octave are the player's settings, not part of the sound.
+    const float keepQuality = raw[tg::P_quality]->load(), keepOct = raw[tg::P_keyboardOctave]->load();
+    resetPatchState();
+    b.v[tg::P_quality] = keepQuality;
+    b.v[tg::P_keyboardOctave] = keepOct;
+
+    for (int i = 0; i < (int) b.routes.size() && i < tg::kNumRoutes; ++i)
+    {
+        const auto& r = b.routes[(size_t) i];
+        tg::RouteConfig c;
+        c.on = true; c.src = r.src; c.dst = r.dst; c.curve = r.curve; c.unipolar = r.unipolar;
+        c.via = r.via; c.viaDepth = r.viaDepth; c.smoothMs = r.smoothMs;
+        routes.set (i, c);
+        b.v[(size_t) (tg::P_mod1Amt + i)] = r.depth;
+    }
+    for (int k = 0; k < 4; ++k)
+        if (b.scenes[k]) scenes.store (k, b.scene[(size_t) k].data());
+    dnaSteps.fromString (b.dnaString());
+    for (int k = 0; k < 8; ++k) setMacroName (k, b.macroNames[k]);
+
+    for (int i = 0; i < tg::P_COUNT; ++i)
+    {
+        auto* p = params[(size_t) i];
+        const float nv = p->convertTo0to1 (b.v[(size_t) i]);
+        if (std::abs (nv - p->getValue()) < 1.0e-7f) continue;
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (nv);
+        p->endChangeGesture();
+    }
+    setPatchName (list[(size_t) index].name);
+    pushHistory ("Load " + juce::String (list[(size_t) index].name));
     markOriginal();
+    return true;
 }
 
 juce::File MegaSynthProcessor::getPatchFolder()

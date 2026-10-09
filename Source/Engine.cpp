@@ -216,6 +216,8 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     released = false;
     t = 0.0;
     startedAt = voiceRand01() * 1000.0;
+    for (int i = 0; i < 9; ++i) ssDriftSin[i] = std::sin ((startedAt + i * 0.37) * 7.123);   // fixed per note
+    panWidth = -1.0f; panVoices = -1;
     accentBoost = o.accentBoost;
     filterAccent = o.filterAccent;
     const float vs = s.f (P_velSens);
@@ -615,13 +617,22 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     {
         const bool on = i < ssVoices;
         const float pos = on ? (i / denom) * 2.0f - 1.0f : 0.0f;
-        ssCents[i].target = (float) (pos * spread + std::sin ((startedAt + i * 0.37) * 7.123) * drift);
+        ssCents[i].target = (float) (pos * spread + ssDriftSin[i] * drift);
         ssGain[i].target = on ? (1.0f / std::sqrt ((float) ssVoices)) * (0.9f - std::abs (pos) * 0.2f) : 0.0f;
         ssCents[i].step (c10); ssGain[i].step (c10);
-        const float p = clampv (pos * width, -1.0f, 1.0f);
-        const float x = (p + 1.0f) * 0.5f;
-        ssPanL[i] = std::cos (x * (float) kPi * 0.5f);
-        ssPanR[i] = std::sin (x * (float) kPi * 0.5f);
+    }
+    // pans only change with the width or the voice count
+    if (width != panWidth || ssVoices != panVoices)
+    {
+        panWidth = width; panVoices = ssVoices;
+        for (int i = 0; i < 9; ++i)
+        {
+            const float pos = i < ssVoices ? (i / denom) * 2.0f - 1.0f : 0.0f;
+            const float p = clampv (pos * width, -1.0f, 1.0f);
+            const float x = (p + 1.0f) * 0.5f;
+            ssPanL[i] = std::cos (x * (float) kPi * 0.5f);
+            ssPanR[i] = std::sin (x * (float) kPi * 0.5f);
+        }
     }
 
     // stereo processing is only needed for the SuperSaw spread or a stereo sample
@@ -760,7 +771,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         const bool legacyRing = ringMix.v > 1.0e-6f || ringMix.target > 0;
 
         double ssFreq[9];
-        for (int i = 0; i < 9; ++i) ssFreq[i] = ssBase.v * pow2 (ssCents[i].v / 1200.0);
+        if (needSS) for (int i = 0; i < 9; ++i) ssFreq[i] = ssBase.v * pow2 (ssCents[i].v / 1200.0);
         const int ssCount = needSS ? 9 : 0;
 
         // follower coefficients (per sample)
@@ -772,6 +783,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         WaveMutatorParams wmp;
         wmp.mix = ps.f (P_wmMix); wmp.drive = ps.f (P_wmDrive); wmp.fold = ps.f (P_wmFold); wmp.shape = ps.f (P_wmShape);
         wmp.bend = ps.f (P_wmBend); wmp.asym = ps.f (P_wmAsym); wmp.rect = ps.f (P_wmRect); wmp.bits = ps.f (P_wmBits); wmp.down = ps.f (P_wmDown);
+        wmp.oversample = clampv (ps.i (P_quality), 0, 2);
         AudioRateParams arp;
         arp.mod = clampv (ps.i (P_arMod), 0, 5); arp.ratio = ps.f (P_arRatio); arp.offsetHz = ps.f (P_arOffset);
         arp.fm = ps.f (P_arFm); arp.fmTarget = clampv (ps.i (P_arFmTarget), 0, 4); arp.am = ps.f (P_arAm); arp.ring = ps.f (P_arRing);
@@ -787,12 +799,13 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             for (int k = 0; k < 8 && sets[arp.fmTarget][k] >= 0; ++k) fmT[sets[arp.fmTarget][k]] = true;
         }
         const double rotInc = 2.0 * kPi * arp.shiftHz / sr;
-        const double rotCos = std::cos (rotInc), rotSin = std::sin (rotInc);
+        const bool shifting = arFxOn && arp.shiftMix > 0.0f;
+        const double rotCos = shifting ? std::cos (rotInc) : 1.0, rotSin = shifting ? std::sin (rotInc) : 0.0;
         float xb[2][kCtrl], mb[kCtrl], cutB[kCtrl], resB[kCtrl];
 
         // ---- Resonator (after the filter and amp envelope; it rings on after the note)
         ResonatorParams rsp;
-        rsp.mix = ps.f (P_resMix); rsp.tuning = clampv (ps.i (P_resTuning), 0, RT_COUNT - 1); rsp.modes = clampv (ps.i (P_resModes), 1, 16);
+        rsp.mix = ps.f (P_resMix); rsp.tuning = clampv (ps.i (P_resTuning), 0, RT_COUNT - 1); rsp.modes = clampv (ps.i (P_resModes), 1, ps.i (P_quality) == 0 ? 6 : 16);   // Quality Eco: at most 6 modes
         rsp.pitch = ps.f (P_resPitch); rsp.decay = ps.f (P_resDecay); rsp.damping = ps.f (P_resDamping);
         rsp.inharm = ps.f (P_resInharm); rsp.spread = ps.f (P_resSpread); rsp.feedback = ps.f (P_resFeedback);
         const bool resOn = rsp.active();
@@ -1417,8 +1430,9 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         gp.mix = fs->f (P_grMix); gp.sizeMs = fs->f (P_grSize); gp.density = fs->f (P_grDensity); gp.position = fs->f (P_grPosition);
         gp.jitter = fs->f (P_grJitter); gp.pitch = fs->f (P_grPitch); gp.pitchRand = fs->f (P_grPitchRand); gp.reverse = fs->f (P_grReverse);
         gp.spread = fs->f (P_grSpread); gp.feedback = fs->f (P_grFeedback); gp.freeze = fs->f (P_grFreeze) > 0.5f;
+        gp.maxGrains = fs->i (P_quality) == 0 ? 24 : 64;
         SpectralParams sp;
-        sp.on = fs->f (P_spOn) > 0.5f; sp.freeze = fs->f (P_spFreeze) > 0.5f; sp.sizeIndex = clampv (fs->i (P_spSize), 0, 3);
+        sp.on = fs->f (P_spOn) > 0.5f; sp.freeze = fs->f (P_spFreeze) > 0.5f; sp.sizeIndex = effectiveSpectralSize (clampv (fs->i (P_spSize), 0, 3), fs->i (P_quality));
         sp.mix = fs->f (P_spMix); sp.blur = fs->f (P_spBlur); sp.shiftHz = fs->f (P_spShift); sp.scramble = fs->f (P_spScramble);
         sp.tilt = fs->f (P_spTilt); sp.morph = fs->f (P_spMorph); sp.formant = fs->f (P_spFormant); sp.feedback = fs->f (P_spFeedback);
         // feedback matrix: each stage's input gets the paths aimed at it, its output is recorded

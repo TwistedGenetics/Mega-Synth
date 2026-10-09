@@ -19,6 +19,8 @@ struct SpectralParams
 };
 
 inline int spectralSize (int index) { return 512 << juce::jlimit (0, 3, index); }
+// Quality Eco caps the FFT at 1024 points (less CPU, less latency)
+inline int effectiveSpectralSize (int sizeIndex, int quality) { return quality == 0 ? std::min (sizeIndex, 1) : sizeIndex; }
 
 class Spectral
 {

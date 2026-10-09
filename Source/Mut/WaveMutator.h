@@ -12,6 +12,7 @@ namespace tg
 struct WaveMutatorParams
 {
     float mix = 0, drive = 0, fold = 0, shape = 0, bend = 0, asym = 0, rect = 0, bits = 16, down = 1;
+    int oversample = 1;   // Quality: 0 = none (Eco), 1 = 2x (Normal), 2 = 4x (High)
     bool active() const { return mix > 1.0e-4f; }
 };
 
@@ -24,13 +25,16 @@ public:
     {
         juce::ignoreUnused (sampleRate);
         os.initProcessing ((size_t) kMaxBlock);
-        latency = juce::jlimit (0, kDryLen - 1, (int) std::lround (os.getLatencyInSamples()));
+        os4.initProcessing ((size_t) kMaxBlock);
+        lat2 = juce::jlimit (0, kDryLen - 1, (int) std::lround (os.getLatencyInSamples()));
+        lat4 = juce::jlimit (0, kDryLen - 1, (int) std::lround (os4.getLatencyInSamples()));
+        latency = lat2;
         reset();
     }
 
     void reset()
     {
-        os.reset();
+        os.reset(); os4.reset();
         for (auto& ch : dryBuf) std::fill (std::begin (ch), std::end (ch), 0.0f);
         dryPos = 0;
         for (int c = 0; c < 2; ++c) { dcX[c] = dcY[c] = 0.0f; held[c] = 0.0f; }
@@ -44,6 +48,7 @@ public:
     void process (float* L, float* R, int n, bool stereo, const WaveMutatorParams& p, double sr)
     {
         if (! p.active()) { if (wasActive) reset(); return; }
+        if (p.oversample != osMode) { reset(); osMode = p.oversample; latency = osMode == 0 ? 0 : (osMode == 2 ? lat4 : lat2); }
         wasActive = true;
 
         // remember the dry signal, delayed by the oversampler's latency for the dry/wet mix
@@ -60,7 +65,8 @@ public:
 
         float* chans[2] = { L, R };
         juce::dsp::AudioBlock<float> block (chans, 2, (size_t) n);
-        auto up = os.processSamplesUp (block);
+        auto& ovs = osMode == 2 ? os4 : os;
+        auto up = osMode == 0 ? block : ovs.processSamplesUp (block);
 
         const float gain = 1.0f + 15.0f * p.drive * p.drive;
         const float bendExp = std::exp2 (-1.5f * p.bend);
@@ -83,7 +89,7 @@ public:
                 d[i] = juce::jlimit (-4.0f, 4.0f, x);
             }
         }
-        os.processSamplesDown (block);
+        if (osMode != 0) ovs.processSamplesDown (block);
 
         const float dcR = (float) (1.0 - 2.0 * juce::MathConstants<double>::pi * 10.0 / sr);
         const bool crush = p.bits < 15.95f;
@@ -111,6 +117,8 @@ public:
 
 private:
     juce::dsp::Oversampling<float> os { 2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, false, true };
+    juce::dsp::Oversampling<float> os4 { 2, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
+    int osMode = 1, lat2 = 0, lat4 = 0;
     static constexpr int kDryLen = 64;
     float dryBuf[2][kDryLen] {};
     int dryPos = 0, latency = 0;

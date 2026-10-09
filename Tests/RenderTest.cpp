@@ -102,6 +102,20 @@ int main()
         return p;
     };
 
+    // quick profiling run: MEGASYNTH_PROFILE=1 (16 voices, effects off, 2 s), then exit
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PROFILE", {}).isNotEmpty())
+    {
+        auto p = make();
+        setP (*p, P_polyphony, 16);
+        for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_complexGain, P_supersawGain }) setP (*p, i, 0.0f);
+        std::vector<std::pair<double, juce::MidiMessage>> ev;
+        for (int n = 0; n < 16; ++n) ev.push_back ({ 0.01 * n, juce::MidiMessage::noteOn (1, 40 + n * 2, (juce::uint8) 90) });
+        double cpu = 0;
+        render (*p, 2.0, ev, nullptr, &cpu);
+        std::cout << "profile render " << cpu << " s" << std::endl;
+        return 0;
+    }
+
    #include "Golden.inc"
 
     // ---- 1. default patch chord
@@ -1413,6 +1427,134 @@ int main()
         float md = 0;
         for (int i = 0; i < 512; ++i) md = std::max (md, std::abs (tail[i] - 0.5f * (cap.getSample (0, cap.getNumSamples() - 512 + i) + cap.getSample (1, cap.getNumSamples() - 512 + i))));
         CHECK (md < 1e-7f, "spectrum tap mirrors the output");
+    }
+
+    // ---- Stage 17: factory presets, quality setting, CPU budget
+    {
+        std::cout << "Stage 17: factory presets" << std::endl;
+        const auto& list = factoryPresets();
+        CHECK (list.size() == 18, "18 factory presets");
+        std::set<juce::String> names;
+        for (auto& fp : list) names.insert (fp.name);
+        CHECK (names.size() == list.size(), "factory preset names are unique");
+
+        double worstCpu = 0; juce::String worstName;
+        for (int i = 0; i < (int) list.size(); ++i)
+        {
+            PresetBuilder b; list[(size_t) i].build (b);
+            CHECK (b.routes.size() <= (size_t) kNumRoutes, juce::String (list[(size_t) i].name) + ": too many routes");
+            for (auto& r : b.routes)
+                CHECK (r.dst >= 0 && meta (r.dst).modulatable, juce::String (list[(size_t) i].name) + ": route to a non-modulatable parameter " + (r.dst >= 0 ? meta (r.dst).id : juce::String ("-")));
+            for (int k = 0; k < P_COUNT; ++k)
+                CHECK (b.v[(size_t) k] >= meta (k).min - 1e-4f && b.v[(size_t) k] <= meta (k).max + 1e-4f,
+                       juce::String (list[(size_t) i].name) + ": " + meta (k).id + " out of range");
+
+            auto p = make();
+            CHECK (p->loadFactoryPreset (i), "preset loads");
+            CHECK (p->getPatchName() == list[(size_t) i].name, "preset sets the patch name");
+            int active = 0;
+            for (int r = 0; r < kNumRoutes; ++r) active += p->routes.get (r).active() ? 1 : 0;
+            CHECK (active == (int) b.routes.size(), juce::String (list[(size_t) i].name) + ": routes installed");
+            for (int r = 0; r < (int) b.routes.size(); ++r)
+                CHECK (std::abs (p->param (P_mod1Amt + r)->convertFrom0to1 (p->param (P_mod1Amt + r)->getValue()) - b.routes[(size_t) r].depth) < 2e-3f, "route depth installed");
+
+            const bool mono = b.v[P_polyphony] < 1.5f;
+            std::vector<std::pair<double, juce::MidiMessage>> ev;
+            if (mono)
+            {
+                const int notes[] = { 36, 43, 39, 41 };
+                for (int n = 0; n < 4; ++n)
+                {
+                    ev.push_back ({ 0.05 + n * 0.5, juce::MidiMessage::noteOn (1, notes[n], (juce::uint8) 110) });
+                    ev.push_back ({ 0.45 + n * 0.5, juce::MidiMessage::noteOff (1, notes[n]) });
+                }
+            }
+            else ev = chord (0.05, 1.8, { 48, 55, 60, 63, 67, 72 });
+            ev.push_back ({ 0.3, juce::MidiMessage::controllerEvent (1, 1, 80) });   // a little mod wheel
+            juce::AudioBuffer<float> cap;
+            double cpu = 0;
+            auto s = render (*p, 3.0, ev, &cap, &cpu);
+            const double pct = cpu / 3.0 * 100.0;
+            std::cout << "  " << list[(size_t) i].name << ": peak " << s.peak << " rms " << s.rms << " cpu " << pct << "%" << std::endl;
+            CHECK (s.finite, juce::String (list[(size_t) i].name) + ": non-finite");
+            CHECK (s.peak > 0.02f, juce::String (list[(size_t) i].name) + ": too quiet");
+            CHECK (s.peak < 3.0f, juce::String (list[(size_t) i].name) + ": too loud");
+            CHECK (s.rms > 0.003, juce::String (list[(size_t) i].name) + ": no body");
+            writeWav (cap, sr, "preset_" + juce::String (i + 1).paddedLeft ('0', 2) + "_" + juce::String (list[(size_t) i].name).replaceCharacter (' ', '_') + ".wav");
+            if (pct > worstCpu) { worstCpu = pct; worstName = list[(size_t) i].name; }
+
+            // the preset survives the host's save / restore
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make();
+            q->setStateInformation (mb.getData(), (int) mb.getSize());
+            bool same = q->getPatchName() == p->getPatchName();
+            for (int k = 0; k < P_COUNT; ++k) same &= std::abs (q->param (k)->getValue() - p->param (k)->getValue()) < 1e-6f;
+            for (int r = 0; r < kNumRoutes; ++r) same &= q->routes.get (r).src == p->routes.get (r).src && q->routes.get (r).dst == p->routes.get (r).dst;
+            same &= q->dnaSteps.toString() == p->dnaSteps.toString();
+            for (int k = 0; k < 4; ++k) same &= q->scenes.stored[k].load() == p->scenes.stored[k].load();
+            CHECK (same, juce::String (list[(size_t) i].name) + ": state round trip");
+        }
+        std::cout << "  heaviest preset: " << worstName << " at " << worstCpu << "% of one core" << std::endl;
+        CHECK (worstCpu < 60.0, "every factory preset stays inside the CPU budget (60% of one core, 6 voices)");
+
+        // specific features really present
+        {
+            auto p = make();
+            p->loadFactoryPreset (12);   // Breeding Pad
+            int stored = 0; for (int k = 0; k < 4; ++k) stored += p->scenes.stored[k].load() ? 1 : 0;
+            CHECK (stored == 4, "Breeding Pad stores four scenes");
+            CHECK (p->param (P_sceneMorph)->getValue() > 0.5f, "Breeding Pad morphs");
+            p->loadFactoryPreset (13);   // Sequenced DNA
+            int steps = 0; for (int k = 0; k < 16; ++k) steps += p->dnaSteps.getType (k) != DT_Off ? 1 : 0;
+            CHECK (steps >= 10, "Sequenced DNA has a step pattern");
+            CHECK (p->param (P_dsOn)->getValue() > 0.5f, "Sequenced DNA runs the DNA Sequencer");
+            CHECK (p->getMacroName (0) == "Sequence Depth", "preset macro names");
+            p->loadFactoryPreset (0);
+            CHECK (p->getMacroName (0) == "Mutate" && p->getMacroName (7) == "Space", "Init Genome macro names");
+        }
+
+        // Loading a preset clears the previous one completely and keeps the player's quality setting
+        {
+            auto p = make();
+            setP (*p, P_quality, 0);
+            p->loadFactoryPreset (12);
+            p->loadFactoryPreset (4);
+            int stored = 0; for (int k = 0; k < 4; ++k) stored += p->scenes.stored[k].load() ? 1 : 0;
+            CHECK (stored == 0, "scenes cleared by the next preset");
+            CHECK (p->param (P_sceneMorph)->getValue() < 0.5f, "scene morph cleared");
+            CHECK (std::lround (p->param (P_quality)->convertFrom0to1 (p->param (P_quality)->getValue())) == 0, "quality kept across preset loads");
+            CHECK (p->canUndo(), "preset load is undoable");
+        }
+
+        // Quality: Eco is cheaper than Normal where it changes something, High still renders cleanly.
+        // Heavy patch: Chaos Engine plus a 16-mode resonator and the 4096-point spectral stage.
+        {
+            std::cout << "Stage 17: quality" << std::endl;
+            std::unique_ptr<MegaSynthProcessor> procs[3];
+            for (int q = 0; q < 3; ++q)
+            {
+                procs[q] = make();
+                procs[q]->loadFactoryPreset (11);
+                setP (*procs[q], P_resMix, 0.4f); setP (*procs[q], P_resModes, 16); setP (*procs[q], P_spSize, 3);
+                setP (*procs[q], P_polyphony, 16);
+                setP (*procs[q], P_quality, (float) q);
+                procs[q]->updateLatency();
+            }
+            std::vector<std::pair<double, juce::MidiMessage>> ev;
+            for (int n = 0; n < 12; ++n) ev.push_back ({ 0.01 * n, juce::MidiMessage::noteOn (1, 40 + n * 3, (juce::uint8) 100) });
+            double best[3] = { 1e9, 1e9, 1e9 };
+            for (int rep = 0; rep < 3; ++rep)
+                for (int q = 0; q < 3; ++q)
+                {
+                    double cpu = 0;
+                    auto s = render (*procs[q], 2.0, rep == 0 ? ev : std::vector<std::pair<double, juce::MidiMessage>> {}, nullptr, &cpu);
+                    CHECK (s.finite && s.peak < 4.0f && s.peak > 0.01f, "quality " + juce::String (q) + " renders cleanly");
+                    best[q] = std::min (best[q], cpu / 2.0 * 100.0);
+                }
+            std::cout << "  heavy patch, 12 voices: Eco " << best[0] << "%  Normal " << best[1] << "%  High " << best[2] << "%" << std::endl;
+            CHECK (best[0] < best[1] * 0.95, "Eco is clearly cheaper than Normal");
+            CHECK (procs[0]->getLatencySamples() <= procs[1]->getLatencySamples(), "Eco latency is no higher than Normal");
+        }
     }
 
     // ---- 7. CPU: 16 voices of everything

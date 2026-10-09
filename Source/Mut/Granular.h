@@ -14,6 +14,7 @@ struct GranularParams
     float mix = 0, sizeMs = 80, density = 20, position = 0.25f, jitter = 0.2f, pitch = 0, pitchRand = 0,
           reverse = 0, spread = 0.5f, feedback = 0;
     bool freeze = false;
+    int maxGrains = 64;          // Quality Eco: 24
     bool active() const { return mix > 1.0e-4f; }
 };
 
@@ -121,7 +122,9 @@ private:
     void spawn (const GranularParams& p, double grainLen, double posSamples)
     {
         Grain* g = nullptr;
-        for (auto& x : grains) if (! x.on) { g = &x; break; }
+        int busy = 0;
+        for (auto& x : grains) { if (! x.on) { if (g == nullptr) g = &x; } else ++busy; }
+        if (busy >= p.maxGrains) return;
         if (g == nullptr) return;   // all 64 busy: skip this one
         const double semis = p.pitch + (rnd() * 2.0f - 1.0f) * 12.0f * p.pitchRand;
         double rate = std::exp2 (semis / 12.0);

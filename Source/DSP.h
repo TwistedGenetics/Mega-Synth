@@ -4,6 +4,7 @@
 // WaveShaperNode, setTargetAtTime smoothing, linear ADSR ramps).
 
 #include <cmath>
+#include <cstring>
 #include <vector>
 #include <array>
 #include <algorithm>
@@ -62,8 +63,10 @@ public:
     {
         // pick the richest table whose top harmonic stays below Nyquist:
         // level = ceil(log2(2048 * f / sr)), via the float exponent
-        int e = 0;
-        std::frexp (2048.0f * freqOverSr, &e);
+        // (the exponent field read directly: same result as std::frexp, without the library call)
+        const float fx = 2048.0f * freqOverSr;
+        uint32_t bits; std::memcpy (&bits, &fx, sizeof (bits));
+        const int e = (int) ((bits >> 23) & 0xFFu) - 126;
         const int level = e < 0 ? 0 : (e > kLevels - 1 ? kLevels - 1 : e);
         const float* t = tables[(size_t) wave][(size_t) level].data();
         double idx = phase * N;

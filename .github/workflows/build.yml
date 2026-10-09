@@ -35,7 +35,7 @@ jobs:
         run: |
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pluginval.zip
-          pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate-in-process --timeout-ms 300000 \
+          pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --timeout-ms 600000 \
             --validate "build/MegaSynth_artefacts/Release/VST3/Mega Synth.vst3"
 
       - name: Validate the Audio Unit (auval)

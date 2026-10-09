@@ -1040,6 +1040,10 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
         auto* k = headerKnobs.add (new Knob (proc, idx, name, col::master));
         content.addAndMakeVisible (k);
     }
+    qualityChoice = std::make_unique<tgui::Choice> (proc, P_quality, "Quality");
+    qualityChoice->box.setTooltip ("Eco: no Wave Mutation oversampling, Resonator up to 6 modes, Granular up to 24 grains, "
+                                   "Spectral FFT up to 1024. Normal: as designed. High: 4x oversampled Wave Mutation.");
+    content.addAndMakeVisible (*qualityChoice);
 
     for (auto* b : { &copyBtn, &pasteBtn, &initBtn, &octDown, &octUp, &undoBtn, &redoBtn, &originalBtn }) content.addAndMakeVisible (*b);
     undoBtn.onClick = [this] { proc.undo(); setStatus ("Undo"); };
@@ -1058,6 +1062,7 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     {
         const int id = patchBox.getSelectedId();
         if (id >= 1 && id <= patchFiles.size()) { loadPatch (patchFiles[id - 1]); return; }
+        if (id > kFactoryIdBase && id <= kFactoryIdBase + (int) tg::factoryPresets().size()) { loadFactory (id - kFactoryIdBase - 1); return; }
         if (id == 9001)
         {
             chooser = std::make_unique<juce::FileChooser> ("Open a Mega Synth patch", MegaSynthProcessor::getPatchFolder(), "*.megasynth;*.json;*.txt");
@@ -2057,6 +2062,7 @@ void MegaSynthEditor::resized()
     patchBox.setBounds (44, 42, 250, 24);
     patchNext.setBounds (298, 42, 26, 24);
     saveBtn.setBounds (330, 42, 100, 24);
+    qualityChoice->setBounds (330, 0, 100, 40);
     int x = 440;
     for (auto* k : headerKnobs) { k->setBounds (x, 4, 72, 80); x += 74; }
     copyBtn.setBounds (820, 10, 120, 28);
@@ -2079,6 +2085,12 @@ void MegaSynthEditor::refreshPatchList()
     patchFiles = MegaSynthProcessor::getPatchFiles();
     const auto folder = MegaSynthProcessor::getPatchFolder();
     patchBox.clear (juce::dontSendNotification);
+    const auto& factory = tg::factoryPresets();
+    patchBox.addSectionHeading ("Factory");
+    for (int i = 0; i < (int) factory.size(); ++i)
+        patchBox.addItem (juce::String (factory[(size_t) i].category) + " - " + factory[(size_t) i].name, kFactoryIdBase + i + 1);
+    patchBox.addSeparator();
+    if (patchFiles.size() > 0) patchBox.addSectionHeading ("Your patches");
     for (int i = 0; i < patchFiles.size(); ++i)
         patchBox.addItem (patchFiles[i].getRelativePathFrom (folder).upToLastOccurrenceOf (".", false, false), i + 1);
     if (patchFiles.size() > 0) patchBox.addSeparator();
@@ -2089,7 +2101,16 @@ void MegaSynthEditor::refreshPatchList()
     lastShownName = name;
     for (int i = 0; i < patchFiles.size(); ++i)
         if (patchFiles[i].getFileNameWithoutExtension() == name) { patchBox.setSelectedId (i + 1, juce::dontSendNotification); return; }
+    for (int i = 0; i < (int) factory.size(); ++i)
+        if (name == factory[(size_t) i].name) { patchBox.setSelectedId (kFactoryIdBase + i + 1, juce::dontSendNotification); return; }
     patchBox.setText (name, juce::dontSendNotification);
+}
+
+void MegaSynthEditor::loadFactory (int index)
+{
+    if (proc.loadFactoryPreset (index))
+        setStatus (juce::String ("Loaded ") + tg::factoryPresets()[(size_t) index].name + " - " + tg::factoryPresets()[(size_t) index].description);
+    refreshPatchList();
 }
 
 void MegaSynthEditor::loadPatch (const juce::File& f)
@@ -2101,14 +2122,20 @@ void MegaSynthEditor::loadPatch (const juce::File& f)
 
 void MegaSynthEditor::stepPatch (int delta)
 {
+    // Steps through the factory presets, then the saved patches, and wraps round.
     patchFiles = MegaSynthProcessor::getPatchFiles();
-    if (patchFiles.isEmpty()) { setStatus ("No saved patches yet - use Save Patch"); return; }
+    const auto& factory = tg::factoryPresets();
+    const int nf = (int) factory.size(), n = nf + patchFiles.size();
+    const auto name = proc.getPatchName();
     int cur = -1;
     for (int i = 0; i < patchFiles.size(); ++i)
-        if (patchFiles[i].getFileNameWithoutExtension() == proc.getPatchName()) cur = i;
-    const int n = patchFiles.size();
+        if (patchFiles[i].getFileNameWithoutExtension() == name) cur = nf + i;
+    if (cur < 0)
+        for (int i = 0; i < nf; ++i)
+            if (name == factory[(size_t) i].name) cur = i;
     const int next = cur < 0 ? (delta > 0 ? 0 : n - 1) : ((cur + delta) % n + n) % n;
-    loadPatch (patchFiles[next]);
+    if (next < nf) loadFactory (next);
+    else loadPatch (patchFiles[next - nf]);
 }
 
 void MegaSynthEditor::setStatus (const juce::String& s)

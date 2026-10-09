@@ -28,7 +28,7 @@ struct Snapshot
     float bendSemis = 0.0f;   // current pitch-bend in semitones
 
     inline float f (int p) const { return v[p]; }
-    inline int   i (int p) const { return (int) std::lround (v[p]); }
+    inline int   i (int p) const { const float x = v[p]; return (int) (x >= 0.0f ? x + 0.5f : x - 0.5f); }   // = lround, inline
 };
 
 // A loaded WAV for Oscillator 4.
@@ -276,6 +276,8 @@ private:
     float drive = 1.0f, cShapeK = 4.5f;
     int ssVoices = 7;
     float ssPanL[9] {}, ssPanR[9] {};
+    double ssDriftSin[9] {};
+    float panWidth = -1.0f; int panVoices = -1;
 
     // oscillator state
     double ph1 = 0, ph2 = 0, ph3 = 0, phSub = 0, phCar = 0, phMod = 0;

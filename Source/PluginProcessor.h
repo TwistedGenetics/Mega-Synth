@@ -5,6 +5,7 @@
 #include "Sequencer.h"
 #include "Mut/Capture.h"
 #include "Lab/Breeder.h"
+#include "Presets/Factory.h"
 
 class MegaSynthProcessor : public juce::AudioProcessor,
                            private juce::Timer,
@@ -108,6 +109,7 @@ public:
     juce::String exportBrowserPatch() const;
     juce::String importBrowserPatch (const juce::String& json);   // returns an error message, or empty on success
     void resetToDefaults();
+    bool loadFactoryPreset (int index);   // tg::factoryPresets() index; false when out of range
 
     // Patch files (.megasynth = the browser patch JSON plus a name and the plugin-only settings)
     static juce::File getPatchFolder();
@@ -138,6 +140,7 @@ private:
 public:
     void updateLatency();   // message thread (timer) and prepareToPlay
 private:
+    void resetPatchState();   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();

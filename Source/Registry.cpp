@@ -146,7 +146,7 @@ namespace
                 { m.category = Category::Env; m.group = MutGroup::Envelopes; }
             else if (startsAny (id, { "delay", "tape", "flutter", "reverb", "shimmer", "chorus", "reverse" }))
                 { m.category = Category::Fx; m.group = MutGroup::Fx; }
-            else if (isAny (id, { "ccANum", "ccBNum" }))
+            else if (isAny (id, { "ccANum", "ccBNum", "quality" }))
                 { m.category = Category::Performance; m.group = MutGroup::None; }
             else if (id.startsWith ("mod") && id.endsWith ("Amt"))
                 { m.category = Category::Mod; m.group = MutGroup::Modulation; }

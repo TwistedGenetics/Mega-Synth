@@ -313,6 +313,8 @@ private:
     void shiftOctave (int delta);
     void refreshPatchList();
     void loadPatch (const juce::File&);
+    void loadFactory (int index);
+    static constexpr int kFactoryIdBase = 5000;
     void stepPatch (int delta);
 
     MegaSynthProcessor& proc;
@@ -326,6 +328,7 @@ private:
     juce::TextButton copyBtn { "Copy Patch" },
                      pasteBtn { "Paste Patch" }, initBtn { "Init" }, octDown { "Oct -" }, octUp { "Oct +" };
     juce::OwnedArray<tgui::Knob> headerKnobs;
+    std::unique_ptr<tgui::Choice> qualityChoice;
     juce::ComboBox patchBox;
     juce::TextButton patchPrev { "<" }, patchNext { ">" }, saveBtn { "Save Patch" };
     juce::Array<juce::File> patchFiles;

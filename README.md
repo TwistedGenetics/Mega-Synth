@@ -76,6 +76,23 @@ Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (W
 
 The first tab shows the whole synth at a glance: the **signal flow** (each note's chain, then the bus, with the stages that are switched in lit up, cyan badges for Mod Matrix routes into each stage and red arcs for Feedback Matrix paths), the **genetic network** (every active route as a line from its source to its destination, pulsing with the source's live value), a **spectrum** of the output, and the **DNA strand**: 13 base pairs for the 13 genetic groups, glowing with how hard the current seed and Mutate amount push each one, grey when locked. All of it is drawn from values the audio already publishes; the only addition to the audio path is copying the output into the analyser's buffer.
 
+## Factory presets
+
+The patch menu now starts with 18 built-in presets (Init Genome, Reese Mutation, Sub Helix, Neuro Splice, Folded Acid,
+Ring Mutant Bell, Frequency Shift Pad, Spectral Freeze Choir, Granular Cloud, Marimba Cell, Membrane Drum, Chaos Engine,
+Breeding Pad, Sequenced DNA, Feedback Organism, Jungle Stab, Mutant Lead, FM Helix Bass), followed by your saved patches.
+The arrows step through both. Each preset is an ordinary patch - routes, macros (named), scenes and DNA steps included -
+so it can be edited, saved, mutated or bred. Loading one can be undone.
+
+## Quality (header)
+
+- **Eco** - Wave Mutation without oversampling, Resonator capped at 6 modes, Granular at 24 grains, Spectral FFT at 1024
+  (also lowers latency). Use it for big projects.
+- **Normal** - as designed (2x oversampled Wave Mutation).
+- **High** - 4x oversampled Wave Mutation for the cleanest folding and crushing at high notes.
+
+Quality is your setting rather than part of the sound, so loading a preset keeps it.
+
 ## Modulation matrix (Mod Matrix tab)
 
 Any source can drive any sound parameter: 32 routes, each with its own depth.

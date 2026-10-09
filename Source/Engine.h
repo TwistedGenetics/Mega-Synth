@@ -386,6 +386,10 @@ public:
 
     FxBus& fx() { return fxBus; }
     const Granular& granular() const { return gran; }
+    void loadGranular (const float* l, const float* r, int n) { gran.load (l, r, n); }
+    // the bus signal just before the effects, for Capture ("before effects")
+    bool keepPreFx = false;
+    const float* preFx (int ch) const { return preFxBuf[ch].data(); }
     int activeVoiceCount() const;
 
 private:
@@ -394,7 +398,7 @@ private:
     Granular gran;           // bus stages: summed voices -> granular / spectral -> effects
     Spectral spec;
     FeedbackMatrix fbm;
-    std::vector<float> fbIn[2], fbOut[2];
+    std::vector<float> fbIn[2], fbOut[2], preFxBuf[2];
     ModState globalMod;     // modulation of global effects, taken from the newest voice
     uint64_t orderCounter = 0;
     double lastFreq = -1.0;

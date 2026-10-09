@@ -3,6 +3,7 @@
 #include "Params.h"
 #include "Engine.h"
 #include "Sequencer.h"
+#include "Mut/Capture.h"
 
 class MegaSynthProcessor : public juce::AudioProcessor,
                            private juce::Timer,
@@ -55,6 +56,25 @@ public:
     int getEditScene() const { return sceneEditIndex.load(); }
     void clearScenes();
     void syncSceneEdits();                   // called by the timer: panel edits go into the edited scene
+    // ---- Capture / Resample (message thread, except the recording itself)
+    enum CaptureTarget { CT_WT1, CT_WT2, CT_DnaA, CT_DnaB, CT_Granular, CT_CycleWT1, CT_CycleWT2 };
+    static constexpr double kCaptureSeconds = 8.0;
+    void startCapture();
+    void stopCapture();
+    bool isCapturing() const { return capRecording.load() || capStopReq.load(); }
+    double captureSecondsRecorded() const { return capPos.load() / std::max (1.0, sampleRate); }
+    bool hasCapture() const { return capRaw.getNumSamples() > 0; }
+    void pollCapture();                                  // timer: pick up a finished recording
+    tg::CaptureSettings captureSettings;
+    juce::AudioBuffer<float> getEditedCapture() const;   // with trim / reverse / fades / normalise
+    double detectCapturePitch() const;                   // Hz, 0 if unknown
+    juce::String sendCapture (CaptureTarget);            // error message, or empty
+    bool saveCaptureWav (const juce::File&) const;
+    const juce::AudioBuffer<float>& getRawCapture() const { return capRaw; }
+    double getCaptureRate() const { return capRate; }
+    void setRawCapture (const juce::AudioBuffer<float>& b, double rate) { capRaw = b; capRate = rate; }
+    juce::var captureToVar() const;
+    void captureFromVar (const juce::var&);
     juce::String getMacroName (int k) const;
     void setMacroName (int k, const juce::String&);
 
@@ -124,6 +144,14 @@ private:
     int snapshotDelay = 0;
     uint32_t lastStepsVersion = 0, lastRoutesVersion = 0;
     tg::GlobalModInputs modInputs;
+    juce::AudioBuffer<float> capBuf;            // audio thread writes while recording
+    std::atomic<bool> capRecording { false }, capStopReq { false }, capReady { false };
+    std::atomic<int> capPos { 0 };
+    juce::AudioBuffer<float> capRaw;            // the last recording (message thread)
+    double capRate = 48000.0;
+    juce::AudioBuffer<float> grainLoad;         // capture -> granular hand-over
+    std::atomic<bool> grainLoadReady { false };
+    int grainLoadLen = 0;
     std::atomic<int> sceneEditIndex { 0 };
     bool lastMorph = false;
     uint32_t lastScenesVersion = 0;

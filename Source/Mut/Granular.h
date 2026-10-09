@@ -38,6 +38,17 @@ public:
         wasActive = false;
     }
 
+    // Replace the recording with the given audio (newest at the end), e.g. from Capture.
+    void load (const float* l, const float* r, int n)
+    {
+        for (auto& b : buf) std::fill (b.begin(), b.end(), 0.0f);
+        n = std::min (n, len - 8);
+        for (int i = 0; i < n; ++i) { buf[0][(size_t) i] = l[i]; buf[1][(size_t) i] = r[i]; }
+        wpos = n & (len - 1); written = n;
+        for (auto& g : grains) g.on = false;
+        wasActive = true;
+    }
+
     int activeGrains() const { int n = 0; for (auto& g : grains) n += g.on ? 1 : 0; return n; }
 
     void process (float* L, float* R, int n, const GranularParams& p)

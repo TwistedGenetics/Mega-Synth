@@ -940,6 +940,83 @@ int main()
                 }
             }
 
+            // ---- Stage 11: Capture / Resample
+            {
+                std::cout << "Capture" << std::endl;
+                auto p = clean(); setP (*p, P_ampR, 0.05f);
+                auto capture = [&] (MegaSynthProcessor& q, double secs, int noteNum)
+                {
+                    q.startCapture();
+                    render (q, secs, { { 0.0, juce::MidiMessage::noteOn (1, noteNum, 1.0f) }, { secs - 0.1, juce::MidiMessage::noteOff (1, noteNum) } });
+                    q.stopCapture();
+                    render (q, 0.02, {});
+                    q.pollCapture();
+                };
+                capture (*p, 1.0, 57);
+                const double len1 = p->getRawCapture().getNumSamples() / sr;
+                const double hz1 = p->detectCapturePitch();
+                std::cout << "  captured " << len1 << " s, detected " << hz1 << " Hz" << std::endl;
+                CHECK (p->hasCapture() && std::abs (len1 - 1.0) < 0.03 && std::abs (hz1 - 220.0) < 1.0, "capture and pitch detection");
+                // edit tools
+                p->captureSettings.trimStart = 0.2f; p->captureSettings.trimEnd = 0.6f; p->captureSettings.reverse = true;
+                const double elen = p->getEditedCapture().getNumSamples() / sr;
+                CHECK (std::abs (elen - 0.4 * len1) < 0.03 && std::abs (p->getEditedCapture().getMagnitude (0, p->getEditedCapture().getNumSamples()) - 0.89f) < 0.01f, "trim / normalise");
+                p->captureSettings = {};
+
+                // send to WT 1 (tuned to the detected pitch): the sample plays back in tune
+                CHECK (p->sendCapture (MegaSynthProcessor::CT_WT1).isEmpty(), "send to WT 1");
+                setP (*p, P_osc1Gain, 0.0f); setP (*p, P_osc4Gain, 0.8f); setP (*p, P_osc4LoopMode, 0.0f);
+                juce::AudioBuffer<float> x;
+                render (*p, 1.0, note (64, 1.0f), &x);
+                const double fwt = peakHz (spectrum (x));
+                std::cout << "  played back from WT 1 at E4: " << fwt << " Hz (expected 329.6)" << std::endl;
+                CHECK (std::abs (fwt - 329.6) < 4.0, "captured sample in tune");
+
+                // mutate it and capture again: capture -> mutate -> capture
+                setP (*p, P_wmMix, 1.0f); setP (*p, P_wmFold, 0.7f); setP (*p, P_wmDrive, 0.5f);
+                capture (*p, 0.8, 57);
+                const double hz2 = p->detectCapturePitch();
+                std::cout << "  re-captured through Wave Mutation: " << p->getRawCapture().getNumSamples() / sr << " s, " << hz2 << " Hz" << std::endl;
+                CHECK (p->hasCapture() && std::abs (hz2 - 220.0) < 2.0, "capture loop");
+                CHECK (p->sendCapture (MegaSynthProcessor::CT_WT2).isEmpty(), "send to WT 2");
+                // ...and it all survives saving and reloading
+                juce::MemoryBlock st; p->getStateInformation (st);
+                auto q = make(); q->setStateInformation (st.getData(), (int) st.getSize());
+                CHECK (q->hasCapture() && q->getSampleStatus (0).contains ("Capture") && q->getSampleStatus (1).contains ("Capture")
+                       && std::abs (q->detectCapturePitch() - 220.0) < 2.0, "capture state round trip");
+                const auto json = p->exportBrowserPatch();
+                auto r = make(); r->importBrowserPatch (json);
+                CHECK (r->hasCapture() && r->getSampleStatus (1).contains ("Capture"), "capture in patch");
+
+                // single cycle -> WT 2, played at A4 = 440 Hz
+                {
+                    auto c = clean(); setP (*c, P_ampR, 0.05f); setP (*c, P_osc1Wave, 0.0f);
+                    capture (*c, 0.6, 57);
+                    CHECK (c->sendCapture (MegaSynthProcessor::CT_CycleWT2).isEmpty(), "single cycle");
+                    setP (*c, P_osc1Gain, 0.0f); setP (*c, P_wt2Gain, 0.8f);
+                    render (*c, 1.0, note (69, 1.0f), &x);
+                    const double fc = peakHz (spectrum (x));
+                    std::cout << "  single cycle from a saw, played at A4: " << fc << " Hz" << std::endl;
+                    CHECK (std::abs (fc - 440.0) < 4.0, "single cycle pitch");
+                    // DNA source B = the captured sample
+                    CHECK (c->sendCapture (MegaSynthProcessor::CT_DnaB).isEmpty() && (int) c->param (P_dnaB)->convertFrom0to1 (c->param (P_dnaB)->getValue()) == 5, "send to DNA B");
+                }
+                // granular: the capture becomes the (frozen) grain buffer, playing with no notes held
+                {
+                    CHECK (p->sendCapture (MegaSynthProcessor::CT_Granular).isEmpty(), "send to granular");
+                    render (*p, 1.0, {}, &x);
+                    const double g = x.getMagnitude (0, (int) (0.5 * sr), (int) (0.4 * sr));
+                    std::cout << "  granular playing the capture with no notes: peak " << g << std::endl;
+                    CHECK (g > 0.01, "capture into granular");
+                }
+                // before-effects capture point
+                {
+                    auto c = clean(); setP (*c, P_capPoint, 0.0f); setP (*c, P_ampR, 0.05f);
+                    capture (*c, 0.5, 57);
+                    CHECK (c->hasCapture() && std::abs (c->detectCapturePitch() - 220.0) < 1.0, "capture before effects");
+                }
+            }
+
             // everything at maximum stays finite and bounded
             {
                 auto p = make();

@@ -52,6 +52,10 @@ These run once on all notes together, before the effects (per-note versions woul
 - **Bus order**: Granular before Spectral, or the other way round.
 - **Feedback Matrix**: feeds the outputs of Granular, Spectral, the tape delay and the final output back into the inputs of Granular, Spectral and the delay (12 paths, each with its own amount). Every path arrives *Time* later (10 ms to 1 s; never less than one audio block, so there are no instant loops), through a DC blocker, a *Tone* low-pass, a soft clip at the safety ceiling and its own limiter. *Safety* lowers how hard loops can drive. While any path is up, the final output passes a soft ceiling that never exceeds 0 dBFS; with every path at 0 it is completely out of the signal.
 
+## Capture tab (Capture / Resample)
+
+**Record** captures up to 8 seconds of the synth, either after the effects (exactly what you hear) or before them. Drag the markers on the waveform to trim (optionally snapped to zero crossings), add fades, reverse and normalise. The pitch is detected automatically. Then send it back in: to **WT 1 / WT 2** (the root note is set from the detected pitch, so it plays in tune), to **DNA A / DNA B** (loaded into a wavetable and chosen as that DNA Splice source), to **Granular** (becomes the frozen grain buffer), or cut a **single cycle** at the detected pitch into WT 1 / WT 2 as a looping wave. **Save WAV** exports it. The last capture is saved with the project and in patch files.
+
 ## Modulation matrix (Mod Matrix tab)
 
 Any source can drive any sound parameter: 32 routes, each with its own depth.

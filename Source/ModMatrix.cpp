@@ -131,7 +131,7 @@ const NormTable& normTable()
             const bool modAmt = m.id.startsWith ("mod") && m.id.endsWith ("Amt");
             t.scene[i] = (m.modulatable || m.scale == Scale::Choice) && m.category != Category::Seq && ! modAmt
                          && ! m.id.startsWith ("macro") && i != P_sceneX && i != P_sceneY && i != P_masterVolume
-                         && i != P_spSize && i != P_busOrder;   // these change the plugin's latency / structure
+                         && i != P_spSize && i != P_busOrder && i != P_capPoint;   // these change the plugin's latency / structure
             t.discrete[i] = m.scale == Scale::Choice;
         }
         return t;

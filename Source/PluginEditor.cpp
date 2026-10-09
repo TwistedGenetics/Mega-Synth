@@ -138,7 +138,7 @@ void Look::drawTabButton (juce::TabBarButton& b, juce::Graphics& g, bool over, b
     g.setColour (front ? col::accent : col::border);
     g.drawRoundedRectangle (r, 7.0f, front ? 2.0f : 1.0f);
     g.setColour (front ? col::text : col::muted);
-    g.setFont (juce::Font (juce::FontOptions (13.5f, juce::Font::bold)));
+    g.setFont (juce::Font (juce::FontOptions (12.5f, juce::Font::bold)));
     g.drawText (b.getButtonText(), r, juce::Justification::centred);
 }
 
@@ -639,6 +639,83 @@ void RouteRow::resized()
     viaDepth.setBounds (r.removeFromLeft (72)); r.removeFromLeft (4);
     smooth.setBounds (r.removeFromLeft (80));
     clear.setBounds (r.removeFromRight (28));
+}
+
+//==============================================================================
+void CaptureView::refresh()
+{
+    const auto& b = proc.getRawCapture();
+    const int W = std::max (1, getWidth());
+    peaks.assign ((size_t) W, 0.0f);
+    const int n = b.getNumSamples();
+    if (n == 0) { repaint(); return; }
+    for (int x = 0; x < W; ++x)
+    {
+        const int a = (int) ((int64_t) n * x / W), e = std::max (a + 1, (int) ((int64_t) n * (x + 1) / W));
+        float m = 0;
+        for (int c = 0; c < b.getNumChannels(); ++c) m = std::max (m, b.getMagnitude (c, a, e - a));
+        peaks[(size_t) x] = m;
+    }
+    float top = 1.0e-6f; for (float p : peaks) top = std::max (top, p);
+    for (auto& p : peaks) p /= top;
+    repaint();
+}
+
+void CaptureView::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (col::panel2);
+    g.fillRoundedRectangle (r, 8.0f);
+    g.setColour (col::border);
+    g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
+    if (proc.isCapturing())
+    {
+        const float f = (float) (proc.captureSecondsRecorded() / MegaSynthProcessor::kCaptureSeconds);
+        g.setColour (juce::Colour (0xffff6b6b).withAlpha (0.35f));
+        g.fillRoundedRectangle (r.withWidth (r.getWidth() * juce::jlimit (0.0f, 1.0f, f)), 8.0f);
+        g.setColour (col::text);
+        g.drawText ("Recording " + juce::String (proc.captureSecondsRecorded(), 1) + " s", r, juce::Justification::centred);
+        return;
+    }
+    if (! proc.hasCapture() || peaks.empty())
+    {
+        g.setColour (col::muted);
+        g.drawText ("Press Record, play, press Stop (up to 8 seconds)", r, juce::Justification::centred);
+        return;
+    }
+    const auto& s = proc.captureSettings;
+    const float a = std::min (s.trimStart, s.trimEnd) * r.getWidth(), b = std::max (s.trimStart, s.trimEnd) * r.getWidth();
+    g.setColour (col::bg.withAlpha (0.55f));
+    g.fillRect (juce::Rectangle<float> (0, 0, a, r.getHeight()));
+    g.fillRect (juce::Rectangle<float> (b, 0, r.getWidth() - b, r.getHeight()));
+    const float mid = r.getCentreY(), h = r.getHeight() * 0.45f;
+    for (int x = 0; x < (int) peaks.size(); ++x)
+    {
+        const bool in = x >= a && x <= b;
+        g.setColour (in ? col::accent : col::muted.withAlpha (0.5f));
+        g.drawVerticalLine (x, mid - peaks[(size_t) x] * h, mid + peaks[(size_t) x] * h + 1.0f);
+    }
+    g.setColour (col::text);
+    g.fillRect (juce::Rectangle<float> (a - 1.0f, 0, 2.0f, r.getHeight()));
+    g.fillRect (juce::Rectangle<float> (b - 1.0f, 0, 2.0f, r.getHeight()));
+}
+
+void CaptureView::mouseDown (const juce::MouseEvent& e)
+{
+    const float x = e.position.x / (float) getWidth();
+    auto& s = proc.captureSettings;
+    dragging = std::abs (x - s.trimStart) < std::abs (x - s.trimEnd) ? 1 : 2;
+    mouseDrag (e);
+}
+
+void CaptureView::mouseDrag (const juce::MouseEvent& e)
+{
+    if (! proc.hasCapture()) return;
+    const float x = juce::jlimit (0.0f, 1.0f, e.position.x / (float) getWidth());
+    auto& s = proc.captureSettings;
+    if (dragging == 1) s.trimStart = std::min (x, s.trimEnd - 0.002f); else s.trimEnd = std::max (x, s.trimStart + 0.002f);
+    repaint();
+    if (onEdit) onEdit();
 }
 
 //==============================================================================
@@ -1299,6 +1376,108 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Capture / Resample
+    {
+        auto* page = addPage ("Capture");
+        auto* cs = sec (page, "Capture / Resample  (record what the synth plays, edit it, send it back in)", col::accent);
+        capView = page->own (new CaptureView (proc));
+        capView->onEdit = [this] { updateCaptureInfo(); };
+        auto* point = page->own (new Choice (proc, P_capPoint, "Record from"));
+        capRecord.setTooltip ("Start / stop recording (stops by itself after 8 seconds)");
+        capRecord.onClick = [this]
+        {
+            if (proc.isCapturing()) proc.stopCapture();
+            else { proc.startCapture(); setStatus ("Recording - play something, then press Stop"); }
+        };
+        auto edited = [this] { proc.captureSettings.reverse = capReverse.getToggleState(); proc.captureSettings.normalise = capNormalise.getToggleState();
+                               proc.captureSettings.zeroCross = capZero.getToggleState(); proc.captureSettings.fadeInMs = (float) capFadeIn.getValue();
+                               proc.captureSettings.fadeOutMs = (float) capFadeOut.getValue(); updateCaptureInfo(); };
+        for (auto* t : { &capReverse, &capNormalise, &capZero }) { t->setColour (juce::ToggleButton::tickColourId, col::accent); t->onClick = edited; }
+        for (auto* sl : { &capFadeIn, &capFadeOut })
+        {
+            sl->setSliderStyle (juce::Slider::LinearBar);
+            sl->setColour (juce::Slider::trackColourId, col::accent.withAlpha (0.45f));
+            sl->setColour (juce::Slider::backgroundColourId, col::panel3);
+            sl->setColour (juce::Slider::textBoxTextColourId, col::text);
+            sl->onValueChange = edited;
+        }
+        capFadeIn.setRange (0.0, 500.0, 0.1); capFadeIn.setSkewFactorFromMidPoint (50.0);
+        capFadeOut.setRange (0.0, 2000.0, 0.1); capFadeOut.setSkewFactorFromMidPoint (200.0);
+        capFadeIn.textFromValueFunction = [] (double v) { return "Fade in " + juce::String (v, v < 10 ? 1 : 0) + " ms"; };
+        capFadeOut.textFromValueFunction = [] (double v) { return "Fade out " + juce::String (v, v < 10 ? 1 : 0) + " ms"; };
+        capInfo.setColour (juce::Label::textColourId, col::text);
+        capInfo.setFont (juce::Font (juce::FontOptions (13.0f)));
+        static const std::pair<int, const char*> sends[] = {
+            { MegaSynthProcessor::CT_WT1, "> WT 1" }, { MegaSynthProcessor::CT_WT2, "> WT 2" },
+            { MegaSynthProcessor::CT_DnaA, "> DNA A" }, { MegaSynthProcessor::CT_DnaB, "> DNA B" },
+            { MegaSynthProcessor::CT_Granular, "> Granular" },
+            { MegaSynthProcessor::CT_CycleWT1, "Single cycle > WT 1" }, { MegaSynthProcessor::CT_CycleWT2, "Single cycle > WT 2" } };
+        static const char* tips[] = { "Load the edited capture into Wavetable 1, tuned to its detected pitch",
+                                      "Load the edited capture into Wavetable 2, tuned to its detected pitch",
+                                      "Load into Wavetable 1 and make it DNA Splice source A",
+                                      "Load into Wavetable 2 and make it DNA Splice source B",
+                                      "Put it in the Granular buffer and freeze it, so the grains play it",
+                                      "Cut one cycle at the detected pitch and load it into Wavetable 1 as a looping single-cycle wave",
+                                      "Cut one cycle at the detected pitch and load it into Wavetable 2 as a looping single-cycle wave" };
+        for (int k = 0; k < 7; ++k)
+        {
+            auto* b = capSends.add (new juce::TextButton (sends[k].second));
+            b->setTooltip (tips[k]);
+            const auto target = (MegaSynthProcessor::CaptureTarget) sends[k].first;
+            b->onClick = [this, target, b]
+            {
+                const auto err = proc.sendCapture (target);
+                setStatus (err.isEmpty() ? "Capture sent " + b->getButtonText().replace ("> ", "to ") : err);
+            };
+        }
+        capSave.onClick = [this]
+        {
+            if (! proc.hasCapture()) { setStatus ("Nothing captured yet"); return; }
+            chooser = std::make_unique<juce::FileChooser> ("Save capture", MegaSynthProcessor::getPatchFolder().getParentDirectory().getChildFile ("Capture.wav"), "*.wav");
+            chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+                                  [this] (const juce::FileChooser& fc)
+                                  {
+                                      auto f = fc.getResult();
+                                      if (f == juce::File()) return;
+                                      setStatus (proc.saveCaptureWav (f.withFileExtension (".wav")) ? "Saved " + f.getFileName() : "Couldn't save there");
+                                  });
+        };
+        for (juce::Component* c : { (juce::Component*) &capRecord, (juce::Component*) &capSave, (juce::Component*) &capReverse, (juce::Component*) &capNormalise,
+                                    (juce::Component*) &capZero, (juce::Component*) &capFadeIn, (juce::Component*) &capFadeOut, (juce::Component*) &capInfo })
+            page->addAndMakeVisible (c);
+        for (auto* b : capSends) page->addAndMakeVisible (b);
+        auto* help = page->own (new juce::Label ({}, "Record from 'After effects' to capture exactly what you hear, or 'Before effects' for the synth and bus "
+            "mutation without delay / reverb / chorus. Drag the white markers to trim. Pitch is detected automatically: sending to a wavetable sets its "
+            "root note so the sample plays in tune on the keyboard. Resample loop: capture, send to a wavetable, mutate it, capture again. "
+            "The last capture is saved with your project and in patch files."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.5f)));
+        help->setJustificationType (juce::Justification::topLeft);
+        page->onResize = [this, page, cs, point, help]
+        {
+            const int g = 10, W = page->getWidth();
+            cs->setBounds (g, g, W - 2 * g, 420);
+            capRecord.setBounds (g + 14, 44, 110, 34);
+            point->setBounds (g + 140, 38, 240, 44);
+            capSave.setBounds (W - g - 134, 44, 120, 30);
+            capInfo.setBounds (g + 400, 46, 560, 28);
+            capView->setBounds (g + 14, 90, W - 2 * g - 28, 170);
+            capFadeIn.setBounds (g + 14, 272, 200, 26);
+            capFadeOut.setBounds (g + 222, 272, 200, 26);
+            capReverse.setBounds (g + 440, 272, 100, 26);
+            capNormalise.setBounds (g + 545, 272, 110, 26);
+            capZero.setBounds (g + 660, 272, 220, 26);
+            int x = g + 14;
+            for (auto* b : capSends) { const int w = b->getButtonText().length() > 10 ? 170 : 100; b->setBounds (x, 316, w, 32); x += w + 8; }
+            help->setBounds (g + 14, 360, W - 2 * g - 28, 70);
+        };
+        capFadeIn.setValue (proc.captureSettings.fadeInMs, juce::dontSendNotification);
+        capFadeOut.setValue (proc.captureSettings.fadeOutMs, juce::dontSendNotification);
+        capReverse.setToggleState (proc.captureSettings.reverse, juce::dontSendNotification);
+        capNormalise.setToggleState (proc.captureSettings.normalise, juce::dontSendNotification);
+        capZero.setToggleState (proc.captureSettings.zeroCross, juce::dontSendNotification);
+    }
+
     // ---------------------------------------------------------------- Filter & Envelopes
     {
         auto* page = addPage ("Filter & Env");
@@ -1682,6 +1861,26 @@ void MegaSynthEditor::shiftOctave (int delta)
     p->endChangeGesture();
 }
 
+void MegaSynthEditor::updateCaptureInfo()
+{
+    if (capView == nullptr) return;
+    capView->repaint();
+    if (! proc.hasCapture()) { capInfo.setText ("No capture", juce::dontSendNotification); return; }
+    const auto ed = proc.getEditedCapture();
+    const double hz = tg::capture::detectPitch (ed, proc.getCaptureRate());
+    juce::String t = "Length " + juce::String (ed.getNumSamples() / proc.getCaptureRate(), 2) + " s";
+    if (hz > 0.0)
+    {
+        static const char* names[] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
+        const double midi = 69.0 + 12.0 * std::log2 (hz / 440.0);
+        const int m = (int) std::lround (midi);
+        t << "    Pitch " << juce::String (hz, 1) << " Hz  (" << names[((m % 12) + 12) % 12] << juce::String (m / 12 - 1)
+          << (std::abs (midi - m) > 0.05 ? juce::String ((midi - m) * 100.0 > 0 ? " +" : " ") + juce::String (juce::roundToInt ((midi - m) * 100.0)) + " cents" : juce::String()) << ")";
+    }
+    else t << "    No steady pitch";
+    capInfo.setText (t, juce::dontSendNotification);
+}
+
 void MegaSynthEditor::updateSceneButtons()
 {
     const bool morph = proc.param (P_sceneMorph)->getValue() > 0.5f;
@@ -1783,6 +1982,15 @@ void MegaSynthEditor::timerCallback()
                 "Morph / Gene Shuffle: Amount moves from A to B.\nCharacter turns the smooth morph into a cycle-by-cycle shuffle, each cycle taken from A or B (Amount = chance of B)." };
             dnaInfo->setText (info[juce::jlimit (0, 6, mode)], juce::dontSendNotification);
         }
+    }
+    if (capView != nullptr && capView->isShowing())
+    {
+        const bool rec = proc.isCapturing();
+        capRecord.setButtonText (rec ? "Stop" : "Record");
+        capRecord.setColour (juce::TextButton::buttonColourId, rec ? juce::Colour (0xffb83a3a) : col::panel3);
+        const int len = proc.getRawCapture().getNumSamples();
+        if (rec) capView->repaint();
+        else if (len != lastCapLen) { lastCapLen = len; capView->refresh(); updateCaptureInfo(); }
     }
     if (xyPad != nullptr && xyPad->isShowing())
     {

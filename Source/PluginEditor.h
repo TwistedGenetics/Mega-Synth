@@ -41,7 +41,7 @@ public:
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawTabButton (juce::TabBarButton&, juce::Graphics&, bool over, bool down) override;
-    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 120; }
+    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 109; }
 };
 
 // Slider that hands right-clicks to its owner instead of dragging.
@@ -162,6 +162,22 @@ private:
     bool highlight = false;
 public:
     void flash() { highlight = true; repaint(); }
+};
+
+// Capture: waveform of the last recording with the trim region; drag the edges to trim
+class CaptureView : public juce::Component
+{
+public:
+    explicit CaptureView (MegaSynthProcessor& p) : proc (p) {}
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void refresh();                 // rebuild the overview after a new recording
+    std::function<void()> onEdit;
+private:
+    MegaSynthProcessor& proc;
+    std::vector<float> peaks;
+    int dragging = 0;
 };
 
 // Feedback matrix grid: rows = where the signal comes from, columns = where it goes
@@ -310,6 +326,14 @@ private:
     uint32_t lastRouteVersion = 0;
     tgui::XYPad* xyPad = nullptr;
     juce::Label* dnaInfo = nullptr;
+    tgui::CaptureView* capView = nullptr;
+    juce::TextButton capRecord { "Record" }, capSave { "Save WAV..." };
+    juce::OwnedArray<juce::TextButton> capSends;
+    juce::ToggleButton capReverse { "Reverse" }, capNormalise { "Normalise" }, capZero { "Snap to zero crossings" };
+    juce::Slider capFadeIn, capFadeOut;
+    juce::Label capInfo;
+    int lastCapLen = -1;
+    void updateCaptureInfo();
     int lastDnaMode = -1;
     juce::Array<tgui::MacroCell*> macroCells;
     juce::TextButton sceneEditBtn[4], sceneStoreBtn[4];

@@ -63,6 +63,8 @@ inline const char* const kSpSizeKeys[]   = { "512","1024","2048","4096" };
 inline const char* const kSpSizeLabels[] = { "512 (fast, 11 ms)","1024","2048","4096 (smooth, 85 ms)" };
 inline const char* const kBusOrderKeys[]   = { "grain_spectral","spectral_grain" };
 inline const char* const kBusOrderLabels[] = { "Granular > Spectral","Spectral > Granular" };
+inline const char* const kCapPointKeys[]   = { "prefx","postfx" };
+inline const char* const kCapPointLabels[] = { "Before effects","After effects (what you hear)" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -178,6 +180,7 @@ inline const ChoiceList kListDnaSrc      { kDnaSrcKeys, kDnaSrcLabels, 8 };
 inline const ChoiceList kListResTune     { kResTuneKeys, kResTuneLabels, 6 };
 inline const ChoiceList kListSpSize      { kSpSizeKeys, kSpSizeLabels, 4 };
 inline const ChoiceList kListBusOrder    { kBusOrderKeys, kBusOrderLabels, 2 };
+inline const ChoiceList kListCapPoint    { kCapPointKeys, kCapPointLabels, 2 };
 inline const ChoiceList kListArMod       { kArModKeys, kArModLabels, 6 };
 inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
 #undef TG_LIST
@@ -482,7 +485,8 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(fbOutDl, "Feedback Output > Delay", 0, 1, 0, 0.01, 0) \
     F(fbTime,      "Feedback Time", 10, 1000, 120, 0.1, 150) \
     F(fbTone,      "Feedback Tone", 200, 20000, 6000, 1, 2000) \
-    F(fbSafety,    "Feedback Safety", 0, 1, 0.5, 0.01, 0)
+    F(fbSafety,    "Feedback Safety", 0, 1, 0.5, 0.01, 0) \
+    C(capPoint,    "Capture Point", kListCapPoint, 1)
 
 enum ParamIndex
 {

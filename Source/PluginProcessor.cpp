@@ -13,7 +13,7 @@ namespace
     bool isNewPluginParam (const juce::String& id)
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
-            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb");
+            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -144,6 +144,9 @@ void MegaSynthProcessor::prepareToPlay (double sr, int block)
     maxBlock = std::max (32, block);
     engine.prepare (sr, maxBlock);
     updateLatency();
+    capRecording = false; capStopReq = false; capPos = 0;
+    capBuf.setSize (2, (int) (kCaptureSeconds * sr) + 8, false, true, false);
+    grainLoad.setSize (2, (int) (4.0 * sr), false, true, false);
     snap.sampleRate = sr;
     fillSnapshot (0);
     const double tempo = snap.fxTempo;
@@ -301,6 +304,12 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     fillSnapshot (n);
 
     const WaveSample* wavs[2] = { currentWave[0].load(), currentWave[1].load() };
+    if (capStopReq.load()) { capRecording = false; capStopReq = false; capReady = true; }
+    if (grainLoadReady.load())
+    {
+        engine.loadGranular (grainLoad.getReadPointer (0), grainLoad.getReadPointer (1), grainLoadLen);
+        grainLoadReady = false;
+    }
 
     // ---- sequencer transport
     const bool runParam = snap.i (P_seqRun) != 0;
@@ -352,7 +361,19 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         while (pos < next)
         {
             const int len = std::min (next - pos, maxBlock);
+            engine.keepPreFx = capRecording.load (std::memory_order_relaxed) && snap.i (P_capPoint) == 0;
             engine.render (L + pos, R + pos, len, snap, wavs);
+            if (capRecording.load (std::memory_order_relaxed))
+            {
+                // Capture: what goes to the effects, or what you hear
+                const bool pre = snap.i (P_capPoint) == 0;
+                const float* sl = pre ? engine.preFx (0) : L + pos;
+                const float* sr2 = pre ? engine.preFx (1) : R + pos;
+                int cp = capPos.load (std::memory_order_relaxed);
+                const int m = std::min (len, capBuf.getNumSamples() - cp);
+                if (m > 0) { capBuf.copyFrom (0, cp, sl, m); capBuf.copyFrom (1, cp, sr2, m); cp += m; capPos.store (cp); }
+                if (cp >= capBuf.getNumSamples()) { capRecording = false; capReady = true; }
+            }
             pos += len;
             if (seqRunning) seqSamplesToNext -= len;
             if (seqReleaseIn >= 0) seqReleaseIn -= len;
@@ -410,6 +431,7 @@ void MegaSynthProcessor::updateLatency()
 void MegaSynthProcessor::timerCallback()
 {
     updateLatency();
+    pollCapture();
     // history: record a snapshot shortly after an edit finishes (knob released, step changed)
     syncSceneEdits();
     if (! restoring)
@@ -531,6 +553,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("scenes", juce::JSON::toString (scenes.toVar(), true), nullptr);
     state.setProperty ("sceneEdit", getEditScene(), nullptr);
     state.setProperty ("macroNames", macroNamesJoined(), nullptr);
+    state.setProperty ("capture", juce::JSON::toString (captureToVar(), true), nullptr);
     state.setProperty ("patchName", getPatchName(), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
@@ -563,6 +586,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     scenes.fromVar (juce::JSON::parse (tree.getProperty ("scenes").toString()));
     sceneEditIndex = juce::jlimit (0, 3, (int) tree.getProperty ("sceneEdit", 0));
     setMacroNamesJoined (tree.getProperty ("macroNames").toString());
+    captureFromVar (juce::JSON::parse (tree.getProperty ("capture").toString()));
     lastMorph = raw[P_sceneMorph]->load() > 0.5f;
 
     for (int k = 0; k < 2; ++k)
@@ -619,6 +643,7 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
     root->setProperty ("modMatrix", routes.toVar());
     root->setProperty ("scenes", scenes.toVar());
     root->setProperty ("sceneEdit", getEditScene());
+    root->setProperty ("capture", captureToVar());
     {
         juce::Array<juce::var> names;
         for (int k = 0; k < 8; ++k) names.add (getMacroName (k));
@@ -732,6 +757,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         const juce::var names = patch["macroNames"];
         for (int k = 0; k < 8; ++k) setMacroName (k, names.isArray() && k < names.size() ? names[k].toString() : juce::String());
         lastMorph = raw[P_sceneMorph]->load() > 0.5f;
+        captureFromVar (patch["capture"]);
     }
     {
         const juce::String n = patch["name"].toString();
@@ -1033,6 +1059,147 @@ void MegaSynthProcessor::syncSceneEdits()
         const float plain = raw[(size_t) i]->load();
         if (std::abs (normFast (nt, i, plain) - scenes.v[k][i].load()) > 1.0e-6f) scenes.storeOne (k, i, plain);
     }
+}
+
+//==============================================================================
+void MegaSynthProcessor::startCapture()
+{
+    if (capBuf.getNumSamples() == 0) return;   // not prepared yet
+    capReady = false; capStopReq = false; capPos = 0;
+    capRecording = true;
+}
+
+void MegaSynthProcessor::stopCapture()
+{
+    if (capRecording.load()) capStopReq = true;   // the audio thread finishes the block it's in, then hands over
+}
+
+void MegaSynthProcessor::pollCapture()
+{
+    if (! capReady.load()) return;
+    capReady = false;
+    const int n = capPos.load();
+    if (n < 64) return;
+    capRaw.setSize (2, n);
+    for (int c = 0; c < 2; ++c) capRaw.copyFrom (c, 0, capBuf, c, 0, n);
+    capRate = sampleRate;
+    captureSettings.trimStart = 0.0f; captureSettings.trimEnd = 1.0f;
+}
+
+juce::AudioBuffer<float> MegaSynthProcessor::getEditedCapture() const
+{
+    return tg::capture::render (capRaw, captureSettings, capRate);
+}
+
+double MegaSynthProcessor::detectCapturePitch() const
+{
+    return tg::capture::detectPitch (getEditedCapture(), capRate);
+}
+
+juce::String MegaSynthProcessor::sendCapture (CaptureTarget t)
+{
+    if (! hasCapture()) return "Nothing captured yet";
+    auto edited = getEditedCapture();
+    if (edited.getNumSamples() < 16) return "The trimmed capture is too short";
+    const double hz = tg::capture::detectPitch (edited, capRate);
+    auto setPlain = [this] (int idx, float v)
+    {
+        auto* p = params[(size_t) idx];
+        p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 (v)); p->endChangeGesture();
+    };
+    auto toSlot = [&] (const juce::AudioBuffer<float>& b, int slot, const juce::String& name)
+    {
+        if (! loadSampleData (tg::capture::toWav (b, capRate), name, slot)) return false;
+        // tune the slot so the captured pitch plays back at the note you press
+        if (hz > 0.0)
+            setPlain (slot == 0 ? P_osc4Root : P_wt2Root, (float) juce::jlimit (24, 84, (int) std::lround (69.0 + 12.0 * std::log2 (hz / 440.0))));
+        return true;
+    };
+    const juce::String stamp = juce::Time::getCurrentTime().formatted ("%H%M%S");
+    switch (t)
+    {
+        case CT_WT1: case CT_WT2: case CT_DnaA: case CT_DnaB:
+        {
+            const int slot = (t == CT_WT1 || t == CT_DnaA) ? 0 : 1;
+            if (! toSlot (edited, slot, "Capture " + stamp + ".wav")) return "Couldn't load the capture";
+            if (t == CT_DnaA) setPlain (P_dnaA, 4.0f + (float) slot);
+            if (t == CT_DnaB) setPlain (P_dnaB, 4.0f + (float) slot);
+            break;
+        }
+        case CT_CycleWT1: case CT_CycleWT2:
+        {
+            auto cyc = tg::capture::singleCycle (edited, capRate, hz);
+            if (cyc.getNumSamples() == 0) return "No steady pitch found for a single cycle";
+            const int slot = t == CT_CycleWT1 ? 0 : 1;
+            // the cycle is stored at a rate that makes it exactly the root note's pitch, so it plays in tune
+            const int rootMidi = juce::jlimit (24, 84, (int) std::lround (69.0 + 12.0 * std::log2 (hz / 440.0)));
+            const double rootHz = 440.0 * std::exp2 ((rootMidi - 69) / 12.0);
+            if (! loadSampleData (tg::capture::toWav (cyc, std::round (tg::capture::kCycleLen * rootHz)), "Cycle " + stamp + ".wav", slot))
+                return "Couldn't load the cycle";
+            setPlain (slot == 0 ? P_osc4Root : P_wt2Root, (float) rootMidi);
+            setPlain (slot == 0 ? P_osc4LoopMode : P_wt2LoopMode, 0.0f);   // loop the whole (single-cycle) buffer
+            break;
+        }
+        case CT_Granular:
+        {
+            if (grainLoadReady.load()) return "Busy - try again";
+            const int n = std::min (edited.getNumSamples(), grainLoad.getNumSamples());
+            for (int c = 0; c < 2; ++c) grainLoad.copyFrom (c, 0, edited, std::min (c, edited.getNumChannels() - 1), edited.getNumSamples() - n, n);
+            grainLoadLen = n;
+            setPlain (P_grFreeze, 1.0f);
+            if (raw[P_grMix]->load() < 0.01f) setPlain (P_grMix, 1.0f);
+            grainLoadReady = true;   // after the parameters, so the granular stage is on when the buffer arrives
+            break;
+        }
+    }
+    pushHistory ("Send capture");
+    return {};
+}
+
+juce::var MegaSynthProcessor::captureToVar() const
+{
+    if (! hasCapture()) return {};
+    auto* o = new juce::DynamicObject();
+    const auto mb = tg::capture::toWav (capRaw, capRate);
+    o->setProperty ("data", "data:audio/wav;base64," + juce::Base64::toBase64 (mb.getData(), mb.getSize()));
+    o->setProperty ("trimStart", captureSettings.trimStart);
+    o->setProperty ("trimEnd", captureSettings.trimEnd);
+    o->setProperty ("fadeInMs", captureSettings.fadeInMs);
+    o->setProperty ("fadeOutMs", captureSettings.fadeOutMs);
+    o->setProperty ("reverse", captureSettings.reverse);
+    o->setProperty ("normalise", captureSettings.normalise);
+    o->setProperty ("zeroCross", captureSettings.zeroCross);
+    return juce::var (o);
+}
+
+void MegaSynthProcessor::captureFromVar (const juce::var& v)
+{
+    capRaw.setSize (2, 0);
+    captureSettings = {};
+    if (! v.isObject()) return;
+    const juce::String b64 = v["data"].toString().fromFirstOccurrenceOf ("base64,", false, false);
+    juce::MemoryOutputStream mo;
+    if (b64.isEmpty() || ! juce::Base64::convertFromBase64 (mo, b64)) return;
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (std::make_unique<juce::MemoryInputStream> (mo.getMemoryBlock(), true)));
+    if (reader == nullptr) return;
+    const int n = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * kCaptureSeconds) + 8);
+    capRaw.setSize (2, n);
+    reader->read (&capRaw, 0, n, 0, true, true);
+    capRate = reader->sampleRate;
+    captureSettings.trimStart = (float) (double) v.getProperty ("trimStart", 0.0);
+    captureSettings.trimEnd = (float) (double) v.getProperty ("trimEnd", 1.0);
+    captureSettings.fadeInMs = (float) (double) v.getProperty ("fadeInMs", 2.0);
+    captureSettings.fadeOutMs = (float) (double) v.getProperty ("fadeOutMs", 10.0);
+    captureSettings.reverse = (bool) v.getProperty ("reverse", false);
+    captureSettings.normalise = (bool) v.getProperty ("normalise", true);
+    captureSettings.zeroCross = (bool) v.getProperty ("zeroCross", true);
+}
+
+bool MegaSynthProcessor::saveCaptureWav (const juce::File& f) const
+{
+    if (! hasCapture()) return false;
+    const auto mb = tg::capture::toWav (getEditedCapture(), capRate);
+    return mb.getSize() > 0 && f.replaceWithData (mb.getData(), mb.getSize());
 }
 
 juce::String MegaSynthProcessor::getMacroName (int k) const

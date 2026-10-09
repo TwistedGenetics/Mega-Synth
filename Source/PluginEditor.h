@@ -153,6 +153,9 @@ private:
     void buildPages();
     void setStatus (const juce::String&);
     void shiftOctave (int delta);
+    void refreshPatchList();
+    void loadPatch (const juce::File&);
+    void stepPatch (int delta);
 
     MegaSynthProcessor& proc;
     tgui::Look look;
@@ -162,6 +165,10 @@ private:
     juce::TextButton loadBtn { "Load Sample" }, clearBtn { "Clear Sample" }, copyBtn { "Copy Patch" },
                      pasteBtn { "Paste Patch" }, initBtn { "Init" }, octDown { "Oct -" }, octUp { "Oct +" };
     juce::OwnedArray<tgui::Knob> headerKnobs;
+    juce::ComboBox patchBox;
+    juce::TextButton patchPrev { "<" }, patchNext { ">" }, saveBtn { "Save Patch" };
+    juce::Array<juce::File> patchFiles;
+    juce::String lastShownName;
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
     juce::MidiKeyboardComponent keyboard;
     juce::Label octLabel;

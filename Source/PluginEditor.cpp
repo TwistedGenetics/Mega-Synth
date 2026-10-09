@@ -388,6 +388,48 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     }
 
     for (auto* b : { &loadBtn, &clearBtn, &copyBtn, &pasteBtn, &initBtn, &octDown, &octUp }) content.addAndMakeVisible (*b);
+    subtitle.setVisible (false);
+
+    // ---- patch browser
+    for (auto* b : { &patchPrev, &patchNext, &saveBtn }) content.addAndMakeVisible (*b);
+    content.addAndMakeVisible (patchBox);
+    patchBox.setTooltip ("Saved patches (Music/Mega Synth/Patches)");
+    patchBox.onChange = [this]
+    {
+        const int id = patchBox.getSelectedId();
+        if (id >= 1 && id <= patchFiles.size()) { loadPatch (patchFiles[id - 1]); return; }
+        if (id == 9001)
+        {
+            chooser = std::make_unique<juce::FileChooser> ("Open a Mega Synth patch", MegaSynthProcessor::getPatchFolder(), "*.megasynth;*.json;*.txt");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [this] (const juce::FileChooser& fc)
+                                  {
+                                      const auto f = fc.getResult();
+                                      if (f != juce::File()) loadPatch (f);
+                                      refreshPatchList();
+                                  });
+        }
+        else if (id == 9002) MegaSynthProcessor::getPatchFolder().revealToUser();
+        refreshPatchList();
+    };
+    patchPrev.onClick = [this] { stepPatch (-1); };
+    patchNext.onClick = [this] { stepPatch (1); };
+    saveBtn.onClick = [this]
+    {
+        juce::String name = proc.getPatchName();
+        if (name.isEmpty() || name == "Init" || name == "Imported patch") name = "My Patch";
+        chooser = std::make_unique<juce::FileChooser> ("Save patch", MegaSynthProcessor::getPatchFolder().getChildFile (juce::File::createLegalFileName (name) + ".megasynth"), "*.megasynth");
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+                              [this] (const juce::FileChooser& fc)
+                              {
+                                  auto f = fc.getResult();
+                                  if (f == juce::File()) return;
+                                  f = f.withFileExtension (".megasynth");
+                                  setStatus (proc.savePatchToFile (f) ? "Saved " + f.getFileNameWithoutExtension() : "Couldn't save the patch there");
+                                  refreshPatchList();
+                              });
+    };
+    refreshPatchList();
 
     loadBtn.onClick = [this]
     {
@@ -740,8 +782,11 @@ void MegaSynthEditor::resized()
     content.setTransform (juce::AffineTransform::scale (scale));
 
     title.setBounds (14, 8, 220, 30);
-    subtitle.setBounds (14, 38, 420, 18);
-    sampleStatus.setBounds (14, 58, 420, 18);
+    patchPrev.setBounds (14, 42, 26, 24);
+    patchBox.setBounds (44, 42, 250, 24);
+    patchNext.setBounds (298, 42, 26, 24);
+    saveBtn.setBounds (330, 42, 100, 24);
+    sampleStatus.setBounds (14, 68, 420, 16);
     int x = 440;
     for (auto* k : headerKnobs) { k->setBounds (x, 4, 72, 80); x += 74; }
     loadBtn.setBounds (812, 10, 120, 28);
@@ -756,6 +801,43 @@ void MegaSynthEditor::resized()
     octLabel.setBounds (6, 708, 80, 40);
     keyboard.setBounds (90, 634, kDesignW - 100, 158);
     keyboard.setKeyWidth ((float) keyboard.getWidth() / 36.0f);
+}
+
+void MegaSynthEditor::refreshPatchList()
+{
+    patchFiles = MegaSynthProcessor::getPatchFiles();
+    const auto folder = MegaSynthProcessor::getPatchFolder();
+    patchBox.clear (juce::dontSendNotification);
+    for (int i = 0; i < patchFiles.size(); ++i)
+        patchBox.addItem (patchFiles[i].getRelativePathFrom (folder).upToLastOccurrenceOf (".", false, false), i + 1);
+    if (patchFiles.size() > 0) patchBox.addSeparator();
+    patchBox.addItem ("Open patch file...", 9001);
+    patchBox.addItem ("Show patch folder", 9002);
+
+    const auto name = proc.getPatchName();
+    lastShownName = name;
+    for (int i = 0; i < patchFiles.size(); ++i)
+        if (patchFiles[i].getFileNameWithoutExtension() == name) { patchBox.setSelectedId (i + 1, juce::dontSendNotification); return; }
+    patchBox.setText (name, juce::dontSendNotification);
+}
+
+void MegaSynthEditor::loadPatch (const juce::File& f)
+{
+    const auto err = proc.loadPatchFromFile (f);
+    setStatus (err.isEmpty() ? "Loaded " + f.getFileNameWithoutExtension() : err);
+    refreshPatchList();
+}
+
+void MegaSynthEditor::stepPatch (int delta)
+{
+    patchFiles = MegaSynthProcessor::getPatchFiles();
+    if (patchFiles.isEmpty()) { setStatus ("No saved patches yet - use Save Patch"); return; }
+    int cur = -1;
+    for (int i = 0; i < patchFiles.size(); ++i)
+        if (patchFiles[i].getFileNameWithoutExtension() == proc.getPatchName()) cur = i;
+    const int n = patchFiles.size();
+    const int next = cur < 0 ? (delta > 0 ? 0 : n - 1) : ((cur + delta) % n + n) % n;
+    loadPatch (patchFiles[next]);
 }
 
 void MegaSynthEditor::setStatus (const juce::String& s)
@@ -794,6 +876,7 @@ void MegaSynthEditor::timerCallback()
     }
 
     sampleStatus.setText (proc.getSampleStatus(), juce::dontSendNotification);
+    if (proc.getPatchName() != lastShownName) refreshPatchList();
 
     const auto v = proc.steps.getVersion();
     if (v != lastStepVersion)

@@ -449,6 +449,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto state = apvts.copyState();
     state.setProperty ("seqSteps", steps.toString(), nullptr);
+    state.setProperty ("patchName", getPatchName(), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
         state.setProperty ("waveName", waveName, nullptr);
@@ -465,6 +466,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (! tree.isValid()) return;
     apvts.replaceState (tree);
 
+    if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
     if (stepStr.isNotEmpty()) steps.fromString (stepStr);
 
@@ -496,6 +498,14 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
             p->setProperty (id, std::abs (v - std::round (v)) < 1.0e-6f ? juce::String ((int) std::round (v)) : juce::String (v, 6).trimCharactersAtEnd ("0"));
     }
     root->setProperty ("params", juce::var (p));
+    root->setProperty ("name", getPatchName());
+    {
+        // settings that only exist in the plugin (the browser ignores this block)
+        auto* extra = new juce::DynamicObject();
+        for (int i : { P_velSens, P_bendRange, P_warmth, P_bassKeep, P_analogDrift, P_seqClock })
+            extra->setProperty (kParamIds[i], raw[(size_t) i]->load());
+        root->setProperty ("plugin", juce::var (extra));
+    }
 
     static const char* ties[] = { "normal", "tie", "slide", "rest" };
     juce::Array<juce::var> seq;
@@ -577,6 +587,17 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         }
     }
 
+    if (auto* extra = patch["plugin"].getDynamicObject())
+    {
+        for (int i : { P_velSens, P_bendRange, P_warmth, P_bassKeep, P_analogDrift, P_seqClock })
+            if (extra->hasProperty (kParamIds[i]))
+                setPlain (i, (float) (double) extra->getProperty (kParamIds[i]));
+    }
+    {
+        const juce::String n = patch["name"].toString();
+        setPatchName (n.isNotEmpty() ? n : juce::String ("Imported patch"));
+    }
+
     auto readAssign = [&] (const juce::var& arr, int firstParam, const ChoiceList& srcList)
     {
         if (! arr.isArray()) return;
@@ -641,6 +662,37 @@ void MegaSynthProcessor::resetToDefaults()
     for (int i = 0; i < 32; ++i) steps.set (i, fresh.get (i));
     clearSample();
     lastEuclid[0] = -1;
+    setPatchName ("Init");
+}
+
+juce::File MegaSynthProcessor::getPatchFolder()
+{
+    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Mega Synth").getChildFile ("Patches");
+    dir.createDirectory();
+    return dir;
+}
+
+juce::Array<juce::File> MegaSynthProcessor::getPatchFiles()
+{
+    auto files = getPatchFolder().findChildFiles (juce::File::findFiles, true, "*.megasynth");
+    std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
+               { return a.getRelativePathFrom (getPatchFolder()).compareNatural (b.getRelativePathFrom (getPatchFolder())) < 0; });
+    return files;
+}
+
+bool MegaSynthProcessor::savePatchToFile (const juce::File& f)
+{
+    setPatchName (f.getFileNameWithoutExtension());
+    return f.replaceWithText (exportBrowserPatch());
+}
+
+juce::String MegaSynthProcessor::loadPatchFromFile (const juce::File& f)
+{
+    const auto text = f.loadFileAsString();
+    if (text.isEmpty()) return "Couldn't read " + f.getFileName();
+    const auto err = importBrowserPatch (text);
+    setPatchName (f.getFileNameWithoutExtension());
+    return err;
 }
 
 juce::AudioProcessorEditor* MegaSynthProcessor::createEditor()

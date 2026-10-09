@@ -223,6 +223,20 @@ int main()
         CHECK (r->getSampleStatus().startsWith ("Loaded"), "sample not imported from patch JSON");
         CHECK (std::abs (r->param (P_osc4Gain)->getValue() - p->param (P_osc4Gain)->getValue()) < 1.0e-4f, "osc4Gain not imported");
         CHECK (r->steps.get (5).note == 7, "sequence not imported");
+
+        // patch file round trip, including plugin-only settings and the name
+        setP (*p, P_warmth, 0.9f);
+        setP (*p, P_seqClock, 1.0f);
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Reese Test.megasynth");
+        CHECK (p->savePatchToFile (tmp), "patch save failed");
+        auto q2 = make();
+        const auto e2 = q2->loadPatchFromFile (tmp);
+        CHECK (e2.isEmpty(), "patch load error " + e2);
+        CHECK (q2->getPatchName() == "Reese Test", "patch name not restored: " + q2->getPatchName());
+        CHECK (std::abs (q2->param (P_warmth)->getValue() - p->param (P_warmth)->getValue()) < 1.0e-4f, "warmth not saved in patch");
+        CHECK (juce::roundToInt (q2->param (P_seqClock)->convertFrom0to1 (q2->param (P_seqClock)->getValue())) == 1, "seq clock not saved in patch");
+        CHECK (q2->getSampleStatus().startsWith ("Loaded"), "sample not saved in patch file");
+        tmp.deleteFile();
     }
 
     // ---- 6. a patch in the browser's own JSON format

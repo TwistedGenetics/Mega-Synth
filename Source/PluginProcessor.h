@@ -49,6 +49,14 @@ public:
     juce::String exportBrowserPatch() const;
     juce::String importBrowserPatch (const juce::String& json);   // returns an error message, or empty on success
     void resetToDefaults();
+
+    // Patch files (.megasynth = the browser patch JSON plus a name and the plugin-only settings)
+    static juce::File getPatchFolder();
+    static juce::Array<juce::File> getPatchFiles();
+    bool savePatchToFile (const juce::File&);
+    juce::String loadPatchFromFile (const juce::File&);   // error message, or empty on success
+    juce::String getPatchName() const { const juce::ScopedLock sl (nameLock); return patchName; }
+    void setPatchName (const juce::String& n) { const juce::ScopedLock sl (nameLock); patchName = n; }
     void generateRandomPhrase();
 
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
@@ -92,6 +100,8 @@ private:
     // Euclidean live update tracking (message thread)
     int lastEuclid[4] { -1, -1, -1, -1 };
     juce::Random rng;
+    juce::String patchName { "Init" };
+    mutable juce::CriticalSection nameLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MegaSynthProcessor)
 };

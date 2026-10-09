@@ -55,6 +55,7 @@ enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_
     X(SampleHold,  "Sample & Hold",     K_RAND,   true)  \
     X(Chaos,       "Chaos",             K_RAND,   true)  \
     X(Drift,       "Drift",             K_RAND,   true)  \
+    X(CellNoise,   "Cell Instability",  K_RAND,   true)  \
     X(Gate,        "Note Gate",         K_NOTE,   false) \
     X(NoteOn,      "Note On",           K_NOTE,   false) \
     X(NoteOff,     "Note Off",          K_NOTE,   false) \

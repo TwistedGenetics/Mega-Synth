@@ -56,6 +56,10 @@ These run once on all notes together, before the effects (per-note versions woul
 
 **Record** captures up to 8 seconds of the synth, either after the effects (exactly what you hear) or before them. Drag the markers on the waveform to trim (optionally snapped to zero crossings), add fades, reverse and normalise. The pitch is detected automatically. Then send it back in: to **WT 1 / WT 2** (the root note is set from the detected pitch, so it plays in tune), to **DNA A / DNA B** (loaded into a wavetable and chosen as that DNA Splice source), to **Granular** (becomes the frozen grain buffer), or cut a **single cycle** at the detected pitch into WT 1 / WT 2 as a looping wave. **Save WAV** exports it. The last capture is saved with the project and in patch files.
 
+## Cell Instability (Modulation tab)
+
+Each note gets its own smooth wandering noise on a set of targets, so no two notes (or two moments of a held note) are quite the same. **Amount** scales everything (0 = off), **Rate** sets how fast it wanders. Per-target depths: Pitch (up to +/-50 cents), Cutoff, Resonance, Osc Levels (the balance between oscillators shifts; switched-off oscillators stay off), Wave Fold, WT Scan, FM (only where FM is already up), DNA Splice, Envelopes (attack/decay/release, set per note at note-on) and Resonator. The noise glides with a smooth curve, so it never steps or clicks. It's also a Mod Matrix source ("Cell Instability") for anything else.
+
 ## Modulation matrix (Mod Matrix tab)
 
 Any source can drive any sound parameter: 32 routes, each with its own depth.

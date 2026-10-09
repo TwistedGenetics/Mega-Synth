@@ -12,6 +12,7 @@
 #include "Mut/Granular.h"
 #include "Mut/Spectral.h"
 #include "Mut/FeedbackMatrix.h"
+#include "Mut/Instability.h"
 
 namespace tg
 {
@@ -309,6 +310,8 @@ private:
     bool dnaStarted = false;
     WaveMutator waveMut;
     Resonator reso;
+    Instability inst;
+    void applyInstability (Snapshot&, bool noteOn) const;
     bool resoRinging = false;
     AudioRateFx arFx;
     double arPh = 0.0;           // internal sine modulator phase            // the parameters with this voice's modulation applied

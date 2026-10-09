@@ -1579,24 +1579,32 @@ void MegaSynthEditor::buildPages()
         mw->setColour (juce::Label::textColourId, col::muted);
         mw->setFont (juce::Font (juce::FontOptions (12.0f)));
         juce::Array<AssignSlot*> sl (assignSlots);
-        page->onResize = [page, lfo, env, asg, sl, mw]
+        auto* ci = sec (page, "Cell Instability  (each note wanders on its own: smooth per-note noise on the targets below)", col::env);
+        ci->knob (P_ciAmount, "Amount", 70);
+        ci->knob (P_ciRate, "Rate", 70);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_ciPitch, "Pitch" }, { P_ciCutoff, "Cutoff" }, { P_ciRes, "Resonance" },
+                               { P_ciLevel, "Osc Levels" }, { P_ciFold, "Wave Fold" }, { P_ciScan, "WT Scan" }, { P_ciFm, "FM" },
+                               { P_ciDna, "DNA Splice" }, { P_ciEnv, "Envelopes" }, { P_ciReso, "Resonator" } })
+            ci->knob (idx, n, 70);
+        page->onResize = [page, lfo, env, asg, sl, mw, ci]
         {
             const int g = 10, W = page->getWidth();
             const int w3 = (W - g * 4) / 3;
             for (int i = 0; i < 3; ++i)
             {
-                lfo[i]->setBounds (g + i * (w3 + g), g, w3, 130);
-                env[i]->setBounds (g + i * (w3 + g), 148, w3, 130);
+                lfo[i]->setBounds (g + i * (w3 + g), g, w3, 120);
+                env[i]->setBounds (g + i * (w3 + g), 136, w3, 120);
             }
-            asg->setBounds (g, 286, W - 2 * g, 196);
+            asg->setBounds (g, 262, W - 2 * g, 186);
             const int sw = (W - 2 * g - 20 - 2 * 8) / 3;
             for (int i = 0; i < 6; ++i)
             {
                 const int row = i / 3, c = i % 3;
-                sl[i]->setBounds (g + 10 + c * (sw + 8), 286 + 30 + row * 78, sw, 74);
+                sl[i]->setBounds (g + 10 + c * (sw + 8), 262 + 30 + row * 78, sw, 74);
                 sl[i]->toFront (false);
             }
-            mw->setBounds (g, 484, W - 2 * g, 18);
+            mw->setBounds (g + 4, 450, W - 2 * g, 16);
+            ci->setBounds (g, 470, W - 2 * g, 126);
         };
     }
 

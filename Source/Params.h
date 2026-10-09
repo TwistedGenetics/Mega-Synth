@@ -486,7 +486,19 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(fbTime,      "Feedback Time", 10, 1000, 120, 0.1, 150) \
     F(fbTone,      "Feedback Tone", 200, 20000, 6000, 1, 2000) \
     F(fbSafety,    "Feedback Safety", 0, 1, 0.5, 0.01, 0) \
-    C(capPoint,    "Capture Point", kListCapPoint, 1)
+    C(capPoint,    "Capture Point", kListCapPoint, 1) \
+    F(ciAmount,    "Cell Instability", 0, 1, 0, 0.01, 0) \
+    F(ciRate,      "Instability Rate", 0.05, 10, 0.5, 0.01, 1) \
+    F(ciPitch,     "Instability > Pitch", 0, 1, 0.5, 0.01, 0) \
+    F(ciCutoff,    "Instability > Cutoff", 0, 1, 0.4, 0.01, 0) \
+    F(ciRes,       "Instability > Resonance", 0, 1, 0.2, 0.01, 0) \
+    F(ciLevel,     "Instability > Osc Levels", 0, 1, 0.3, 0.01, 0) \
+    F(ciFold,      "Instability > Wave Fold", 0, 1, 0.3, 0.01, 0) \
+    F(ciScan,      "Instability > WT Scan", 0, 1, 0.3, 0.01, 0) \
+    F(ciFm,        "Instability > FM", 0, 1, 0.3, 0.01, 0) \
+    F(ciDna,       "Instability > DNA Splice", 0, 1, 0.3, 0.01, 0) \
+    F(ciEnv,       "Instability > Envelopes", 0, 1, 0.3, 0.01, 0) \
+    F(ciReso,      "Instability > Resonator", 0, 1, 0.3, 0.01, 0)
 
 enum ParamIndex
 {

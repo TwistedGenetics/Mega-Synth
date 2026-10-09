@@ -1017,6 +1017,61 @@ int main()
                 }
             }
 
+            // ---- Stage 12: Cell Instability
+            {
+                std::cout << "Cell Instability" << std::endl;
+                // the noise bank itself: inside -1..1, continuous, with a continuous slope
+                {
+                    Instability in; in.seed (12345);
+                    const double dt = 16.0 / 48000.0;
+                    float prev = in.value (0), prevD = 0, maxD = 0, maxJerk = 0, lo = 1, hi = -1;
+                    for (int i = 0; i < 200000; ++i)
+                    {
+                        in.advance (dt, 8.0);
+                        const float v = in.value (0), d = v - prev;
+                        maxD = std::max (maxD, std::abs (d)); if (i > 0) maxJerk = std::max (maxJerk, std::abs (d - prevD));
+                        lo = std::min (lo, v); hi = std::max (hi, v); prev = v; prevD = d;
+                    }
+                    std::cout << "  noise: range " << lo << " .. " << hi << ", largest step " << maxD << ", largest slope change " << maxJerk << std::endl;
+                    // at 8 points/s (x1.3) and 16-sample blocks, a smooth curve moves < pi * 1.3 * 8 * dt per block
+                    CHECK (lo >= -1.0f && hi <= 1.0f && maxD < 3.3f * 1.3f * 8.0f * (float) dt && maxJerk < 0.002f, "instability smoothness");
+                }
+                // pitch instability on a held note: wanders within +-50 cents, smoothly, and differs per note
+                {
+                    auto p = clean(); setP (*p, P_ciAmount, 1.0f); setP (*p, P_ciRate, 2.0f);
+                    for (int i : { P_ciCutoff, P_ciRes, P_ciLevel, P_ciFold, P_ciScan, P_ciFm, P_ciDna, P_ciEnv, P_ciReso }) setP (*p, i, 0.0f);
+                    setP (*p, P_ciPitch, 1.0f);
+                    juce::AudioBuffer<float> x;
+                    render (*p, 6.0, { { 0.0, juce::MidiMessage::noteOn (1, 69, 1.0f) }, { 5.9, juce::MidiMessage::noteOff (1, 69) } }, &x);
+                    // period-by-period frequency from zero crossings (interpolated)
+                    std::vector<double> cents;
+                    double last = -1;
+                    for (int i = (int) (0.2 * sr); i < (int) (5.8 * sr); ++i)
+                    {
+                        const float a0 = x.getSample (0, i - 1), a1 = x.getSample (0, i);
+                        if (a0 < 0 && a1 >= 0)
+                        {
+                            const double tz = i - 1 + a0 / (a0 - a1);
+                            if (last > 0) cents.push_back (1200.0 * std::log2 ((sr / (tz - last)) / 440.0));
+                            last = tz;
+                        }
+                    }
+                    double lo = 1e9, hi = -1e9, step = 0;
+                    for (size_t k = 0; k < cents.size(); ++k) { lo = std::min (lo, cents[k]); hi = std::max (hi, cents[k]); if (k) step = std::max (step, std::abs (cents[k] - cents[k - 1])); }
+                    std::cout << "  pitch wanders " << lo << " .. " << hi << " cents, largest change between cycles " << step << " cents" << std::endl;
+                    CHECK (lo > -52 && hi < 52 && hi - lo > 15 && step < 1.0, "pitch instability range / smoothness");
+                }
+                // every target at once, full amount, fast: still finite, and the envelope times vary per note
+                {
+                    auto p = make(); setP (*p, P_ciAmount, 1.0f); setP (*p, P_ciRate, 10.0f);
+                    for (int i : { P_ciPitch, P_ciCutoff, P_ciRes, P_ciLevel, P_ciFold, P_ciScan, P_ciFm, P_ciDna, P_ciEnv, P_ciReso }) setP (*p, i, 1.0f);
+                    setP (*p, P_wmMix, 0.5f); setP (*p, P_dnaMix, 0.5f); setP (*p, P_resMix, 0.3f); setP (*p, P_arFm, 0.2f);
+                    route (*p, 0, MS_CellNoise, P_reverbMix, 0.3f);
+                    auto st = render (*p, 4.0, chord (0.0, 3.0, { 48, 55, 60, 64, 67 }));
+                    CHECK (st.finite && st.peak < 4.0f, "instability on every target");
+                }
+            }
+
             // everything at maximum stays finite and bounded
             {
                 auto p = make();

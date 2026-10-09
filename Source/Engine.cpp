@@ -232,6 +232,7 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     rndA = nextRand(); rndB = nextRand(); drA = nextRand(); drB = nextRand();
     shVal = 0.0f; chaosX = 0.3f + 0.4f * (0.5f + 0.5f * nextRand());
     rndPh = driftPh2 = 0.0;
+    inst.seed (rng ^ 0xA5A5A5A5u);
     envF = audF = trFast = trSlow = 0.0f;
     for (auto& a : aPrev) a = 0.0f;
     for (int i = 0; i < 4; ++i) { lfoPh[i] = 0.0; lfoDepthNow[i] = s.f (P_lfo1Depth + 3 * i); }
@@ -260,6 +261,12 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
         RouteState tmp;
         applyRoutes (*mc.routes, s.v, modSnap.v, srcV, tmp, 0.0f, RF_EnvTime);
         envV = modSnap.v;
+    }
+    if (s.v[P_ciAmount] > 1.0e-4f && s.v[P_ciEnv] > 1.0e-4f)
+    {
+        // Cell Instability: each note's envelope times differ slightly
+        if (envV != modSnap.v) { modSnap = s; envV = modSnap.v; }
+        applyInstability (modSnap, true);
     }
     ampEnv.init (envV[P_ampA], envV[P_ampD], envV[P_ampS], envV[P_ampR]);
     filtEnv.init (envV[P_fEnvA], envV[P_fEnvD], envV[P_fEnvS], envV[P_fEnvR]);
@@ -348,6 +355,7 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
         v[MS_MpeGlide]    = in->mpeGlide[ch];
     }
     v[MS_RandNote] = randNote;
+    v[MS_CellNoise] = inst.value (CI_Source);
     for (int k = 0; k < 8; ++k) v[MS_Macro1 + k] = s.v[P_macro1 + k];
 
     // random clock (Random Rate): smooth random, stepped random, sample & hold of LFO 1, chaos
@@ -375,6 +383,45 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
     v[MS_EnvFollow]   = clampv (envF * 2.0f, 0.0f, 1.0f);
     v[MS_AudioFollow] = clampv (audF * 2.0f, 0.0f, 1.0f);
     v[MS_TransFollow] = clampv ((trFast - trSlow) * 6.0f, 0.0f, 1.0f);
+}
+
+// Cell Instability's built-in routes: target, the parameters it moves, and how far at 100%
+// (in normalised units). "skipZero": a control that's at zero (an oscillator switched off,
+// no FM) stays at zero, so instability varies what's there rather than adding new things.
+void Voice::applyInstability (Snapshot& sn, bool noteOn) const
+{
+    const auto& nt = normTable();
+    const float amount = sn.v[P_ciAmount];
+    struct E { int target, param; float depth; bool skipZero; };
+    static const E table[] = {
+        // pitch: +-50 cents at full (semitone dials span 24 semitones)
+        { CI_Pitch, P_osc1Semi, 0.5f / 24.0f, false }, { CI_Pitch, P_osc2Semi, 0.5f / 24.0f, false }, { CI_Pitch, P_osc3Semi, 0.5f / 24.0f, false },
+        { CI_Pitch, P_subSemi, 0.5f / 24.0f, false }, { CI_Pitch, P_osc4Semi, 0.5f / 24.0f, false }, { CI_Pitch, P_wt2Semi, 0.5f / 24.0f, false },
+        { CI_Pitch, P_complexSemi, 0.5f / 24.0f, false }, { CI_Pitch, P_supersawSemi, 0.5f / 24.0f, false },
+        { CI_Cutoff, P_filterCutoff, 0.25f, false },
+        { CI_Res, P_filterRes, 0.2f, false },
+        // levels move against each other, so the balance shifts rather than the volume
+        { CI_Level, P_osc1Gain, 0.15f, true }, { CI_Level, P_osc2Gain, -0.15f, true }, { CI_Level, P_osc3Gain, 0.15f, true },
+        { CI_Level, P_subGain, -0.15f, true }, { CI_Level, P_osc4Gain, 0.15f, true }, { CI_Level, P_wt2Gain, -0.15f, true },
+        { CI_Level, P_complexGain, 0.15f, true }, { CI_Level, P_supersawGain, -0.15f, true },
+        { CI_Fold, P_wmFold, 0.3f, false },
+        { CI_Scan, P_osc4Position, 0.2f, false }, { CI_Scan, P_wt2Position, -0.2f, false },
+        { CI_Fm, P_arFm, 0.15f, true }, { CI_Fm, P_complexFm, 0.15f, true }, { CI_Fm, P_fmAmount, 0.1f, true },
+        { CI_Dna, P_dnaAmount, 0.3f, false }, { CI_Dna, P_dnaChar, -0.2f, false },
+        { CI_Env, P_ampA, 0.12f, false }, { CI_Env, P_ampD, 0.12f, false }, { CI_Env, P_ampR, -0.12f, false },
+        { CI_Env, P_fEnvA, -0.12f, false }, { CI_Env, P_fEnvD, 0.12f, false }, { CI_Env, P_fEnvR, 0.12f, false },
+        { CI_Reso, P_resPitch, 0.01f, false }, { CI_Reso, P_resDecay, 0.15f, false } };
+    static const int amountParam[] = { P_ciPitch, P_ciCutoff, P_ciRes, P_ciLevel, P_ciFold, P_ciScan, P_ciFm, P_ciDna, P_ciEnv, P_ciReso };
+    for (const auto& e : table)
+    {
+        if ((e.target == CI_Env) != noteOn) continue;    // envelope times only at note-on; the rest continuously
+        const float a = amount * sn.v[amountParam[e.target]];
+        if (a <= 1.0e-4f) continue;
+        const float base = sn.v[e.param];
+        const float b = normFast (nt, e.param, base);
+        if (e.skipZero && b <= 1.0e-6f) continue;
+        sn.v[e.param] = plainFast (nt, e.param, b + a * e.depth * inst.value (e.target));
+    }
 }
 
 void Voice::advanceLfos (const Snapshot& s, int n)
@@ -606,6 +653,8 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         // routes applied. Everything below reads that copy, so every registered parameter is
         // a destination without the oscillators, filter or effects knowing about the matrix.
         const Snapshot* sp = &s;
+        const bool ciOn = s.v[P_ciAmount] > 1.0e-4f;
+        if (ciOn || routed) inst.advance (lastDt, s.v[P_ciRate]);
         if (routed)
         {
             computeSources (s, mc.in, lastDt);
@@ -619,6 +668,11 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             }
             else applyRoutes (*mc.routes, s.v, modSnap.v, srcV, rstate, lastDt, RF_All, liveOut);
             sp = &modSnap;
+        }
+        if (ciOn)
+        {
+            if (sp != &modSnap) { modSnap = s; sp = &modSnap; }
+            applyInstability (modSnap, false);
         }
         const Snapshot& ps = *sp;
         lastDt = (float) (n * isr);

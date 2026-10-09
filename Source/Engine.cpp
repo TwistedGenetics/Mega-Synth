@@ -1178,6 +1178,7 @@ void Engine::prepare (double sampleRate, int maxBlock)
     for (auto& v : voices) v.prepare (sr);
     fxBus.prepare (sr, maxBlock);
     gran.prepare (sr);
+    spec.prepare (sr);
     globalMod.clear();
     normTable();   // build the conversion tables off the audio thread
     globalRouteState.reset();
@@ -1189,6 +1190,7 @@ void Engine::reset()
     for (auto& v : voices) v.kill();
     fxBus.reset();
     gran.reset();
+    spec.reset();
     globalMod.clear();
 }
 
@@ -1304,7 +1306,12 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, cons
         gp.mix = fs->f (P_grMix); gp.sizeMs = fs->f (P_grSize); gp.density = fs->f (P_grDensity); gp.position = fs->f (P_grPosition);
         gp.jitter = fs->f (P_grJitter); gp.pitch = fs->f (P_grPitch); gp.pitchRand = fs->f (P_grPitchRand); gp.reverse = fs->f (P_grReverse);
         gp.spread = fs->f (P_grSpread); gp.feedback = fs->f (P_grFeedback); gp.freeze = fs->f (P_grFreeze) > 0.5f;
-        gran.process (L, R, numSamples, gp);
+        SpectralParams sp;
+        sp.on = fs->f (P_spOn) > 0.5f; sp.freeze = fs->f (P_spFreeze) > 0.5f; sp.sizeIndex = clampv (fs->i (P_spSize), 0, 3);
+        sp.mix = fs->f (P_spMix); sp.blur = fs->f (P_spBlur); sp.shiftHz = fs->f (P_spShift); sp.scramble = fs->f (P_spScramble);
+        sp.tilt = fs->f (P_spTilt); sp.morph = fs->f (P_spMorph); sp.formant = fs->f (P_spFormant); sp.feedback = fs->f (P_spFeedback);
+        if (fs->i (P_busOrder) == 1) { spec.process (L, R, numSamples, sp); gran.process (L, R, numSamples, gp); }
+        else                         { gran.process (L, R, numSamples, gp); spec.process (L, R, numSamples, sp); }
     }
     fxBus.process (L, R, numSamples, *fs, globalMod);
 

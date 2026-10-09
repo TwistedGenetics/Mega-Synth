@@ -59,6 +59,10 @@ inline const char* const kDnaSrcKeys[]   = { "osc1","osc2","osc3","sub","wt1","w
 inline const char* const kDnaSrcLabels[] = { "Osc 1","Osc 2","Osc 3","Sub","WT 1","WT 2","Complex","SuperSaw" };
 inline const char* const kResTuneKeys[]   = { "harmonic","odd","bar","membrane","plate","bell" };
 inline const char* const kResTuneLabels[] = { "Harmonic (string)","Odd (tube)","Bar (marimba)","Membrane (drum)","Plate","Bell" };
+inline const char* const kSpSizeKeys[]   = { "512","1024","2048","4096" };
+inline const char* const kSpSizeLabels[] = { "512 (fast, 11 ms)","1024","2048","4096 (smooth, 85 ms)" };
+inline const char* const kBusOrderKeys[]   = { "grain_spectral","spectral_grain" };
+inline const char* const kBusOrderLabels[] = { "Granular > Spectral","Spectral > Granular" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -172,6 +176,8 @@ inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT 
 inline const ChoiceList kListDnaMode     { kDnaModeKeys, kDnaModeLabels, 7 };
 inline const ChoiceList kListDnaSrc      { kDnaSrcKeys, kDnaSrcLabels, 8 };
 inline const ChoiceList kListResTune     { kResTuneKeys, kResTuneLabels, 6 };
+inline const ChoiceList kListSpSize      { kSpSizeKeys, kSpSizeLabels, 4 };
+inline const ChoiceList kListBusOrder    { kBusOrderKeys, kBusOrderLabels, 2 };
 inline const ChoiceList kListArMod       { kArModKeys, kArModLabels, 6 };
 inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
 #undef TG_LIST
@@ -449,7 +455,19 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(grReverse,   "Grain Reverse Chance", 0, 1, 0, 0.01, 0) \
     F(grSpread,    "Grain Stereo Spread", 0, 1, 0.5, 0.01, 0) \
     F(grFeedback,  "Granular Feedback", 0, 0.95, 0, 0.01, 0) \
-    B(grFreeze,    "Granular Freeze", false)
+    B(grFreeze,    "Granular Freeze", false) \
+    B(spOn,        "Spectral On", false) \
+    C(spSize,      "Spectral FFT Size", kListSpSize, 2) \
+    F(spMix,       "Spectral Mix", 0, 1, 1, 0.01, 0) \
+    B(spFreeze,    "Spectral Freeze", false) \
+    F(spBlur,      "Spectral Blur", 0, 1, 0, 0.01, 0) \
+    F(spShift,     "Spectral Shift", -1000, 1000, 0, 0.1, 0) \
+    F(spScramble,  "Spectral Scramble", 0, 1, 0, 0.01, 0) \
+    F(spTilt,      "Spectral Tilt", -1, 1, 0, 0.01, 0) \
+    F(spMorph,     "Spectral Morph", 0, 1, 0, 0.01, 0) \
+    F(spFormant,   "Spectral Formant", -12, 12, 0, 0.01, 0) \
+    F(spFeedback,  "Spectral Feedback", 0, 0.9, 0, 0.01, 0) \
+    C(busOrder,    "Bus Order", kListBusOrder, 0)
 
 enum ParamIndex
 {

@@ -10,6 +10,7 @@
 #include "Mut/DnaSplice.h"
 #include "Mut/Resonator.h"
 #include "Mut/Granular.h"
+#include "Mut/Spectral.h"
 
 namespace tg
 {
@@ -387,7 +388,8 @@ public:
 private:
     Voice voices[kMaxVoices];
     FxBus fxBus;
-    Granular gran;           // bus stage: summed voices -> granular -> effects
+    Granular gran;           // bus stages: summed voices -> granular / spectral -> effects
+    Spectral spec;
     ModState globalMod;     // modulation of global effects, taken from the newest voice
     uint64_t orderCounter = 0;
     double lastFreq = -1.0;

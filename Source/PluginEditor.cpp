@@ -1206,20 +1206,48 @@ void MegaSynthEditor::buildPages()
         frz->setTooltip ("Stop recording: the grains keep playing what's in the buffer, even after the notes end");
         grS->add (frz, 90, 30);
         freezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_grFreeze], *frz);
+        auto* spS = sec (page, "Spectral  (FFT resynthesis; adds one frame of latency, reported to your DAW, while it's on)", col::fx);
+        auto* spOn = new juce::ToggleButton ("On");
+        spOn->setColour (juce::ToggleButton::tickColourId, col::fx);
+        spOn->setTooltip ("Switch the spectral stage in. While it's on, the synth's output is delayed by one FFT frame; your DAW is told and compensates.");
+        spS->add (spOn, 60, 30);
+        spOnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_spOn], *spOn);
+        spS->choice (P_spSize, "FFT Size (quality)", 150);
+        spS->knob (P_spMix, "Mix");
+        spS->knob (P_spBlur, "Blur");
+        spS->knob (P_spShift, "Shift");
+        spS->knob (P_spScramble, "Scramble");
+        spS->knob (P_spTilt, "Tilt");
+        spS->knob (P_spMorph, "Morph");
+        spS->knob (P_spFormant, "Formant");
+        spS->knob (P_spFeedback, "Feedback");
+        auto* spFz = new juce::ToggleButton ("Freeze");
+        spFz->setColour (juce::ToggleButton::tickColourId, col::fx);
+        spFz->setTooltip ("Hold the current spectrum. Morph blends the live sound towards the last frozen spectrum.");
+        spS->add (spFz, 90, 30);
+        spFreezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_spFreeze], *spFz);
+        auto* ordS = sec (page, "Order", col::muted);
+        ordS->choice (P_busOrder, "Bus order", 180);
         auto* help = page->own (new juce::Label ({}, "Granular records the last 4 seconds of the synth and plays it back as up to 64 overlapping grains. "
             "Position = how far back the grains read (Jitter scatters it), Size and Density set the grain length and how many start each second, "
             "Pitch / Pitch Jitter transpose them, Reverse is the chance a grain plays backwards, Spread pans them. Feedback writes the grains back "
             "into the recording for washes that build up. Freeze holds the buffer: play a chord, freeze, and keep playing over the frozen cloud. "
             "These modules run once on all notes (per-note granular would cost about 16x the CPU); their knobs still take Mod Matrix routes, using "
-            "the newest note's sources."));
+            "the newest note's sources.\n\n"
+            "Spectral: Blur smears the sound over time, Shift moves every partial by the same number of Hz, Scramble shuffles nearby "
+            "frequencies, Tilt brightens or darkens (6 dB per octave), Formant moves the tone colour without changing the pitch, Freeze holds "
+            "the current spectrum, Morph blends towards the frozen one, Feedback feeds the output spectrum back in. Bigger FFT sizes sound "
+            "smoother on sustained sounds; smaller ones keep attacks sharper and add less latency."));
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.5f)));
         help->setJustificationType (juce::Justification::topLeft);
-        page->onResize = [page, grS, help]
+        page->onResize = [page, grS, spS, ordS, help]
         {
             const int g = 10, W = page->getWidth();
             grS->setBounds (g, g, W - 2 * g, 136);
-            help->setBounds (g + 6, 156, W - 2 * g - 12, 80);
+            spS->setBounds (g, 156, W - 2 * g, 136);
+            ordS->setBounds (g, 302, 220, 90);
+            help->setBounds (g + 240, 306, W - 2 * g - 246, 200);
         };
     }
 

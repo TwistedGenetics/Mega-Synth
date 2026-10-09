@@ -124,13 +124,14 @@ const NormTable& normTable()
                 t.invSkew[i] = 1.0f / t.skew[i];
             }
             else { t.skew[i] = t.invSkew[i] = 1.0f; }
-            t.global[i] = m.category == Category::Fx || i == P_masterVolume || i == P_warmth || m.module == "Granular";   // bus stages
+            t.global[i] = m.category == Category::Fx || i == P_masterVolume || i == P_warmth || m.module == "Granular" || m.module == "Spectral";   // bus stages
             t.envTime[i] = m.category == Category::Env && m.unit == "s";
             t.modulatable[i] = m.modulatable;
             t.audioRate[i] = m.audioRate;
             const bool modAmt = m.id.startsWith ("mod") && m.id.endsWith ("Amt");
             t.scene[i] = (m.modulatable || m.scale == Scale::Choice) && m.category != Category::Seq && ! modAmt
-                         && ! m.id.startsWith ("macro") && i != P_sceneX && i != P_sceneY && i != P_masterVolume;
+                         && ! m.id.startsWith ("macro") && i != P_sceneX && i != P_sceneY && i != P_masterVolume
+                         && i != P_spSize && i != P_busOrder;   // these change the plugin's latency / structure
             t.discrete[i] = m.scale == Scale::Choice;
         }
         return t;

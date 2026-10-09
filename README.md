@@ -48,6 +48,8 @@ Three per-note modules sit between the oscillator mix and the filter, in this or
 These run once on all notes together, before the effects (per-note versions would cost about 16 times the CPU). Their knobs still take Mod Matrix routes, using the newest note's sources.
 
 - **Granular**: records the last 4 seconds of the synth and plays it back as up to 64 grains: Size, Density, Position (how far back), Jitter, Pitch, Pitch Jitter, Reverse chance, stereo Spread and Feedback (grains written back into the recording). **Freeze** holds the recording, so the cloud keeps going after the notes end. Mix 0 = bypassed.
+- **Spectral**: an FFT (phase vocoder) stage with Blur, Shift (every partial moved by the same number of Hz), Scramble, Tilt, Formant (tone colour without pitch change), Freeze, Morph (towards the frozen spectrum) and Feedback, at FFT sizes 512-4096. While it's switched **On** the synth's output is one FFT frame late (11-85 ms at 48 kHz); the plugin reports this to the DAW, which compensates. Off = no latency and no processing.
+- **Bus order**: Granular before Spectral, or the other way round.
 
 ## Modulation matrix (Mod Matrix tab)
 

@@ -94,6 +94,9 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout (MegaSynthProcessor&);
     void timerCallback() override;
     void fillSnapshot (int numSamples);
+public:
+    void updateLatency();   // message thread (timer) and prepareToPlay
+private:
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();

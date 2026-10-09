@@ -303,7 +303,7 @@ private:
     juce::TextButton sceneEditBtn[4], sceneStoreBtn[4];
     juce::Label sceneState[4];
     juce::ToggleButton morphBtn { "Morph between scenes" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> morphAtt, freezeAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> morphAtt, freezeAtt, spOnAtt, spFreezeAtt;
     juce::TextButton clearScenesBtn { "Clear scenes" };
     void updateSceneButtons();
     void showRoute (int slot);

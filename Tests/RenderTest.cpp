@@ -595,7 +595,8 @@ int main()
             run ([] (MegaSynthProcessor& p) { setP (p, P_wmFold, 1.0f); setP (p, P_wmBits, 3.0f); setP (p, P_arShift, 300.0f); setP (p, P_arRing, 0.0f);
                                               setP (p, P_dnaMode, 3.0f); setP (p, P_dnaAmount, 1.0f); setP (p, P_dnaA, 6.0f);
                                               setP (p, P_resTuning, 5.0f); setP (p, P_resFeedback, 1.0f);
-                                              setP (p, P_grFreeze, 1.0f); setP (p, P_grFeedback, 0.9f); setP (p, P_grPitch, 7.0f); }, b);
+                                              setP (p, P_grFreeze, 1.0f); setP (p, P_grFeedback, 0.9f); setP (p, P_grPitch, 7.0f);
+                                              setP (p, P_spShift, 200.0f); setP (p, P_spFreeze, 1.0f); setP (p, P_busOrder, 1.0f); }, b);
             float md = 0; for (int i = 0; i < b.getNumSamples(); ++i) md = std::max (md, std::abs (b.getSample (0, i) - base.getSample (0, i)));
             CHECK (md == 0.0f, "modules at zero mix must be bit-exact");
 
@@ -826,6 +827,68 @@ int main()
                     auto st = render (*p, 6.0, chord (0.0, 4.0, { 48, 55, 60, 64 }), nullptr, &cpu);
                     std::cout << "  max density + feedback + modulation: peak " << st.peak << ", " << cpu / 6.0 * 100.0 << "% of one core" << std::endl;
                     CHECK (st.finite && st.peak < 4.0f, "granular at maximum");
+                }
+            }
+
+            // ---- Stage 9: Spectral (bus)
+            {
+                std::cout << "Spectral" << std::endl;
+                // switched on but neutral: exactly the dry sound, one frame late; the latency is reported
+                for (int size = 0; size < 4; ++size)
+                {
+                    auto p = clean(); setP (*p, P_ampR, 0.05f); setP (*p, P_osc1Wave, 0.0f); setP (*p, P_spOn, 1.0f); setP (*p, P_spSize, (float) size);
+                    p->updateLatency();
+                    juce::AudioBuffer<float> x, ref;
+                    render (*p, 1.0, note (57, 1.0f), &x);
+                    auto q = clean(); setP (*q, P_ampR, 0.05f); setP (*q, P_osc1Wave, 0.0f);
+                    render (*q, 1.0, note (57, 1.0f), &ref);
+                    const int N = spectralSize (size);
+                    float md = 0, pk = 0;
+                    for (int i = N + (int) (0.1 * sr); i < x.getNumSamples(); ++i) { md = std::max (md, std::abs (x.getSample (0, i) - ref.getSample (0, i - N))); pk = std::max (pk, std::abs (ref.getSample (0, i - N))); }
+                    std::cout << "  FFT " << N << ": latency reported " << p->getLatencySamples() << ", difference from delayed dry " << md / pk << std::endl;
+                    CHECK (p->getLatencySamples() == N && md < 1.0e-3f * pk, "spectral transparency / latency");
+                }
+                auto spec = [&] (std::function<void (MegaSynthProcessor&)> f, juce::AudioBuffer<float>& out)
+                {
+                    run ([&] (MegaSynthProcessor& p) { setP (p, P_spOn, 1.0f); setP (p, P_spSize, 3.0f); f (p); }, out);
+                };
+                spec ([] (MegaSynthProcessor& p) { setP (p, P_spShift, 100.0f); }, b);
+                const double sh = peakHz (spectrum (b));
+                std::cout << "  spectral shift +100 Hz: " << sh << " Hz" << std::endl;
+                CHECK (std::abs (sh - 320.0) < 4.0, "spectral shift");
+                // tilt and formant move the brightness of a saw (its pitch stays)
+                spec ([] (MegaSynthProcessor& p) { setP (p, P_osc1Wave, 0.0f); }, b);
+                const double cs = centroid (spectrum (b));
+                spec ([] (MegaSynthProcessor& p) { setP (p, P_osc1Wave, 0.0f); setP (p, P_spTilt, 1.0f); }, b);
+                const double ct = centroid (spectrum (b));
+                spec ([] (MegaSynthProcessor& p) { setP (p, P_osc1Wave, 0.0f); setP (p, P_spFormant, 12.0f); }, b);
+                const double cf = centroid (spectrum (b));
+                const double fp = peakHz (spectrum (b));
+                std::cout << "  centroid: saw " << cs << ", tilt +1 " << ct << ", formant +12 " << cf << " (pitch " << fp << " Hz)" << std::endl;
+                CHECK (ct > 1.3 * cs && cf > 1.2 * cs, "tilt / formant");
+                // freeze holds the sound after the note; with blur and maximum feedback it stays bounded
+                {
+                    auto p = clean(); setP (*p, P_ampR, 0.05f); setP (*p, P_spOn, 1.0f); setP (*p, P_spSize, 3.0f);
+                    juce::AudioBuffer<float> x;
+                    render (*p, 0.6, { { 0.0, juce::MidiMessage::noteOn (1, 57, 1.0f) } }, &x);
+                    setP (*p, P_spFreeze, 1.0f);
+                    render (*p, 2.0, { { 0.0, juce::MidiMessage::noteOff (1, 57) } }, &x);
+                    double e = 0; for (int i = (int) (1.4 * sr); i < (int) (1.9 * sr); ++i) e += x.getSample (0, i) * x.getSample (0, i);
+                    const double frozen = std::sqrt (e / (0.5 * sr));
+                    std::cout << "  frozen spectrum 1.5 s after note-off: rms " << frozen << ", pitch " << peakHz (spectrum (x)) << " Hz" << std::endl;
+                    CHECK (frozen > 0.01 && std::abs (peakHz (spectrum (x)) - 220.0) < 4.0, "spectral freeze");
+                    setP (*p, P_spFeedback, 0.9f); setP (*p, P_spBlur, 1.0f); setP (*p, P_spScramble, 1.0f); setP (*p, P_spMorph, 1.0f); setP (*p, P_spTilt, 1.0f);
+                    auto st = render (*p, 3.0, chord (0.0, 2.0, { 45, 57, 64, 72 }), &x);
+                    setP (*p, P_spFreeze, 0.0f);
+                    auto st2 = render (*p, 3.0, chord (0.0, 2.0, { 40, 52, 76 }), &x);
+                    std::cout << "  freeze + feedback + everything: peak " << st.peak << " / " << st2.peak << std::endl;
+                    CHECK (st.finite && st2.finite && st.peak < 6.0f && st2.peak < 6.0f, "spectral feedback bounded");
+                }
+                // CPU of the largest frame
+                {
+                    auto p = make(); setP (*p, P_spOn, 1.0f); setP (*p, P_spSize, 3.0f); setP (*p, P_spShift, 50.0f); setP (*p, P_spFormant, 3.0f);
+                    double cpu = 0; render (*p, 5.0, chord (0.0, 4.0, { 48, 55, 60 }), nullptr, &cpu);
+                    std::cout << "  spectral (4096, shift + formant) with 3 notes: " << cpu / 5.0 * 100.0 << "% of one core" << std::endl;
                 }
             }
 

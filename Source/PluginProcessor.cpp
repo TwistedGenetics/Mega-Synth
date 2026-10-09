@@ -13,7 +13,7 @@ namespace
     bool isNewPluginParam (const juce::String& id)
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
-            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr");
+            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -143,6 +143,7 @@ void MegaSynthProcessor::prepareToPlay (double sr, int block)
     sampleRate = sr;
     maxBlock = std::max (32, block);
     engine.prepare (sr, maxBlock);
+    updateLatency();
     snap.sampleRate = sr;
     fillSnapshot (0);
     const double tempo = snap.fxTempo;
@@ -399,8 +400,16 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 }
 
 //==============================================================================
+void MegaSynthProcessor::updateLatency()
+{
+    // the spectral stage delays the output by one FFT frame while it's on; tell the host
+    const int want = raw[P_spOn]->load() > 0.5f ? spectralSize ((int) raw[P_spSize]->load()) : 0;
+    if (want != getLatencySamples()) setLatencySamples (want);
+}
+
 void MegaSynthProcessor::timerCallback()
 {
+    updateLatency();
     // history: record a snapshot shortly after an edit finishes (knob released, step changed)
     syncSceneEdits();
     if (! restoring)

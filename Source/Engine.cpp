@@ -1047,7 +1047,8 @@ void FxBus::updateImpulse (double seconds)
     irSeconds = seconds;
 }
 
-void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModState& mod)
+void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModState& mod,
+                     const float* const* delayIn, float* const* delayOut)
 {
     const double tempo = s.fxTempo;
     const float cs = smoothCoef (1.0 / sr, 0.02);
@@ -1137,7 +1138,8 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
 
             // tape / BBD delay: tone filters sit inside the feedback loop
             const float y = dl[c].read (dSamp);
-            float v = tapeLP.process (x * dSendS + y * dFbS, c);
+            if (delayOut != nullptr) delayOut[c][i] = y;
+            float v = tapeLP.process (delayIn != nullptr ? x * dSendS + y * dFbS + delayIn[c][i] : x * dSendS + y * dFbS, c);
             v = tapeHP.process (v, c);
             dl[c].push (v);
             float out = x + y * dWetS;
@@ -1179,6 +1181,8 @@ void Engine::prepare (double sampleRate, int maxBlock)
     fxBus.prepare (sr, maxBlock);
     gran.prepare (sr);
     spec.prepare (sr);
+    fbm.prepare (sr, maxBlock);
+    for (int c = 0; c < 2; ++c) { fbIn[c].assign ((size_t) maxBlock + 16, 0.0f); fbOut[c].assign ((size_t) maxBlock + 16, 0.0f); }
     globalMod.clear();
     normTable();   // build the conversion tables off the audio thread
     globalRouteState.reset();
@@ -1191,6 +1195,7 @@ void Engine::reset()
     fxBus.reset();
     gran.reset();
     spec.reset();
+    fbm.clear();
     globalMod.clear();
 }
 
@@ -1310,10 +1315,30 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, cons
         sp.on = fs->f (P_spOn) > 0.5f; sp.freeze = fs->f (P_spFreeze) > 0.5f; sp.sizeIndex = clampv (fs->i (P_spSize), 0, 3);
         sp.mix = fs->f (P_spMix); sp.blur = fs->f (P_spBlur); sp.shiftHz = fs->f (P_spShift); sp.scramble = fs->f (P_spScramble);
         sp.tilt = fs->f (P_spTilt); sp.morph = fs->f (P_spMorph); sp.formant = fs->f (P_spFormant); sp.feedback = fs->f (P_spFeedback);
-        if (fs->i (P_busOrder) == 1) { spec.process (L, R, numSamples, sp); gran.process (L, R, numSamples, gp); }
-        else                         { gran.process (L, R, numSamples, gp); spec.process (L, R, numSamples, sp); }
+        // feedback matrix: each stage's input gets the paths aimed at it, its output is recorded
+        FeedbackParams fp;
+        for (int s = 0; s < FT_COUNT; ++s)
+            for (int d = 0; d < FD_COUNT; ++d) fp.amt[s][d] = fs->f (P_fbGrGr + s * FD_COUNT + d);
+        fp.timeMs = fs->f (P_fbTime); fp.toneHz = fs->f (P_fbTone); fp.safety = fs->f (P_fbSafety);
+        const bool fbOn = fbm.begin (fp, numSamples);
+        auto runGran = [&] { fbm.inject (FD_Granular, L, R); gran.process (L, R, numSamples, gp); fbm.write (FT_Granular, L, R); };
+        auto runSpec = [&] { fbm.inject (FD_Spectral, L, R); spec.process (L, R, numSamples, sp); fbm.write (FT_Spectral, L, R); };
+        if (fs->i (P_busOrder) == 1) { runSpec(); runGran(); }
+        else                         { runGran(); runSpec(); }
+
+        if (fbOn)
+        {
+            float* din[2] = { fbIn[0].data(), fbIn[1].data() };
+            float* dout[2] = { fbOut[0].data(), fbOut[1].data() };
+            std::fill (din[0], din[0] + numSamples, 0.0f); std::fill (din[1], din[1] + numSamples, 0.0f);
+            fbm.inject (FD_Delay, din[0], din[1]);
+            fxBus.process (L, R, numSamples, *fs, globalMod, din, dout);
+            fbm.write (FT_Delay, dout[0], dout[1]);
+            fbm.write (FT_Output, L, R);
+            fbm.end (L, R);
+        }
+        else fxBus.process (L, R, numSamples, *fs, globalMod);
     }
-    fxBus.process (L, R, numSamples, *fs, globalMod);
 
     for (int i = 0; i < P_COUNT; ++i) liveOffset[(size_t) i].store (liveScratch[i], std::memory_order_relaxed);
     for (int i = 0; i < MS_COUNT; ++i) liveSrc[(size_t) i].store (src[i], std::memory_order_relaxed);

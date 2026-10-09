@@ -642,6 +642,44 @@ void RouteRow::resized()
 }
 
 //==============================================================================
+FbGrid::FbGrid (MegaSynthProcessor& p)
+{
+    static const char* src[] = { "Granular", "Spectral", "Delay", "Output" };
+    static const char* dst[] = { "Granular", "Spectral", "Delay" };
+    for (int s = 0; s < 4; ++s)
+        for (int d = 0; d < 3; ++d)
+        {
+            auto& sl = amt[s][d];
+            sl.setSliderStyle (juce::Slider::LinearBar);
+            sl.setColour (juce::Slider::trackColourId, col::complex.withAlpha (0.6f));
+            sl.setColour (juce::Slider::backgroundColourId, col::panel3);
+            sl.setColour (juce::Slider::textBoxTextColourId, col::text);
+            sl.setTooltip (juce::String ("Feed ") + src[s] + " back into " + dst[d] + " (Feedback Time later)");
+            att[s][d] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, kParamIds[P_fbGrGr + s * 3 + d], sl);
+            sl.setDoubleClickReturnValue (true, 0.0);
+            addAndMakeVisible (sl);
+        }
+}
+
+void FbGrid::resized()
+{
+    const int x0 = 84, cw = (getWidth() - x0) / 3;
+    for (int s = 0; s < 4; ++s)
+        for (int d = 0; d < 3; ++d) amt[s][d].setBounds (x0 + d * cw + 2, 20 + s * 28, cw - 6, 24);
+}
+
+void FbGrid::paint (juce::Graphics& g)
+{
+    static const char* src[] = { "Granular", "Spectral", "Delay", "Output" };
+    static const char* dst[] = { "> Granular", "> Spectral", "> Delay" };
+    const int x0 = 84, cw = (getWidth() - x0) / 3;
+    g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+    g.setColour (col::muted);
+    for (int d = 0; d < 3; ++d) g.drawText (dst[d], x0 + d * cw, 0, cw, 18, juce::Justification::centred);
+    for (int s = 0; s < 4; ++s) g.drawText (src[s], 0, 20 + s * 28, x0 - 6, 24, juce::Justification::centredRight);
+}
+
+//==============================================================================
 XYPad::XYPad (MegaSynthProcessor& p) : proc (p)
 {
     setTooltip ("Drag to morph between scenes A-D (Morph must be on). Scene X and Y can also be automated or modulated in the Mod Matrix.");
@@ -1228,6 +1266,11 @@ void MegaSynthEditor::buildPages()
         spFreezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_spFreeze], *spFz);
         auto* ordS = sec (page, "Order", col::muted);
         ordS->choice (P_busOrder, "Bus order", 180);
+        auto* fbS = sec (page, "Feedback Matrix  (from > to; every path is DC-blocked, filtered, soft-clipped and limited)", col::complex);
+        auto* grid = page->own (new FbGrid (proc));
+        Knob* fbK[3] = { page->own (new Knob (proc, P_fbTime, "Time", col::complex)),
+                         page->own (new Knob (proc, P_fbTone, "Tone", col::complex)),
+                         page->own (new Knob (proc, P_fbSafety, "Safety", col::complex)) };
         auto* help = page->own (new juce::Label ({}, "Granular records the last 4 seconds of the synth and plays it back as up to 64 overlapping grains. "
             "Position = how far back the grains read (Jitter scatters it), Size and Density set the grain length and how many start each second, "
             "Pitch / Pitch Jitter transpose them, Reverse is the chance a grain plays backwards, Spread pans them. Feedback writes the grains back "
@@ -1237,17 +1280,22 @@ void MegaSynthEditor::buildPages()
             "Spectral: Blur smears the sound over time, Shift moves every partial by the same number of Hz, Scramble shuffles nearby "
             "frequencies, Tilt brightens or darkens (6 dB per octave), Formant moves the tone colour without changing the pitch, Freeze holds "
             "the current spectrum, Morph blends towards the frozen one, Feedback feeds the output spectrum back in. Bigger FFT sizes sound "
-            "smoother on sustained sounds; smaller ones keep attacks sharper and add less latency."));
+            "smoother on sustained sounds; smaller ones keep attacks sharper and add less latency. Feedback Matrix: each path arrives "
+            "Time later; Safety lowers how hard loops can drive, and while any path is up the output never passes 0 dBFS."));
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.5f)));
         help->setJustificationType (juce::Justification::topLeft);
-        page->onResize = [page, grS, spS, ordS, help]
+        page->onResize = [page, grS, spS, ordS, fbS, grid, fbK, help]
         {
             const int g = 10, W = page->getWidth();
             grS->setBounds (g, g, W - 2 * g, 136);
             spS->setBounds (g, 156, W - 2 * g, 136);
             ordS->setBounds (g, 302, 220, 90);
-            help->setBounds (g + 240, 306, W - 2 * g - 246, 200);
+            fbS->setBounds (g + 230, 302, W - 2 * g - 230, 172);
+            grid->setBounds (g + 244, 334, 560, 128);
+            grid->toFront (false);
+            for (int k = 0; k < 3; ++k) { fbK[k]->setBounds (g + 830 + k * 80, 350, 72, 84); fbK[k]->toFront (false); }
+            help->setBounds (g + 6, 484, W - 2 * g - 12, 110);
         };
     }
 

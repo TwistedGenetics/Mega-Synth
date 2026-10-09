@@ -50,6 +50,7 @@ These run once on all notes together, before the effects (per-note versions woul
 - **Granular**: records the last 4 seconds of the synth and plays it back as up to 64 grains: Size, Density, Position (how far back), Jitter, Pitch, Pitch Jitter, Reverse chance, stereo Spread and Feedback (grains written back into the recording). **Freeze** holds the recording, so the cloud keeps going after the notes end. Mix 0 = bypassed.
 - **Spectral**: an FFT (phase vocoder) stage with Blur, Shift (every partial moved by the same number of Hz), Scramble, Tilt, Formant (tone colour without pitch change), Freeze, Morph (towards the frozen spectrum) and Feedback, at FFT sizes 512-4096. While it's switched **On** the synth's output is one FFT frame late (11-85 ms at 48 kHz); the plugin reports this to the DAW, which compensates. Off = no latency and no processing.
 - **Bus order**: Granular before Spectral, or the other way round.
+- **Feedback Matrix**: feeds the outputs of Granular, Spectral, the tape delay and the final output back into the inputs of Granular, Spectral and the delay (12 paths, each with its own amount). Every path arrives *Time* later (10 ms to 1 s; never less than one audio block, so there are no instant loops), through a DC blocker, a *Tone* low-pass, a soft clip at the safety ceiling and its own limiter. *Safety* lowers how hard loops can drive. While any path is up, the final output passes a soft ceiling that never exceeds 0 dBFS; with every path at 0 it is completely out of the signal.
 
 ## Modulation matrix (Mod Matrix tab)
 

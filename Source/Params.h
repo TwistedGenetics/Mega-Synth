@@ -467,7 +467,22 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(spMorph,     "Spectral Morph", 0, 1, 0, 0.01, 0) \
     F(spFormant,   "Spectral Formant", -12, 12, 0, 0.01, 0) \
     F(spFeedback,  "Spectral Feedback", 0, 0.9, 0, 0.01, 0) \
-    C(busOrder,    "Bus Order", kListBusOrder, 0)
+    C(busOrder,    "Bus Order", kListBusOrder, 0) \
+    F(fbGrGr, "Feedback Granular > Granular", 0, 1, 0, 0.01, 0) \
+    F(fbGrSp, "Feedback Granular > Spectral", 0, 1, 0, 0.01, 0) \
+    F(fbGrDl, "Feedback Granular > Delay", 0, 1, 0, 0.01, 0) \
+    F(fbSpGr, "Feedback Spectral > Granular", 0, 1, 0, 0.01, 0) \
+    F(fbSpSp, "Feedback Spectral > Spectral", 0, 1, 0, 0.01, 0) \
+    F(fbSpDl, "Feedback Spectral > Delay", 0, 1, 0, 0.01, 0) \
+    F(fbDlGr, "Feedback Delay > Granular", 0, 1, 0, 0.01, 0) \
+    F(fbDlSp, "Feedback Delay > Spectral", 0, 1, 0, 0.01, 0) \
+    F(fbDlDl, "Feedback Delay > Delay", 0, 1, 0, 0.01, 0) \
+    F(fbOutGr, "Feedback Output > Granular", 0, 1, 0, 0.01, 0) \
+    F(fbOutSp, "Feedback Output > Spectral", 0, 1, 0, 0.01, 0) \
+    F(fbOutDl, "Feedback Output > Delay", 0, 1, 0, 0.01, 0) \
+    F(fbTime,      "Feedback Time", 10, 1000, 120, 0.1, 150) \
+    F(fbTone,      "Feedback Tone", 200, 20000, 6000, 1, 2000) \
+    F(fbSafety,    "Feedback Safety", 0, 1, 0.5, 0.01, 0)
 
 enum ParamIndex
 {

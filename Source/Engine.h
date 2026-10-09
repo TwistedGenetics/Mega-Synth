@@ -11,6 +11,7 @@
 #include "Mut/Resonator.h"
 #include "Mut/Granular.h"
 #include "Mut/Spectral.h"
+#include "Mut/FeedbackMatrix.h"
 
 namespace tg
 {
@@ -322,7 +323,9 @@ public:
     void prepare (double sr, int maxBlock);
     void reset();
     // In-place: L/R hold the summed voices on input and the final mix on output.
-    void process (float* L, float* R, int n, const Snapshot&, const ModState& mod);
+    // delayIn: extra signal fed into the delay line (feedback matrix); delayOut: the delay line's output
+    void process (float* L, float* R, int n, const Snapshot&, const ModState& mod,
+                  const float* const* delayIn = nullptr, float* const* delayOut = nullptr);
 
     // Called from the message thread: rebuilds the reverb impulse when the size changes.
     void updateImpulse (double seconds);
@@ -390,6 +393,8 @@ private:
     FxBus fxBus;
     Granular gran;           // bus stages: summed voices -> granular / spectral -> effects
     Spectral spec;
+    FeedbackMatrix fbm;
+    std::vector<float> fbIn[2], fbOut[2];
     ModState globalMod;     // modulation of global effects, taken from the newest voice
     uint64_t orderCounter = 0;
     double lastFreq = -1.0;

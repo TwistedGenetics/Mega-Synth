@@ -164,6 +164,18 @@ public:
     void flash() { highlight = true; repaint(); }
 };
 
+// Feedback matrix grid: rows = where the signal comes from, columns = where it goes
+class FbGrid : public juce::Component
+{
+public:
+    explicit FbGrid (MegaSynthProcessor&);
+    void resized() override;
+    void paint (juce::Graphics&) override;
+private:
+    juce::Slider amt[4][3];
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att[4][3];
+};
+
 // XY pad for the scene morph (A top-left, B top-right, C bottom-left, D bottom-right)
 class XYPad : public juce::Component, public juce::SettableTooltipClient
 {

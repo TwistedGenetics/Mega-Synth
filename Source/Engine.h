@@ -8,6 +8,7 @@
 #include "Mut/WaveMutator.h"
 #include "Mut/AudioRate.h"
 #include "Mut/DnaSplice.h"
+#include "Mut/Resonator.h"
 
 namespace tg
 {
@@ -304,6 +305,8 @@ private:
     int dnaFade = 0;             // samples left in a mode / source crossfade
     bool dnaStarted = false;
     WaveMutator waveMut;
+    Resonator reso;
+    bool resoRinging = false;
     AudioRateFx arFx;
     double arPh = 0.0;           // internal sine modulator phase            // the parameters with this voice's modulation applied
     float nextRand() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng & 0xFFFFFF) / 8388608.0f - 1.0f; }

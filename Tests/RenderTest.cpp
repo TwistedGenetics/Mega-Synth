@@ -593,7 +593,8 @@ int main()
 
             // mix at zero = untouched, whatever the other settings
             run ([] (MegaSynthProcessor& p) { setP (p, P_wmFold, 1.0f); setP (p, P_wmBits, 3.0f); setP (p, P_arShift, 300.0f); setP (p, P_arRing, 0.0f);
-                                              setP (p, P_dnaMode, 3.0f); setP (p, P_dnaAmount, 1.0f); setP (p, P_dnaA, 6.0f); }, b);
+                                              setP (p, P_dnaMode, 3.0f); setP (p, P_dnaAmount, 1.0f); setP (p, P_dnaA, 6.0f);
+                                              setP (p, P_resTuning, 5.0f); setP (p, P_resFeedback, 1.0f); }, b);
             float md = 0; for (int i = 0; i < b.getNumSamples(); ++i) md = std::max (md, std::abs (b.getSample (0, i) - base.getSample (0, i)));
             CHECK (md == 0.0f, "modules at zero mix must be bit-exact");
 
@@ -713,10 +714,83 @@ int main()
                 CHECK (worstJump < 1.5 * normalJump, "mode switch should crossfade");
             }
 
+            // ---- Stage 7: Resonator
+            {
+                std::cout << "Resonator" << std::endl;
+                // a short noise burst (Osc 1 ring-modulated by noise) strikes the bank
+                auto strike = [&] (MegaSynthProcessor& p, int tuning, float inharm, float pitch)
+                {
+                    setP (p, P_arRing, 1.0f); setP (p, P_arMod, 5.0f);
+                    setP (p, P_ampA, 0.001f); setP (p, P_ampD, 0.02f); setP (p, P_ampS, 0.0f); setP (p, P_ampR, 0.02f);
+                    setP (p, P_resMix, 1.0f); setP (p, P_resTuning, (float) tuning); setP (p, P_resModes, 16.0f);
+                    setP (p, P_resDecay, 3.0f); setP (p, P_resDamping, 0.0f); setP (p, P_resInharm, inharm); setP (p, P_resPitch, pitch);
+                    setP (p, P_resSpread, 0.0f);
+                };
+                auto peakIn = [&] (const Spec& sp, double lo, double hi)
+                {
+                    size_t best = (size_t) (lo / sp.binHz); double sum = 0; int cnt = 0;
+                    for (size_t i = (size_t) (lo / sp.binHz); i <= (size_t) (hi / sp.binHz) && i < sp.mag.size(); ++i) { sum += sp.mag[i]; ++cnt; if (sp.mag[i] > sp.mag[best]) best = i; }
+                    return std::make_pair (best * sp.binHz, sp.mag[best] / std::max (1e-9, sum / cnt));
+                };
+                const char* names[] = { "harmonic", "odd", "bar", "membrane", "plate", "bell" };
+                for (int tuning = 0; tuning < RT_COUNT; ++tuning)
+                {
+                    auto p = clean(); strike (*p, tuning, 0.0f, 0.0f);
+                    juce::AudioBuffer<float> x;
+                    render (*p, 1.0, note (57, 1.0f), &x);
+                    const auto sp = spectrum (x);
+                    juce::String line = "  " + juce::String (names[tuning]) + ":";
+                    for (int k = 0; k < 5; ++k)
+                    {
+                        const double f = 220.0 * resonatorRatio (tuning, k, 0.0f);
+                        // neighbouring modes can sit close together (membrane, bell): search a narrow window
+                        const double win = std::max (0.015 * f, 8.0 * sp.binHz);
+                        const auto pk = peakIn (sp, f - win, f + win);
+                        line << " " << juce::String (pk.first, 1) << "/" << juce::String (f, 1) << " (x" << juce::String (pk.second, 0) << ")";
+                        CHECK (std::abs (pk.first - f) < 0.004 * f + 2.0 * sp.binHz && pk.second > 2.0,
+                               juce::String ("resonator mode ") + names[tuning] + " " + juce::String (k + 1));
+                    }
+                    std::cout << line << " Hz" << std::endl;
+                }
+                // stiffness stretches the upper modes; Pitch transposes the bank
+                {
+                    auto p = clean(); strike (*p, RT_Harmonic, 1.0f, 0.0f);
+                    juce::AudioBuffer<float> x; render (*p, 1.0, note (57, 1.0f), &x);
+                    const double f8 = 220.0 * 8.0 * std::sqrt (1.0 + 0.002 * 64.0);
+                    const auto pk = peakIn (spectrum (x), f8 * 0.98, f8 * 1.02);
+                    std::cout << "  inharmonic 8th mode " << pk.first << " Hz (expected " << f8 << ", harmonic would be 1760)" << std::endl;
+                    CHECK (std::abs (pk.first - f8) < 4.0, "inharmonicity");
+                    auto q = clean(); strike (*q, RT_Harmonic, 0.0f, 12.0f); setP (*q, P_resModes, 1.0f);
+                    render (*q, 1.0, note (57, 1.0f), &x);
+                    CHECK (std::abs (peakHz (spectrum (x)) - 440.0) < 3.0, "resonator pitch offset");
+                }
+                // it rings after the note, then the voice frees itself
+                {
+                    auto p = clean(); strike (*p, RT_Bar, 0.0f, 0.0f); setP (*p, P_resDecay, 1.0f);
+                    juce::AudioBuffer<float> x;
+                    render (*p, 1.0, note (57, 1.0f), &x);
+                    const float ring = x.getMagnitude (0, (int) (0.4 * sr), (int) (0.1 * sr));
+                    const float strikePk = x.getMagnitude (0, 0, (int) (0.05 * sr));
+                    render (*p, 4.0, {}, &x);
+                    std::cout << "  strike peak " << strikePk << ", ringing at 0.4 s: " << ring << ", voices after 5 s: " << p->getEngine().activeVoiceCount() << std::endl;
+                    CHECK (strikePk > 0.05f && ring > 0.03f * strikePk && p->getEngine().activeVoiceCount() == 0, "resonator tail and voice release");
+                }
+                // maximum feedback and decay stays bounded and still ends
+                {
+                    auto p = clean(); strike (*p, RT_Plate, 1.0f, 0.0f); setP (*p, P_resFeedback, 1.0f); setP (*p, P_resDecay, 10.0f);
+                    setP (*p, P_ampS, 1.0f);
+                    juce::AudioBuffer<float> x;
+                    auto st = render (*p, 2.0, chord (0.0, 1.0, { 45, 52, 57, 64 }), &x);
+                    CHECK (st.finite && st.peak < 4.0f, "resonator feedback bounded");
+                    render (*p, 33.0, {});
+                    CHECK (p->getEngine().activeVoiceCount() == 0, "self-sustaining resonator still ends");
+                }
+            }
+
             // everything at maximum stays finite and bounded
             {
                 auto p = make();
-                for (int i : { P_wmMix, P_wmDrive, P_wmFold, P_wmShape, P_wmBend, P_wmAsym, P_wmRect, P_arFm, P_arAm, P_arRing, P_arShiftMix, P_dnaMix, P_dnaAmount }) setP (*p, i, 1.0f);
+                for (int i : { P_wmMix, P_wmDrive, P_wmFold, P_wmShape, P_wmBend, P_wmAsym, P_wmRect, P_arFm, P_arAm, P_arRing, P_arShiftMix, P_dnaMix, P_dnaAmount, P_resMix, P_resFeedback, P_resInharm }) setP (*p, i, 1.0f);
                 setP (*p, P_dnaMode, 3.0f);
                 setP (*p, P_wmBits, 1.0f); setP (*p, P_wmDown, 32.0f); setP (*p, P_arShift, 1000.0f); setP (*p, P_arMod, 5.0f);
                 auto st = render (*p, 2.0, chord (0.0, 1.5, { 36, 48, 60, 72 }));

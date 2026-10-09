@@ -41,6 +41,8 @@ Three per-note modules sit between the oscillator mix and the filter, in this or
 - **Wave Mutation**: Drive, Bend, Asymmetry, Fold (wavefolding), Shape (saturation) and Rectify, run at twice the sample rate to keep aliasing down, then Bit Depth and Rate Reduce for deliberate digital grit.
 - **Audio-Rate Transform**: a modulator (an internal sine at a ratio of the note plus an offset in Hz, one of the note's own oscillators, or noise) drives through-zero **FM** of the chosen oscillators, **AM**, **Ring** modulation and a **Frequency Shifter** (moves every partial by the same number of Hz, up or down).
 
+- **Resonator** (after the filter and amp envelope): up to 16 tuned modes following each note, with six tunings (Harmonic, Odd, Bar, Membrane, Plate, Bell), Pitch offset, Decay, Damping (higher modes die faster), Stiffness (stretches the upper modes like a stiff string), stereo Spread and Feedback. Short notes strike it and it rings on after the note ends; sustained sounds are levelled so they don't overload it. With Feedback it can sustain on its own, so after a note ends it gets three times its decay time, then fades out.
+
 ## Modulation matrix (Mod Matrix tab)
 
 Any source can drive any sound parameter: 32 routes, each with its own depth.

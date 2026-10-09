@@ -55,6 +55,7 @@ namespace
         if (id.startsWith ("macro")) return "Macros";
         if (id.startsWith ("wm")) return "Wave Mutation";
         if (id.startsWith ("dna")) return "DNA Splice";
+        if (id.startsWith ("res")) return "Resonator";
         if (id.startsWith ("ar")) return "Audio-Rate Transform";
         if (id.startsWith ("scene")) return "Scenes";
         if (id.startsWith ("cc")) return "MIDI";
@@ -141,7 +142,7 @@ namespace
                 { m.category = Category::Performance; m.group = MutGroup::None; }
             else if (id.startsWith ("mod") && id.endsWith ("Amt"))
                 { m.category = Category::Mod; m.group = MutGroup::Modulation; }
-            else if (startsAny (id, { "wm", "ar", "dna" }) && ! id.startsWith ("arp"))
+            else if (startsAny (id, { "wm", "ar", "dna", "res" }) && ! id.startsWith ("arp"))
                 { m.category = Category::Mutation; m.group = MutGroup::Oscillators; }
             else if (id.startsWith ("macro") || isAny (id, { "sceneX", "sceneY", "sceneMorph" }))
                 { m.category = Category::Mod; m.group = MutGroup::None; }

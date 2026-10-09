@@ -22,11 +22,14 @@ inline juce::String formatParam (int idx, float v)
         || id == "seqAccentAmt" || id == "velSens")
         return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id.startsWith ("mod") && id.endsWith ("Amt")) { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
+    if (id == "resModes") return juce::String (juce::roundToInt (v)) + " modes";
+    if (id == "resPitch") return (v > 0 ? "+" : "") + fixed (v, 2) + " st";
+    if (id == "resDecay") return fixed (v, v < 1 ? 2 : 1) + " s";
     if (id == "wmBits") return v >= 15.95f ? juce::String ("off") : fixed (v, 1) + " bit";
     if (id == "wmDown") return v <= 1.01f ? juce::String ("off") : "/" + fixed (v, 1);
     if (id == "arRatio") return "x" + fixed (v, 3);
     if (id == "arOffset" || id == "arShift") return (v > 0 ? "+" : "") + fixed (v, 1) + " Hz";
-    if (id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna")) return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    if (id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res")) return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id.startsWith ("macro") || id == "sceneX" || id == "sceneY") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id == "ccANum" || id == "ccBNum") return "CC " + juce::String (juce::roundToInt (v));
     if (id == "keyboardOctave" || id.endsWith ("Oct")) return juce::String (juce::roundToInt (v)) + " oct";

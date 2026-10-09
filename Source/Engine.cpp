@@ -186,6 +186,7 @@ void Voice::prepare (double sampleRate)
     sr = sampleRate;
     waveMut.prepare (sampleRate);
     dna.prepare (sampleRate);
+    reso.prepare (sampleRate);
     active = false;
 }
 
@@ -239,6 +240,8 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     waveMut.reset();
     dna.reset();
     dnaStarted = false; dnaFade = 0;
+    reso.reset();
+    resoRinging = false;
     arFx.reset();
     arPh = 0.0;
     std::fill (std::begin (srcV), std::end (srcV), 0.0f);
@@ -731,6 +734,18 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         const double rotCos = std::cos (rotInc), rotSin = std::sin (rotInc);
         float xb[2][kCtrl], mb[kCtrl], cutB[kCtrl], resB[kCtrl];
 
+        // ---- Resonator (after the filter and amp envelope; it rings on after the note)
+        ResonatorParams rsp;
+        rsp.mix = ps.f (P_resMix); rsp.tuning = clampv (ps.i (P_resTuning), 0, RT_COUNT - 1); rsp.modes = clampv (ps.i (P_resModes), 1, 16);
+        rsp.pitch = ps.f (P_resPitch); rsp.decay = ps.f (P_resDecay); rsp.damping = ps.f (P_resDamping);
+        rsp.inharm = ps.f (P_resInharm); rsp.spread = ps.f (P_resSpread); rsp.feedback = ps.f (P_resFeedback);
+        const bool resOn = rsp.active();
+        if (resOn) reso.configure (rsp, baseFreq * pow2 (ps.bendSemis / 12.0));
+        else if (resoRinging) { reso.reset(); resoRinging = false; }
+        float resPeak = 0.0f;
+        // with feedback the bank can sustain itself: after the note ends it gets 3x its decay, then fades out
+        const double resLimit = ampEnv.releaseTime >= 0.0 ? ampEnv.releaseTime + ampEnv.r + 3.0 * rsp.decay + 0.5 : 1.0e9;
+
         auto sampleLoop = [&] (auto arTag)
         {
         using ARType = decltype (arTag);   // a type, not a constexpr local, so nested lambdas see it on every compiler
@@ -946,8 +961,18 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             const float yR = stereo ? filter.process (xR, 1, drive) : yL;
 
             const float g = srcMute.v * (float) ampEnv.eval (t) * vGain.v;
-            L[done + i] += yL * g;
-            R[done + i] += yR * g;
+            float oL = yL * g, oR = yR * g;
+            if (resOn)
+            {
+                float rl, rr;
+                reso.process (0.5f * (oL + oR), rl, rr);
+                if (t > resLimit - 0.3) { const float tg2 = (float) clampv ((resLimit - t) / 0.3, 0.0, 1.0); rl *= tg2; rr *= tg2; }
+                oL += (rl - oL) * rsp.mix;
+                oR += (rr - oR) * rsp.mix;
+                resPeak = std::max (resPeak, std::max (std::abs (rl), std::abs (rr)));
+            }
+            L[done + i] += oL;
+            R[done + i] += oR;
             t += isr;
 
             if (follow)
@@ -962,7 +987,8 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         done += n;
         advanceLfos (ps, n);
 
-        if (ampEnv.finished (t)) active = false;
+        resoRinging = resOn && resPeak > 1.0e-5f;
+        if (ampEnv.finished (t) && (! resoRinging || t > resLimit)) active = false;
     }
 }
 

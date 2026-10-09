@@ -1165,26 +1165,25 @@ void MegaSynthEditor::buildPages()
         arS->knob (P_arRing, "Ring");
         arS->knob (P_arShift, "Shift");
         arS->knob (P_arShiftMix, "Shift Mix");
-        auto* help = page->own (new juce::Label ({}, "Wave Mutation: Drive pushes the mix into the shaper; Bend curves it, Asymmetry adds even harmonics, "
-            "Fold wraps peaks back over (wavefolding), Shape saturates, Rectify flips the negative half up. These run at twice the sample rate to "
-            "keep aliasing down. Bit Depth and Rate Reduce come after, for deliberate digital grit. Mix 0 = bypassed.\n\n"
-            "Order: DNA Splice -> Wave Mutation -> Audio-Rate Transform -> filter.\n\n"
-        "Audio-Rate Transform: the Modulator is an internal sine at Ratio x the note (plus Offset in Hz, for clangorous inharmonic tones), "
-            "one of the note's own oscillators, or noise. FM bends the chosen oscillators' pitch with it every sample (through-zero), "
-            "AM and Ring multiply the sound by it, and Shift moves every frequency up or down by a fixed number of Hz (not a pitch shift - "
-            "harmonics stop being harmonic). Every knob here can be modulated from the Mod Matrix."));
-        help->setColour (juce::Label::textColourId, col::muted);
-        help->setFont (juce::Font (juce::FontOptions (12.5f)));
-        help->setJustificationType (juce::Justification::topLeft);
-        page->onResize = [this, page, dnS, wmS, arS, help]
+        auto* rsS = sec (page, "Resonator  (16 tuned modes after the filter and amp; rings on after the note)", col::filter);
+        rsS->choice (P_resTuning, "Tuning", 150);
+        rsS->knob (P_resMix, "Mix");
+        rsS->knob (P_resModes, "Modes");
+        rsS->knob (P_resPitch, "Pitch");
+        rsS->knob (P_resDecay, "Decay");
+        rsS->knob (P_resDamping, "Damping");
+        rsS->knob (P_resInharm, "Stiffness");
+        rsS->knob (P_resSpread, "Spread");
+        rsS->knob (P_resFeedback, "Feedback");
+        page->onResize = [this, page, dnS, wmS, arS, rsS]
         {
             const int g = 10, W = page->getWidth();
-            dnS->setBounds (g, g, W - 2 * g, 130);
-            dnaInfo->setBounds (g + 700, g + 34, W - 2 * g - 710, 90);
+            dnS->setBounds (g, g, W - 2 * g, 136);
+            dnaInfo->setBounds (g + 700, g + 34, W - 2 * g - 710, 96);
             dnaInfo->toFront (false);
-            wmS->setBounds (g, 150, W - 2 * g, 130);
-            arS->setBounds (g, 290, W - 2 * g, 130);
-            help->setBounds (g + 6, 432, W - 2 * g - 12, 160);
+            wmS->setBounds (g, 156, W - 2 * g, 136);
+            arS->setBounds (g, 302, W - 2 * g, 136);
+            rsS->setBounds (g, 448, W - 2 * g, 136);
         };
     }
 

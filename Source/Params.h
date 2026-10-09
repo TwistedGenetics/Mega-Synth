@@ -57,6 +57,8 @@ inline const char* const kDnaModeKeys[]   = { "waveform","crossover","harmonic",
 inline const char* const kDnaModeLabels[] = { "Waveform Splice","Crossover","Harmonic","Spectral","Transient / Body","Amplitude DNA","Morph / Gene Shuffle" };
 inline const char* const kDnaSrcKeys[]   = { "osc1","osc2","osc3","sub","wt1","wt2","complex","supersaw" };
 inline const char* const kDnaSrcLabels[] = { "Osc 1","Osc 2","Osc 3","Sub","WT 1","WT 2","Complex","SuperSaw" };
+inline const char* const kResTuneKeys[]   = { "harmonic","odd","bar","membrane","plate","bell" };
+inline const char* const kResTuneLabels[] = { "Harmonic (string)","Odd (tube)","Bar (marimba)","Membrane (drum)","Plate","Bell" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -169,6 +171,7 @@ inline const ChoiceList kListEnvSrc      = TG_LIST(kEnvSrc);
 inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT };
 inline const ChoiceList kListDnaMode     { kDnaModeKeys, kDnaModeLabels, 7 };
 inline const ChoiceList kListDnaSrc      { kDnaSrcKeys, kDnaSrcLabels, 8 };
+inline const ChoiceList kListResTune     { kResTuneKeys, kResTuneLabels, 6 };
 inline const ChoiceList kListArMod       { kArModKeys, kArModLabels, 6 };
 inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
 #undef TG_LIST
@@ -426,7 +429,16 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(dnaA,      "DNA Source A", kListDnaSrc, 0) \
     C(dnaB,      "DNA Source B", kListDnaSrc, 1) \
     F(dnaAmount, "DNA Splice Amount", 0, 1, 0.5, 0.001, 0) \
-    F(dnaChar,   "DNA Splice Character", 0, 1, 0.5, 0.001, 0)
+    F(dnaChar,   "DNA Splice Character", 0, 1, 0.5, 0.001, 0) \
+    F(resMix,      "Resonator Mix", 0, 1, 0, 0.01, 0) \
+    C(resTuning,   "Resonator Tuning", kListResTune, 0) \
+    F(resModes,    "Resonator Modes", 1, 16, 8, 1, 0) \
+    F(resPitch,    "Resonator Pitch", -24, 24, 0, 0.01, 0) \
+    F(resDecay,    "Resonator Decay", 0.02, 10, 1.2, 0.001, 1) \
+    F(resDamping,  "Resonator Damping", 0, 1, 0.5, 0.01, 0) \
+    F(resInharm,   "Resonator Inharmonicity", 0, 1, 0, 0.01, 0) \
+    F(resSpread,   "Resonator Stereo Spread", 0, 1, 0.5, 0.01, 0) \
+    F(resFeedback, "Resonator Feedback", 0, 1, 0, 0.01, 0)
 
 enum ParamIndex
 {

@@ -1,0 +1,260 @@
+#pragma once
+#include <JuceHeader.h>
+#include <memory>
+#include <atomic>
+#include "Params.h"
+#include "DSP.h"
+
+namespace tg
+{
+
+// Everything the audio thread needs for one block, read once from the parameters.
+struct Snapshot
+{
+    float v[P_COUNT] {};
+    double sampleRate = 48000.0;
+    double fxTempo = 130.0;   // tempo used for tempo-synced effects
+    float bendSemis = 0.0f;   // current pitch-bend in semitones
+
+    inline float f (int p) const { return v[p]; }
+    inline int   i (int p) const { return (int) std::lround (v[p]); }
+};
+
+// A loaded WAV for Oscillator 4.
+struct WaveSample
+{
+    std::vector<float> ch[2];
+    int numChannels = 1;
+    int length = 0;
+    double sampleRate = 44100.0;
+    float peak = 1.0f;
+    double duration() const { return length / sampleRate; }
+};
+
+struct ModState
+{
+    float m[MT_COUNT] {};
+    void clear() { std::fill (std::begin (m), std::end (m), 0.0f); }
+    float operator[] (int k) const { return m[k]; }
+};
+
+// Web Audio "hard muted" mix value: zero if the knob is at zero, otherwise knob + modulation.
+inline float hardMuted (float knob, float mod, float maxV)
+{
+    if (! (knob > 0.0001f)) return 0.0f;
+    return clampv (knob + mod, 0.0f, maxV);
+}
+
+double syncBeats (const char* key);                       // e.g. "1/8d" -> 0.75
+double syncSeconds (const ChoiceList& list, int idx, double tempo, double fallback);
+double syncRate (const ChoiceList& list, int idx, double tempo, double fallback);
+
+//==============================================================================
+struct FilterChain
+{
+    int mode = -1;
+    int numStages = 0;
+    Biquad st[4];
+    Biquad::Type types[4] {};
+    float fbState[2] { 0, 0 };
+    float fbGain = 0.0f;
+    enum FbKind { FbNone, FbToInput, FbToPre } fbKind = FbNone;
+    float preK = 0.0f;     // extra drive stage after the input drive (OTA / TB-303 / acid)
+    float postK = 0.0f;    // saturator after the filter (Polivoks)
+    bool limitOut = false; // soft limiter for the acid modes, whose resonance can reach +30 dB
+
+    // Ladder / Minimoog modes: a 4-pole one-pole cascade with inverted feedback.
+    // (In the browser these were Web Audio feedback loops, which don't resonate there.)
+    bool ladder = false;
+    float lg[4] { 0.5f, 0.5f, 0.5f, 0.5f };
+    float ls[2][4] {};
+    float lk = 0.0f;
+
+    void configure (int newMode);
+    void update (float cutoff, float res, double sr);
+    void setLadder (float cutoff, float spread, float k, double sr);
+    void reset();
+    void copyChannel (int from, int to);
+
+    inline float process (float x, int ch, float drive)
+    {
+        if (ladder)
+        {
+            float v = driveShape (x - lk * fbState[ch], drive);
+            float* s = ls[ch];
+            for (int k = 0; k < 4; ++k)
+            {
+                const float u = (v - s[k]) * lg[k];
+                v = u + s[k];
+                s[k] = v + u;
+            }
+            if (! std::isfinite (v)) { reset(); v = 0.0f; }
+            fbState[ch] = v;
+            return v * (1.0f + lk * 0.35f);   // make up some of the bass lost to resonance
+        }
+
+        float v = driveShape (x, drive);
+        if (preK > 0.0f)
+        {
+            if (fbKind == FbToPre) v += fbGain * fbState[ch];
+            v = driveShape (v, preK);
+        }
+        for (int k = 0; k < numStages; ++k) v = st[k].process (v, ch);
+        if (! std::isfinite (v)) { reset(); v = 0.0f; }
+        fbState[ch] = v;
+        if (postK > 0.0f) v = driveShape (v, postK);
+        if (limitOut) v = 1.5f * std::tanh (v * (1.0f / 1.5f));
+        return v;
+    }
+};
+
+//==============================================================================
+class Voice
+{
+public:
+    void prepare (double sr);
+
+    struct StartOptions
+    {
+        float accentBoost = 0.0f;
+        float filterAccent = 0.0f;
+        float velocity = 1.0f;
+    };
+
+    void start (int key, double freq, double glideFromFreq, const StartOptions&, const Snapshot&, uint64_t order);
+    void release();
+    void retune (double freq) { baseFreq = freq; }
+    void kill() { active = false; }
+
+    // Adds this voice's output into L/R. Writes its modulation values to modOut.
+    void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* wav, ModState& modOut);
+
+    bool active = false;
+    bool released = false;
+    int key = -1;
+    uint64_t order = 0;
+    double baseFreq = 440.0;
+    float accentBoost = 0.0f;
+    float filterAccent = 0.0f;
+    float velGain = 1.0f;
+
+    float currentLevel() const { return (float) ampEnv.eval (t); }
+
+private:
+    void computeMod (const Snapshot&, ModState&) const;
+    void updateControl (const Snapshot&, const WaveSample* wav, const ModState&, bool first);
+
+    double sr = 48000.0;
+    double t = 0.0;            // seconds since note-on
+    double startedAt = 0.0;    // random seed for SuperSaw drift
+    EnvState ampEnv, filtEnv, modEnv[3];
+
+    // smoothed values (Web Audio setTargetAtTime emulation)
+    struct S { float v = 0, target = 0; inline void step (float c) { v += (target - v) * c; } };
+    S f1, f2, f3, fSub, cBase, cRatio, ssBase, wtRate;
+    S l1, l2, l3, lSub, l4, lC, lSS;
+    S legacyFm, ringMix, dry, ringGainS, srcMute, vGain;
+    S cFm, cMixS;
+    S cutoff, res;
+    S fmAmt[4], ringDepth[2], ringOut[2];
+    S ssCents[9], ssGain[9];
+    float drive = 1.0f, cShapeK = 4.5f;
+    int ssVoices = 7;
+    float ssPanL[9] {}, ssPanR[9] {};
+
+    // oscillator state
+    double ph1 = 0, ph2 = 0, ph3 = 0, phSub = 0, phCar = 0, phMod = 0;
+    double ssPh[9] {};
+    double wtPos = 0.0;
+    bool wtStopped = false;
+    int wave1 = 0, wave2 = 0, wave3 = 0, waveSub = 0, waveA = 0, waveB = 0;
+
+    // routing (resolved per control block)
+    struct FmSlot { int src, dst; bool on; float scale; };
+    FmSlot fmSlots[4] {};
+    struct RingSlot { int src, dst; bool on; float shapeK; Biquad hp, lp; };
+    RingSlot ringSlots[2];
+    bool wtLoaded = false;
+    bool wtLoop = true;
+    double wtLoopStart = 0, wtLoopEnd = 0;
+    bool wtReverse = false;
+    float wtComp = 1.0f;
+
+    float srcVals[6] {};    // latest raw/FM-source outputs: osc1, osc2, osc3, osc4(mono), complex, supersaw
+    FilterChain filter;
+    bool stereo = false;
+};
+
+//==============================================================================
+// Global effects: tape/BBD delay, 90s reverb + shimmer, Juno chorus, reverse pitch reverb.
+class FxBus
+{
+public:
+    void prepare (double sr, int maxBlock);
+    void reset();
+    // In-place: L/R hold the summed voices on input and the final mix on output.
+    void process (float* L, float* R, int n, const Snapshot&, const ModState& mod);
+
+    // Called from the message thread: rebuilds the reverb impulse when the size changes.
+    void updateImpulse (double seconds);
+    double impulseSeconds() const { return irSeconds.load(); }
+
+private:
+    double sr = 48000.0;
+    int maxBlock = 512;
+
+    float masterS = 0.25f;
+    DelayLine dl[2];
+    Biquad tapeLP, tapeHP;
+    double wowPh = 0, flutPh = 0;
+    float dTimeS = 0.32f, dFbS = 0.35f, dSendS = 0, dWetS = 0, wowDepthS = 0, flDepthS = 0;
+
+    DelayLine ch1[2], ch2[2];
+    double chPh1 = 0, chPh2 = 0;
+    float cSendS = 0, cWetS = 0, cDepthS = 0.0048f;
+
+    DelayLine preDl[2], pitchDl[2];
+    double revPh = 0;
+    Biquad revBP;
+    float vSendS = 0, vWetS = 0, vPreS = 0.42f, vPitchS = 0.008f;
+
+    Biquad revLP, shimHP;
+    float rSendS = 0, rWetS = 0, sSendS = 0, sWetS = 0;
+
+    juce::dsp::Convolution conv { juce::dsp::Convolution::NonUniform { 256 } };
+    juce::AudioBuffer<float> convBuf;
+    std::atomic<double> irSeconds { 0.0 };
+    bool convReady = false;
+};
+
+//==============================================================================
+class Engine
+{
+public:
+    static constexpr int kMaxVoices = 32;
+
+    void prepare (double sr, int maxBlock);
+    void reset();
+
+    void noteOn (int key, double freq, const Voice::StartOptions&, const Snapshot&);
+    void noteOff (int key);
+    void allNotesOff();
+    Voice* findActive (int key);    // held (not released) voice for key
+    void rekey (Voice* v, int newKey) { if (v) v->key = newKey; }
+
+    void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* wav);
+
+    FxBus& fx() { return fxBus; }
+    int activeVoiceCount() const;
+
+private:
+    Voice voices[kMaxVoices];
+    FxBus fxBus;
+    ModState globalMod;     // modulation of global effects, taken from the newest voice
+    uint64_t orderCounter = 0;
+    double lastFreq = -1.0;
+    double sr = 48000.0;
+    std::vector<float> vL, vR;
+};
+
+} // namespace tg

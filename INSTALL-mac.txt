@@ -1,0 +1,41 @@
+MEGA SYNTH - installing on a Mac
+================================
+
+This folder contains:
+  Mega Synth.vst3        VST3 plugin (Ableton Live, Bitwig, Reaper, Studio One, FL Studio, Cubase...)
+  Mega Synth.component   Audio Unit plugin (Logic Pro, GarageBand, also Live/Reaper)
+  Mega Synth.app         Standalone app (plays from a MIDI keyboard or your computer keyboard)
+
+1. Copy the plugins into place
+
+   Open Finder, press Shift+Cmd+G and paste:   ~/Library/Audio/Plug-Ins/VST3
+   Drag "Mega Synth.vst3" into that folder.
+
+   Press Shift+Cmd+G again and paste:          ~/Library/Audio/Plug-Ins/Components
+   Drag "Mega Synth.component" into that folder.
+
+   (Create either folder if it doesn't exist.)
+
+2. Let macOS run it
+
+   The plugin isn't signed with a paid Apple developer certificate, so macOS
+   blocks it the first time ("damaged" or "can't be verified"). Open Terminal
+   and paste these lines, then press Return:
+
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"Mega Synth.vst3"
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/"Mega Synth.component"
+
+   For the standalone app, after moving it to Applications:
+
+   xattr -dr com.apple.quarantine /Applications/"Mega Synth.app"
+
+3. Rescan in your DAW
+
+   Restart your DAW (or use its plugin rescan). Mega Synth shows up as an
+   instrument under "Twisted Genetics". In Logic, if it doesn't appear, open
+   Logic > Settings > Plug-in Manager and click "Reset & Rescan Selection".
+
+Bringing patches across from the browser version
+   In the browser synth press "Save Patch" (copies the patch to the clipboard),
+   then in the plugin press "Paste Patch". It works the other way too: "Copy
+   Patch" in the plugin, then "Load Patch" in the browser.

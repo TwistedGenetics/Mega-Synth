@@ -1,0 +1,98 @@
+name: Build plugin
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS (universal VST3 + AU + Standalone)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Ad-hoc sign the bundles
+        run: |
+          cd "build/MegaSynth_artefacts/Release"
+          codesign --force --deep --sign - "VST3/Mega Synth.vst3"
+          codesign --force --deep --sign - "AU/Mega Synth.component"
+          codesign --force --deep --sign - "Standalone/Mega Synth.app"
+
+      - name: Validate with pluginval
+        continue-on-error: true
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate-in-process --timeout-ms 300000 \
+            --validate "build/MegaSynth_artefacts/Release/VST3/Mega Synth.vst3"
+
+      - name: Validate the Audio Unit (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "build/MegaSynth_artefacts/Release/AU/Mega Synth.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          auval -v aumu MgSy TwGn
+
+      - name: Package
+        run: |
+          mkdir -p dist/MegaSynth-macOS
+          cp -R "build/MegaSynth_artefacts/Release/VST3/Mega Synth.vst3" dist/MegaSynth-macOS/
+          cp -R "build/MegaSynth_artefacts/Release/AU/Mega Synth.component" dist/MegaSynth-macOS/
+          cp -R "build/MegaSynth_artefacts/Release/Standalone/Mega Synth.app" dist/MegaSynth-macOS/
+          cp INSTALL-mac.txt dist/MegaSynth-macOS/
+          cd dist && ditto -c -k --keepParent MegaSynth-macOS MegaSynth-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MegaSynth-macOS
+          path: dist/MegaSynth-macOS.zip
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MegaSynth-macOS.zip
+
+  windows:
+    name: Windows (VST3 + Standalone)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/MegaSynth-Windows | Out-Null
+          Copy-Item -Recurse "build/MegaSynth_artefacts/Release/VST3/Mega Synth.vst3" dist/MegaSynth-Windows/
+          Copy-Item "build/MegaSynth_artefacts/Release/Standalone/Mega Synth.exe" dist/MegaSynth-Windows/
+          Compress-Archive -Path dist/MegaSynth-Windows -DestinationPath dist/MegaSynth-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MegaSynth-Windows
+          path: dist/MegaSynth-Windows.zip
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MegaSynth-Windows.zip

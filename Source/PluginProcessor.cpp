@@ -107,12 +107,17 @@ MegaSynthProcessor::MegaSynthProcessor()
     }
     formats.registerBasicFormats();
     WaveBank::get();   // build the oscillator tables up front
+    addListener (this);
+    lastStepsVersion = steps.getVersion();
+    pushHistory ("Init");
+    markOriginal();
     startTimerHz (20);
 }
 
 MegaSynthProcessor::~MegaSynthProcessor()
 {
     stopTimer();
+    removeListener (this);
 }
 
 bool MegaSynthProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -362,6 +367,19 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 //==============================================================================
 void MegaSynthProcessor::timerCallback()
 {
+    // history: record a snapshot shortly after an edit finishes (knob released, step changed)
+    if (! restoring)
+    {
+        const auto v = steps.getVersion();
+        if (v != lastStepsVersion) { lastStepsVersion = v; snapshotPending = true; snapshotDelay = 0; }
+        if (snapshotPending && ++snapshotDelay >= 6)
+        {
+            snapshotDelay = 0;
+            snapshotPending = false;
+            pushHistory ("Edit");
+        }
+    }
+
     // rebuild the reverb impulse when its (possibly tempo-synced) size changes
     const double ht = hostTempo.load();
     const double tempo = ht > 0 ? ht : (double) raw[P_seqTempo]->load();
@@ -421,6 +439,7 @@ bool MegaSynthProcessor::loadSampleData (const juce::MemoryBlock& data, const ju
     const juce::ScopedLock sl (waveLock);
     slot = juce::jlimit (0, 1, slot);
     waveData[slot] = data;
+    waveShared[slot] = std::make_shared<const juce::MemoryBlock> (data);
     waveName[slot] = name;
     currentWave[slot].store (ws.get());
     waveKeep.push_back (std::move (ws));
@@ -441,6 +460,7 @@ void MegaSynthProcessor::clearSample (int slot)
     slot = juce::jlimit (0, 1, slot);
     currentWave[slot].store (nullptr);
     waveData[slot].reset();
+    waveShared[slot].reset();
     waveName[slot].clear();
 }
 
@@ -457,6 +477,7 @@ juce::String MegaSynthProcessor::getSampleStatus (int slot) const
 void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto state = apvts.copyState();
+    state.setProperty ("stateVersion", kStateVersion, nullptr);
     state.setProperty ("seqSteps", steps.toString(), nullptr);
     state.setProperty ("patchName", getPatchName(), nullptr);
     {
@@ -477,6 +498,10 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (xml == nullptr) return;
     auto tree = juce::ValueTree::fromXml (*xml);
     if (! tree.isValid()) return;
+    // Version 1 (v0.1.x) state has no version number; its parameters, steps and samples
+    // map 1:1 onto version 2, so no conversion is needed yet. Later versions migrate here.
+    const int version = (int) tree.getProperty ("stateVersion", 1);
+    juce::ignoreUnused (version);
     apvts.replaceState (tree);
 
     if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
@@ -494,6 +519,16 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     }
 
     lastEuclid[0] = -1;   // don't re-flow the restored sequence
+    if (! restoring)
+    {
+        {
+            const juce::ScopedLock sl (historyLock);
+            history.clear();
+            historyPos = -1;
+        }
+        pushHistory ("Project loaded");
+        markOriginal();
+    }
 }
 
 //==============================================================================
@@ -511,6 +546,8 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
         else
             p->setProperty (id, std::abs (v - std::round (v)) < 1.0e-6f ? juce::String ((int) std::round (v)) : juce::String (v, 6).trimCharactersAtEnd ("0"));
     }
+    root->setProperty ("format", "megasynth");
+    root->setProperty ("version", kStateVersion);
     root->setProperty ("params", juce::var (p));
     root->setProperty ("name", getPatchName());
     {
@@ -577,6 +614,8 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
 juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
 {
     const juce::var patch = juce::JSON::parse (text.trim());
+    // Browser patches and v0.1.x .megasynth files carry no "version" (= version 1).
+    // They map onto version 2 unchanged; future versions add their migration here.
     if (! patch.isObject()) return "That isn't a patch (expected the JSON copied by Save Patch).";
 
     auto setPlain = [this] (int idx, float plain)
@@ -686,6 +725,8 @@ void MegaSynthProcessor::resetToDefaults()
     clearSample (1);
     lastEuclid[0] = -1;
     setPatchName ("Init");
+    pushHistory ("Init");
+    markOriginal();
 }
 
 juce::File MegaSynthProcessor::getPatchFolder()
@@ -703,6 +744,91 @@ juce::Array<juce::File> MegaSynthProcessor::getPatchFiles()
     return files;
 }
 
+//==============================================================================
+MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::String& label)
+{
+    Snapshot s;
+    s.params = apvts.copyState();
+    s.steps = steps.toString();
+    s.patchName = getPatchName();
+    s.label = label;
+    const juce::ScopedLock sl (waveLock);
+    for (int k = 0; k < 2; ++k) { s.wave[k] = waveShared[k]; s.waveName[k] = waveName[k]; }
+    return s;
+}
+
+bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
+{
+    return a.steps == b.steps && a.patchName == b.patchName
+        && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1]
+        && a.params.isEquivalentTo (b.params);
+}
+
+void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
+{
+    restoring = true;
+    apvts.replaceState (s.params.createCopy());
+    steps.fromString (s.steps);
+    setPatchName (s.patchName);
+    for (int k = 0; k < 2; ++k)
+    {
+        if (s.wave[k] == waveShared[k]) continue;
+        if (s.wave[k] != nullptr)
+        {
+            loadSampleData (*s.wave[k], s.waveName[k], k);
+            const juce::ScopedLock sl (waveLock);
+            waveShared[k] = s.wave[k];   // keep pointer identity with the snapshot
+        }
+        else clearSample (k);
+    }
+    lastStepsVersion = steps.getVersion();
+    snapshotPending = false;
+    lastEuclid[0] = -1;
+    restoring = false;
+}
+
+void MegaSynthProcessor::pushHistory (const juce::String& label)
+{
+    const juce::ScopedLock sl (historyLock);
+    auto snap = captureSnapshot (label);
+    if (historyPos >= 0 && sameState (snap, history[(size_t) historyPos])) return;
+    history.resize ((size_t) (historyPos + 1));
+    history.push_back (std::move (snap));
+    while (history.size() > 200) history.erase (history.begin());
+    historyPos = (int) history.size() - 1;
+}
+
+void MegaSynthProcessor::markOriginal()
+{
+    const juce::ScopedLock sl (historyLock);
+    original = captureSnapshot ("Original");
+}
+
+void MegaSynthProcessor::undo()
+{
+    const juce::ScopedLock sl (historyLock);
+    pushHistory ("Edit");   // keep any change made since the last snapshot
+    if (historyPos <= 0) return;
+    --historyPos;
+    restoreSnapshot (history[(size_t) historyPos]);
+}
+
+void MegaSynthProcessor::redo()
+{
+    const juce::ScopedLock sl (historyLock);
+    if (historyPos + 1 >= (int) history.size()) return;
+    ++historyPos;
+    restoreSnapshot (history[(size_t) historyPos]);
+}
+
+void MegaSynthProcessor::returnToOriginal()
+{
+    const juce::ScopedLock sl (historyLock);
+    pushHistory ("Edit");
+    restoreSnapshot (original);
+    pushHistory ("Return to original");
+}
+
 bool MegaSynthProcessor::savePatchToFile (const juce::File& f)
 {
     setPatchName (f.getFileNameWithoutExtension());
@@ -715,6 +841,8 @@ juce::String MegaSynthProcessor::loadPatchFromFile (const juce::File& f)
     if (text.isEmpty()) return "Couldn't read " + f.getFileName();
     const auto err = importBrowserPatch (text);
     setPatchName (f.getFileNameWithoutExtension());
+    pushHistory ("Load " + f.getFileNameWithoutExtension());
+    markOriginal();
     return err;
 }
 

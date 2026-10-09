@@ -187,6 +187,8 @@ private:
     juce::Component content;   // fixed 1200x800 design, scaled to the window
     juce::Label title, subtitle, status;
     tgui::SampleBar* sampleBars[2] { nullptr, nullptr };   // owned by the Oscillators page
+    juce::TextButton undoBtn { "Undo" }, redoBtn { "Redo" }, originalBtn { "Original" };
+    std::unique_ptr<juce::TooltipWindow> tooltips;
     juce::TextButton copyBtn { "Copy Patch" },
                      pasteBtn { "Paste Patch" }, initBtn { "Init" }, octDown { "Oct -" }, octUp { "Oct +" };
     juce::OwnedArray<tgui::Knob> headerKnobs;

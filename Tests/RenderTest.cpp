@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "ParamFormat.h"
+#include "Registry.h"
 
 using namespace tg;
 
@@ -55,6 +56,13 @@ static Stats render (MegaSynthProcessor& p, double seconds, std::vector<std::pai
     return s;
 }
 
+static juce::String getXmlFromBinaryForTest (const juce::MemoryBlock& mb)
+{
+    // JUCE's copyXmlToBinary format: magic, size, then the XML text
+    if (mb.getSize() < 9) return {};
+    return juce::String::fromUTF8 (static_cast<const char*> (mb.getData()) + 8, (int) mb.getSize() - 8);
+}
+
 static void writeWav (const juce::AudioBuffer<float>& b, double sr, const juce::String& name)
 {
     auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders");
@@ -90,6 +98,8 @@ int main()
         p->prepareToPlay (sr, 512);
         return p;
     };
+
+   #include "Golden.inc"
 
     // ---- 1. default patch chord
     {
@@ -293,6 +303,50 @@ int main()
         const double f = zc / ((b - a) / sr);
         std::cout << "Semitone dial: measured " << f << " Hz (expected 329.6)" << std::endl;
         CHECK (std::abs (f - 329.63) < 3.0, "semitone tuning off");
+    }
+
+    // ---- Stage 2: registry, versioning, history
+    {
+        std::cout << "Registry / versioning / history" << std::endl;
+        const auto& reg = registry();
+        CHECK ((int) reg.size() == P_COUNT, "registry size");
+        int mods = 0, audio = 0, noModule = 0;
+        for (auto& m : reg) { mods += m.modulatable; audio += m.audioRate; noModule += m.module.isEmpty(); }
+        std::cout << "  " << reg.size() << " parameters, " << mods << " modulatable, " << audio << " audio-rate capable" << std::endl;
+        CHECK (noModule == 0, "parameter without a module");
+        const auto& cut = meta (P_filterCutoff);
+        CHECK (cut.path == "filter.filterCutoff" && cut.scale == Scale::Log && cut.unit == "Hz" && cut.modulatable && cut.audioRate, "filterCutoff metadata");
+        CHECK (! meta (P_polyphony).modulatable && meta (P_osc1Detune).bipolar, "admin / bipolar flags");
+        for (int i : { P_filterCutoff, P_porta, P_osc1Detune, P_ampA })
+        {
+            const float v = meta (i).def;
+            CHECK (std::abs (fromNormalised (i, toNormalised (i, v)) - v) < 1.0e-3f * std::max (1.0f, std::abs (v)), "normalise round trip " + meta (i).id);
+        }
+        CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 1200.0f) < 1.0f, "log scaling centre");
+
+        auto p = make();
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 2"), "patch version missing");
+        juce::MemoryBlock st; p->getStateInformation (st);
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"2\""), "state version missing");
+
+        // history: edit, undo, redo, original
+        const float orig = p->param (P_filterCutoff)->getValue();
+        setP (*p, P_filterCutoff, 500.0f);
+        p->pushHistory ("cutoff");
+        p->steps.set (3, Step { 4, 1, TieNormal, true });
+        p->pushHistory ("step");
+        p->undo();
+        CHECK (p->steps.get (3).note != 4, "undo didn't revert the step");
+        CHECK (std::abs (p->param (P_filterCutoff)->convertFrom0to1 (p->param (P_filterCutoff)->getValue()) - 500.0f) < 1.0f, "undo went too far");
+        p->undo();
+        CHECK (std::abs (p->param (P_filterCutoff)->getValue() - orig) < 1.0e-5f, "undo didn't restore cutoff");
+        p->redo(); p->redo();
+        CHECK (p->steps.get (3).note == 4, "redo didn't restore the step");
+        p->returnToOriginal();
+        CHECK (std::abs (p->param (P_filterCutoff)->getValue() - orig) < 1.0e-5f && p->steps.get (3).note != 4, "return to original");
+        p->undo();
+        CHECK (p->steps.get (3).note == 4, "undo after return to original");
+        std::cout << "  history ok" << std::endl;
     }
 
     // ---- 7. CPU: 16 voices of everything

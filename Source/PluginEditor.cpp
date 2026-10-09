@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "ParamFormat.h"
+#include "Registry.h"
 
 using namespace tg;
 using namespace tgui;
@@ -137,7 +138,16 @@ Knob::Knob (MegaSynthProcessor& p, int idx, const juce::String& cap, juce::Colou
     addAndMakeVisible (caption);
     att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, kParamIds[idx], slider);
     slider.setDoubleClickReturnValue (true, (double) p.param (idx)->convertFrom0to1 (p.param (idx)->getDefaultValue()));
-    slider.setTooltip (p.param (idx)->getName (64));
+    {
+        // tooltip from the parameter registry: what it is, where it lives, and how it can be driven
+        const auto& m = tg::meta (idx);
+        juce::String tip = m.name + "  (" + m.module + ")";
+        if (m.unit.isNotEmpty()) tip << "\nUnit: " << m.unit;
+        tip << "\nScale: " << tg::scaleName (m.scale) << (m.bipolar ? ", bipolar" : "");
+        if (m.modulatable) tip << "\nModulatable" << (m.audioRate ? " (audio rate)" : "");
+        tip << "\nDouble-click to reset";
+        slider.setTooltip (tip);
+    }
 }
 
 void Knob::resized()
@@ -364,6 +374,7 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
 {
     setLookAndFeel (&look);
     addAndMakeVisible (content);
+    tooltips = std::make_unique<juce::TooltipWindow> (this, 600);
 
     title.setText ("MEGA SYNTH", juce::dontSendNotification);
     title.setFont (juce::Font (juce::FontOptions (26.0f, juce::Font::bold)));
@@ -385,7 +396,13 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
         content.addAndMakeVisible (k);
     }
 
-    for (auto* b : { &copyBtn, &pasteBtn, &initBtn, &octDown, &octUp }) content.addAndMakeVisible (*b);
+    for (auto* b : { &copyBtn, &pasteBtn, &initBtn, &octDown, &octUp, &undoBtn, &redoBtn, &originalBtn }) content.addAndMakeVisible (*b);
+    undoBtn.onClick = [this] { proc.undo(); setStatus ("Undo"); };
+    redoBtn.onClick = [this] { proc.redo(); setStatus ("Redo"); };
+    originalBtn.onClick = [this] { proc.returnToOriginal(); setStatus ("Returned to the original patch (Undo to go back)"); };
+    undoBtn.setTooltip ("Undo the last change (knob moves, steps, patch loads, samples)");
+    redoBtn.setTooltip ("Redo");
+    originalBtn.setTooltip ("Go back to the patch as it was when it was loaded. Undo returns to where you were.");
     subtitle.setVisible (false);
 
     // ---- patch browser
@@ -437,6 +454,8 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     pasteBtn.onClick = [this]
     {
         const auto err = proc.importBrowserPatch (juce::SystemClipboard::getTextFromClipboard());
+        proc.pushHistory ("Paste patch");
+        proc.markOriginal();
         setStatus (err.isEmpty() ? "Patch loaded from clipboard" : err);
     };
     initBtn.onClick = [this]
@@ -540,9 +559,10 @@ void MegaSynthEditor::buildPages()
                                           if (f == juce::File()) return;
                                           setStatus (proc.loadSampleFile (f, k) ? "Sample loaded into Wavetable " + juce::String (k + 1)
                                                                                : "Couldn't read that audio file");
+                                          proc.pushHistory ("Load sample");
                                       });
             };
-            bar->clear.onClick = [this, k] { proc.clearSample (k); setStatus ("Wavetable " + juce::String (k + 1) + " cleared"); };
+            bar->clear.onClick = [this, k] { proc.clearSample (k); proc.pushHistory ("Clear sample"); setStatus ("Wavetable " + juce::String (k + 1) + " cleared"); };
             wtS[k]->newRow();
             wtS[k]->choice (ids[k].mode, "Loop Mode", 180);
             wtS[k]->choice (ids[k].dir, "Direction", 110);
@@ -797,6 +817,9 @@ void MegaSynthEditor::resized()
     copyBtn.setBounds (820, 10, 120, 28);
     pasteBtn.setBounds (820, 44, 120, 28);
     initBtn.setBounds (948, 10, 120, 28);
+    undoBtn.setBounds (948, 44, 58, 28);
+    redoBtn.setBounds (1010, 44, 58, 28);
+    originalBtn.setBounds (1076, 44, 110, 28);
     status.setBounds (812, 74, 374, 14);
     tabs.setBounds (0, 88, kDesignW, 640);
     octDown.setBounds (10, 738, 70, 28);
@@ -881,6 +904,8 @@ void MegaSynthEditor::timerCallback()
     for (int k = 0; k < 2; ++k)
         if (sampleBars[k] != nullptr) sampleBars[k]->status.setText (proc.getSampleStatus (k), juce::dontSendNotification);
     if (proc.getPatchName() != lastShownName) refreshPatchList();
+    undoBtn.setEnabled (proc.canUndo() || proc.lastHistoryLabel().isNotEmpty());
+    redoBtn.setEnabled (proc.canRedo());
 
     const auto v = proc.steps.getVersion();
     if (v != lastStepVersion)

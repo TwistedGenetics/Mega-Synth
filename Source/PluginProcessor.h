@@ -5,7 +5,8 @@
 #include "Sequencer.h"
 
 class MegaSynthProcessor : public juce::AudioProcessor,
-                           private juce::Timer
+                           private juce::Timer,
+                           private juce::AudioProcessorListener
 {
 public:
     MegaSynthProcessor();
@@ -62,6 +63,17 @@ public:
 
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
+    // ---- history: undo / redo / return to original (message thread)
+    static constexpr int kStateVersion = 2;
+    bool canUndo() const { return historyPos > 0; }
+    bool canRedo() const { return historyPos + 1 < (int) history.size(); }
+    void undo();
+    void redo();
+    void returnToOriginal();
+    void pushHistory (const juce::String& label);   // record the current state now
+    void markOriginal();                             // the current state becomes "the original"
+    juce::String lastHistoryLabel() const { return historyPos >= 0 ? history[(size_t) historyPos].label : juce::String(); }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout (MegaSynthProcessor&);
     void timerCallback() override;
@@ -70,6 +82,28 @@ private:
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();
     void setParamFromAudio (int index, float plainValue);
+
+    struct Snapshot
+    {
+        juce::ValueTree params;
+        juce::String steps, patchName, label;
+        std::shared_ptr<const juce::MemoryBlock> wave[2];
+        juce::String waveName[2];
+    };
+    Snapshot captureSnapshot (const juce::String& label);
+    void restoreSnapshot (const Snapshot&);
+    bool sameState (const Snapshot&, const Snapshot&) const;
+    void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override {}
+    void audioProcessorChanged (juce::AudioProcessor*, const juce::AudioProcessorListener::ChangeDetails&) override {}
+    void audioProcessorParameterChangeGestureEnd (juce::AudioProcessor*, int) override { snapshotPending = true; }
+    std::vector<Snapshot> history;
+    int historyPos = -1;
+    Snapshot original;
+    bool restoring = false;
+    std::atomic<bool> snapshotPending { false };
+    int snapshotDelay = 0;
+    uint32_t lastStepsVersion = 0;
+    juce::CriticalSection historyLock;
 
     std::array<juce::RangedAudioParameter*, tg::P_COUNT> params {};
     std::array<std::atomic<float>*, tg::P_COUNT> raw {};
@@ -94,6 +128,7 @@ private:
     std::atomic<tg::WaveSample*> currentWave[2] { { nullptr }, { nullptr } };
     std::vector<std::unique_ptr<tg::WaveSample>> waveKeep;
     juce::MemoryBlock waveData[2];
+    std::shared_ptr<const juce::MemoryBlock> waveShared[2];   // same bytes, shared with history snapshots
     juce::String waveName[2];
     mutable juce::CriticalSection waveLock;
     juce::AudioFormatManager formats;

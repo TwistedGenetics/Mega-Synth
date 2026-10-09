@@ -25,7 +25,7 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 
 - **Tabs**: Oscillators, Osc 4 Sample, Mixer & Routing (levels, FX returns, FM and ring matrices), Filter & Env, Effects, Modulation (LFOs, mod envelopes, assignments) and Sequencer.
 - **Osc 4** plays a WAV (or AIFF/FLAC) you load with *Load Sample*. The sample is saved inside your DAW project.
-- **Keyboard**: click the on-screen keys, or use A W S E D F T G Y H U J K with Z / X for octave, like the browser version (some DAWs keep computer-key presses for themselves).
+- **Keyboard**: click the on-screen keys. Inside a DAW the plugin never takes the computer keyboard, so clicking its controls doesn't interrupt your DAW's QWERTY keyboard (in Ableton press **M** for Computer MIDI Keyboard). The standalone app plays from A W S E D F T G Y H U J K with Z / X for octave, like the browser version.
 - **MIDI**: notes, pitch bend (range on the header), mod wheel → LFO 1 depth, CC7 → master volume.
 - **Sequencer**: tick *Run Sequencer*. *Clock* chooses its own tempo knob or the DAW transport (steps lock to the DAW's 16ths and run while the DAW plays). *Random Phrase* uses the generator mode, scale and length.
 - **Copy Patch / Paste Patch** use the same JSON as the browser's Save Patch / Load Patch, including the wavetable sample.

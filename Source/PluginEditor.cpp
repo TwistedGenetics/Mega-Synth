@@ -434,7 +434,21 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     setResizeLimits (kDesignW * 2 / 3, kDesignH * 2 / 3, kDesignW * 2, kDesignH * 2);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) kDesignW / kDesignH);
     setSize (kDesignW, kDesignH);
-    setWantsKeyboardFocus (true);
+    // Inside a DAW, never take the computer keyboard: clicking a control would
+    // otherwise steal keys from the host's own QWERTY keyboard (e.g. Live's
+    // Computer MIDI Keyboard). The standalone app keeps QWERTY note entry.
+    const bool standalone = proc.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
+    std::function<void (juce::Component&)> setFocus = [&] (juce::Component& c)
+    {
+        c.setWantsKeyboardFocus (standalone);
+        c.setMouseClickGrabsKeyboardFocus (standalone);
+        for (auto* ch : c.getChildren()) setFocus (*ch);
+    };
+    for (int i = 0; i < tabs.getNumTabs(); ++i)
+        if (auto* page = tabs.getTabContentComponent (i)) setFocus (*page);
+    setFocus (content);
+    setWantsKeyboardFocus (standalone);
+    setMouseClickGrabsKeyboardFocus (standalone);
     startTimerHz (30);
 }
 

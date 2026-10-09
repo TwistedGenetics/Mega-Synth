@@ -4,6 +4,7 @@
 #include "PluginEditor.h"
 #include "ParamFormat.h"
 #include "Registry.h"
+#include "Mut/Mutator.h"
 
 using namespace tg;
 
@@ -1069,6 +1070,133 @@ int main()
                     route (*p, 0, MS_CellNoise, P_reverbMix, 0.3f);
                     auto st = render (*p, 4.0, chord (0.0, 3.0, { 48, 55, 60, 64, 67 }));
                     CHECK (st.finite && st.peak < 4.0f, "instability on every target");
+                }
+            }
+
+            // ---- Stage 13: Master Mutate
+            {
+                std::cout << "Master Mutate" << std::endl;
+                auto patchSetup = [&] (MegaSynthProcessor& p)
+                {
+                    setP (p, P_osc1Wave, 0.0f); setP (p, P_osc2Gain, 0.4f); setP (p, P_filterCutoff, 1500.0f); setP (p, P_filterRes, 6.0f);
+                    setP (p, P_complexGain, 0.2f); setP (p, P_wmMix, 0.3f);
+                };
+                auto renderWith = [&] (float amount, int seed, uint32_t locks, juce::AudioBuffer<float>& out)
+                {
+                    auto p = clean(); patchSetup (*p);
+                    setP (*p, P_mutAmount, amount); setP (*p, P_mutSeed, (float) seed);
+                    for (int k = 0; k < ML_COUNT; ++k) setP (*p, P_mutLock1 + k, (locks >> k) & 1u ? 1.0f : 0.0f);
+                    render (*p, 1.2, chord (0.0, 1.0, { 45, 52, 57 }), &out);
+                };
+                auto maxDiff = [] (const juce::AudioBuffer<float>& x, const juce::AudioBuffer<float>& y)
+                { float d = 0; for (int i = 0; i < x.getNumSamples(); ++i) d = std::max (d, std::abs (x.getSample (0, i) - y.getSample (0, i))); return d; };
+                juce::AudioBuffer<float> orig, m0, a1, a2, other, allLocked;
+                renderWith (0.0f, 1, 0, orig);
+                renderWith (0.0f, 777, 0, m0);
+                renderWith (0.6f, 42, 0, a1);
+                renderWith (0.6f, 42, 0, a2);
+                renderWith (0.6f, 43, 0, other);
+                renderWith (0.9f, 42, (1u << ML_COUNT) - 1, allLocked);
+                std::cout << "  0% vs original: " << maxDiff (orig, m0) << ", seed 42 twice: " << maxDiff (a1, a2) << ", seed 42 vs original: " << maxDiff (a1, orig)
+                          << ", seed 42 vs 43: " << maxDiff (a1, other) << ", all 13 locked: " << maxDiff (allLocked, orig) << std::endl;
+                CHECK (maxDiff (orig, m0) == 0.0f, "mutate 0% must equal the original");
+                CHECK (maxDiff (a1, a2) == 0.0f, "same patch + seed + amount must reproduce exactly");
+                CHECK (maxDiff (a1, orig) > 0.01f && maxDiff (a1, other) > 0.01f, "mutation changes the sound, per seed");
+                CHECK (maxDiff (allLocked, orig) == 0.0f, "locks hold");
+
+                // each lock protects exactly its own parameters
+                {
+                    MutationTable t; t.build (99);
+                    float base[P_COUNT];
+                    auto q = clean(); patchSetup (*q);
+                    for (int i = 0; i < P_COUNT; ++i) base[i] = q->param (i)->convertFrom0to1 (q->param (i)->getValue());
+                    bool ok = true; int moved = 0;
+                    for (int k = 0; k < ML_COUNT; ++k)
+                    {
+                        float v[P_COUNT]; std::copy (base, base + P_COUNT, v);
+                        applyMutation (t, 1.0f, 1u << k, v);
+                        for (int i = 0; i < P_COUNT; ++i)
+                        {
+                            if (mutLockOf (i) == k && v[i] != base[i]) ok = false;
+                            if (mutLockOf (i) != k && v[i] != base[i]) ++moved;
+                        }
+                    }
+                    CHECK (ok && moved > 0, "each lock holds its group");
+                    // never mutated: sequencer, master volume, macros, the Mutate controls themselves
+                    float v[P_COUNT]; std::copy (base, base + P_COUNT, v);
+                    applyMutation (t, 1.0f, 0, v);
+                    for (int i : { (int) P_seqTempo, (int) P_masterVolume, (int) P_macro1, (int) P_mutAmount, (int) P_polyphony, (int) P_osc2Gain + 0 })
+                        if (i != P_osc2Gain) CHECK (v[i] == base[i], juce::String ("must not mutate ") + kParamIds[i]);
+                    // switched-off things stay off
+                    CHECK (v[P_supersawGain] == 0.0f && v[P_resMix] == 0.0f && v[P_fbOutGr] == 0.0f, "zero levels stay zero");
+                }
+                // correlation inside a group, none across groups (over many seeds)
+                {
+                    double same = 0, cross = 0, var = 0; int n = 0;
+                    for (uint32_t sd = 1; sd < 4001; ++sd)
+                    {
+                        MutationTable t; t.build (sd);
+                        same += t.dir[P_filterCutoff] * t.dir[P_filterDrive];
+                        cross += t.dir[P_filterCutoff] * t.dir[P_ampD];
+                        var += t.dir[P_filterCutoff] * t.dir[P_filterCutoff];
+                        ++n;
+                    }
+                    std::cout << "  direction correlation: same group " << same / var << ", different groups " << cross / var << std::endl;
+                    CHECK (same / var > 0.35 && std::abs (cross / var) < 0.08, "group correlation");
+                }
+                // shaping: a short attack stays short at moderate amounts; ratios lean to harmonic values
+                {
+                    int shortOk = 0, ratioNear = 0, total = 0;
+                    for (uint32_t sd = 1; sd < 501; ++sd)
+                    {
+                        MutationTable t; t.build (sd);
+                        float v[P_COUNT];
+                        for (int i = 0; i < P_COUNT; ++i) v[i] = meta (i).def;
+                        v[P_ampA] = 0.003f; v[P_complexRatio] = 2.0f;
+                        applyMutation (t, 0.5f, 0, v);
+                        shortOk += v[P_ampA] < 0.03f;
+                        const float r = v[P_complexRatio];
+                        ratioNear += std::abs (r - std::round (r * 2.0f) / 2.0f) < 0.15f;
+                        ++total;
+                    }
+                    std::cout << "  at 50%: short attacks stayed under 30 ms in " << shortOk << "/" << total << ", ratios within 0.15 of a half-harmonic " << ratioNear << "/" << total << std::endl;
+                    CHECK (shortOk == total && ratioNear > total * 0.9, "mutation shaping");
+                }
+                // commit bakes it in: Mutate back to 0, the sound is (to knob resolution) the mutated one, undo restores
+                {
+                    auto p = clean(); patchSetup (*p);
+                    setP (*p, P_mutAmount, 0.6f); setP (*p, P_mutSeed, 42.0f);
+                    p->pushHistory ("before");
+                    float before[P_COUNT], expect[P_COUNT];
+                    for (int i = 0; i < P_COUNT; ++i) before[i] = expect[i] = p->param (i)->convertFrom0to1 (p->param (i)->getValue());
+                    { MutationTable t; t.build (42); applyMutation (t, 0.6f, 0, expect); }
+                    p->commitMutation();
+                    // every knob now holds the mutated value, to its own resolution (e.g. whole cents of detune)
+                    int bad = 0, changed = 0;
+                    for (int i = 0; i < P_COUNT; ++i)
+                    {
+                        if (i == P_mutAmount) continue;
+                        const float got = p->param (i)->convertFrom0to1 (p->param (i)->getValue());
+                        const float step = std::max (meta (i).step, 1.0e-4f * (meta (i).max - meta (i).min));
+                        if (std::abs (got - expect[i]) > 0.5f * step + 1.0e-4f * std::max (1.0f, std::abs (expect[i]))) ++bad;
+                        if (got != before[i]) ++changed;
+                    }
+                    std::cout << "  commit: " << changed << " knobs changed, " << bad << " off by more than their resolution" << std::endl;
+                    juce::AudioBuffer<float> c;
+                    render (*p, 1.2, chord (0.0, 1.0, { 45, 52, 57 }), &c);
+                    CHECK (p->param (P_mutAmount)->getValue() == 0.0f && bad == 0 && changed > 20 && c.getMagnitude (0, c.getNumSamples()) > 0.01f
+                           && p->getMutationHistory().size() == 1, "commit");
+                    p->undo();
+                    CHECK (p->param (P_mutAmount)->getValue() > 0.5f, "undo a commit");
+                }
+                // Mutate is modulatable: velocity -> Mutate makes soft and hard notes different patches
+                {
+                    auto p = clean(); patchSetup (*p); setP (*p, P_mutSeed, 7.0f);
+                    route (*p, 0, MS_Velocity, P_mutAmount, 1.0f);
+                    juce::AudioBuffer<float> soft, hard;
+                    render (*p, 0.8, note (57, 0.05f), &soft);
+                    render (*p, 0.8, note (57, 1.0f), &hard);
+                    CHECK (maxDiff (soft, hard) > 0.01f, "velocity-modulated mutation");
                 }
             }
 

@@ -131,7 +131,7 @@ const NormTable& normTable()
             const bool modAmt = m.id.startsWith ("mod") && m.id.endsWith ("Amt");
             t.scene[i] = (m.modulatable || m.scale == Scale::Choice) && m.category != Category::Seq && ! modAmt
                          && ! m.id.startsWith ("macro") && i != P_sceneX && i != P_sceneY && i != P_masterVolume
-                         && i != P_spSize && i != P_busOrder && i != P_capPoint;   // these change the plugin's latency / structure
+                         && i != P_spSize && i != P_busOrder && i != P_capPoint && i != P_mutAmount;   // these change the plugin's latency / structure
             t.discrete[i] = m.scale == Scale::Choice;
         }
         return t;
@@ -143,7 +143,7 @@ const NormTable& normTable()
 void RouteSet::build (const RouteStore& store)
 {
     const auto& nt = normTable();
-    n = 0; anyAudio = anyGlobal = anyFollow = anyEnvTime = false;
+    n = 0; anyAudio = anyGlobal = anyFollow = anyEnvTime = anySceneXY = anyMutAmt = false;
     for (int i = 0; i < kNumRoutes; ++i)
     {
         const RouteConfig c = store.get (i);
@@ -159,6 +159,7 @@ void RouteSet::build (const RouteStore& store)
         anyGlobal |= nt.global[c.dst];
         anyEnvTime |= nt.envTime[c.dst];
         anySceneXY |= c.dst == P_sceneX || c.dst == P_sceneY;
+        anyMutAmt |= c.dst == P_mutAmount;
         anyFollow |= kModSrcKind[c.src] == K_FOLLOW || kModSrcKind[r.via] == K_FOLLOW;
     }
 }

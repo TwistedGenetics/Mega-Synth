@@ -41,7 +41,7 @@ public:
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawTabButton (juce::TabBarButton&, juce::Graphics&, bool over, bool down) override;
-    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 109; }
+    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 100; }
 };
 
 // Slider that hands right-clicks to its owner instead of dragging.
@@ -326,6 +326,11 @@ private:
     uint32_t lastRouteVersion = 0;
     tgui::XYPad* xyPad = nullptr;
     juce::Label* dnaInfo = nullptr;
+    juce::TextButton mutNew { "New seed" }, mutPrev { "<" }, mutNext { ">" }, mutCommit { "Commit" };
+    juce::Label mutSeedLabel, mutHistLabel;
+    juce::OwnedArray<juce::ToggleButton> mutLocks;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> mutLockAtts;
+    int lastSeedShown = -1, lastHistCount = -1;
     tgui::CaptureView* capView = nullptr;
     juce::TextButton capRecord { "Record" }, capSave { "Save WAV..." };
     juce::OwnedArray<juce::TextButton> capSends;

@@ -23,7 +23,7 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 
 ## Using it
 
-- **Tabs**: Oscillators (Osc 1-3, Sub, Wavetable 1 and 2, Complex, SuperSaw), Mixer & Routing (levels, FX returns, FM and ring matrices), Filter & Env, Effects, Modulation (LFOs, mod envelopes, assignments) and Sequencer.
+- **Tabs**: Oscillators (Osc 1-3, Sub, Wavetable 1 and 2, Complex, SuperSaw), Mixer (levels, FX returns, FM and ring matrices), Filter & Env, Effects, Modulation (LFOs, mod envelopes, assignments) and Sequencer.
 - **Wavetable 1 and 2** each play a WAV (or AIFF/FLAC) loaded with their own *Load Sample* button. Wavetable 1 is the browser's Osc 4 and can be used in the FM and ring matrices; Wavetable 2 is new, plays alongside it, and can be modulated (level, detune, scan, loop points). Samples are saved inside your DAW project and in patch files.
 - **Keyboard**: click the on-screen keys. Inside a DAW the plugin never takes the computer keyboard, so clicking its controls doesn't interrupt your DAW's QWERTY keyboard (in Ableton press **M** for Computer MIDI Keyboard). The standalone app plays from A W S E D F T G Y H U J K with Z / X for octave, like the browser version.
 - **MIDI**: notes, pitch bend (range on the header), mod wheel → LFO 1 depth, CC7 → master volume. Aftertouch, poly aftertouch, MPE and any two CCs are available as modulation sources.
@@ -59,6 +59,10 @@ These run once on all notes together, before the effects (per-note versions woul
 ## Cell Instability (Modulation tab)
 
 Each note gets its own smooth wandering noise on a set of targets, so no two notes (or two moments of a held note) are quite the same. **Amount** scales everything (0 = off), **Rate** sets how fast it wanders. Per-target depths: Pitch (up to +/-50 cents), Cutoff, Resonance, Osc Levels (the balance between oscillators shifts; switched-off oscillators stay off), Wave Fold, WT Scan, FM (only where FM is already up), DNA Splice, Envelopes (attack/decay/release, set per note at note-on) and Resonator. The noise glides with a smooth curve, so it never steps or clicks. It's also a Mod Matrix source ("Cell Instability") for anything else.
+
+## Master Mutate (Mutate tab)
+
+**Mutate** adds a seeded variation on top of the patch without moving any knob: 0% is exactly your patch, and the same patch, seed and amount always give exactly the same sound. **New seed** picks a random seed, **<** / **>** step through neighbouring seeds. 13 **locks** (Pitch, Oscillators, Wavetables, Levels, Filter, Envelopes, Modulation, Effects, DNA Splice, Wave / Audio-rate, Resonator, Granular / Spectral, Feedback) keep a group exactly as it is. Offsets move together within a group and are shaped: short attacks stay short until extreme amounts, feedback tends downwards, FM / modulator ratios lean to harmonic values, pitch moves in whole semitones, anything switched off stays off, and waveforms switch only at higher amounts. **Commit** writes the current mutation into the knobs and sets Mutate back to 0 (undoable; committed mutations are listed and saved with the patch). Mutate is an ordinary parameter, so it can be automated, put on a macro, or driven per note from the Mod Matrix (e.g. velocity -> Mutate). The sequencer, master volume, macros and scene positions are never mutated.
 
 ## Modulation matrix (Mod Matrix tab)
 

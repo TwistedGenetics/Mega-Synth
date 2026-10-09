@@ -498,7 +498,22 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(ciFm,        "Instability > FM", 0, 1, 0.3, 0.01, 0) \
     F(ciDna,       "Instability > DNA Splice", 0, 1, 0.3, 0.01, 0) \
     F(ciEnv,       "Instability > Envelopes", 0, 1, 0.3, 0.01, 0) \
-    F(ciReso,      "Instability > Resonator", 0, 1, 0.3, 0.01, 0)
+    F(ciReso,      "Instability > Resonator", 0, 1, 0.3, 0.01, 0) \
+    F(mutAmount,   "Mutate", 0, 1, 0, 0.001, 0) \
+    F(mutSeed,     "Mutate Seed", 0, 999999, 1, 1, 0) \
+    B(mutLock1, "Mutate Lock 1", false) \
+    B(mutLock2, "Mutate Lock 2", false) \
+    B(mutLock3, "Mutate Lock 3", false) \
+    B(mutLock4, "Mutate Lock 4", false) \
+    B(mutLock5, "Mutate Lock 5", false) \
+    B(mutLock6, "Mutate Lock 6", false) \
+    B(mutLock7, "Mutate Lock 7", false) \
+    B(mutLock8, "Mutate Lock 8", false) \
+    B(mutLock9, "Mutate Lock 9", false) \
+    B(mutLock10, "Mutate Lock 10", false) \
+    B(mutLock11, "Mutate Lock 11", false) \
+    B(mutLock12, "Mutate Lock 12", false) \
+    B(mutLock13, "Mutate Lock 13", false)
 
 enum ParamIndex
 {

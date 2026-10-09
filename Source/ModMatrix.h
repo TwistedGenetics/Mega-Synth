@@ -270,7 +270,7 @@ struct RouteSet
 {
     int n = 0;
     ResolvedRoute r[kNumRoutes];
-    bool anyAudio = false, anyGlobal = false, anyFollow = false, anyEnvTime = false, anySceneXY = false;
+    bool anyAudio = false, anyGlobal = false, anyFollow = false, anyEnvTime = false, anySceneXY = false, anyMutAmt = false;
     void build (const RouteStore&);
 };
 

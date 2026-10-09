@@ -13,6 +13,7 @@
 #include "Mut/Spectral.h"
 #include "Mut/FeedbackMatrix.h"
 #include "Mut/Instability.h"
+#include "Mut/Mutator.h"
 
 namespace tg
 {
@@ -167,6 +168,8 @@ struct ModContext
     const GlobalModInputs* in = nullptr;
     const SceneStore* scenes = nullptr;
     bool morph = false;      // scene morph on: routes onto Scene X/Y re-morph this voice's parameters
+    const MutationTable* mut = nullptr;   // set when routes move the Mutate amount: each voice mutates itself
+    uint32_t lockMask = 0;
     bool any() const { return routes != nullptr && routes->n > 0; }
 };
 
@@ -413,7 +416,14 @@ private:
     const SceneStore* scenes = nullptr;
     RouteSet routeSet;
     RouteState globalRouteState;
-    Snapshot fxSnap;
+    Snapshot fxSnap, mutSnap, noteSnap;
+    MutationTable mutTab;
+    uint32_t mutLockMask (const Snapshot& s) const
+    {
+        uint32_t m = 0;
+        for (int k = 0; k < ML_COUNT; ++k) if (s.v[P_mutLock1 + k] > 0.5f) m |= 1u << k;
+        return m;
+    }
     float liveScratch[P_COUNT] {};
     float globalSrc[MS_COUNT] {};
 };

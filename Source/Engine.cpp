@@ -667,6 +667,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 applyRoutes (*mc.routes, modSnap.v, modSnap.v, srcV, rstate, lastDt, RF_All, liveOut, RP_AfterScene);
             }
             else applyRoutes (*mc.routes, s.v, modSnap.v, srcV, rstate, lastDt, RF_All, liveOut);
+            if (mc.mut != nullptr) applyMutation (*mc.mut, modSnap.v[P_mutAmount], mc.lockMask, modSnap.v);
             sp = &modSnap;
         }
         if (ciOn)
@@ -1299,7 +1300,17 @@ void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const S
         routeSet.build (*routeStore);
         mc.routes = &routeSet; mc.in = modIn; mc.scenes = scenes; mc.morph = s.v[P_sceneMorph] > 0.5f;
     }
-    slot->start (key, freq, glide, o, s, ++orderCounter, mc);
+    // a new note starts from the mutated patch (envelope times are read now)
+    const Snapshot* ns = &s;
+    if (s.v[P_mutAmount] > 1.0e-4f)
+    {
+        const uint32_t seed = (uint32_t) std::lround (s.v[P_mutSeed]);
+        if (seed != mutTab.seed) mutTab.build (seed);
+        noteSnap = s;
+        applyMutation (mutTab, s.v[P_mutAmount], mutLockMask (s), noteSnap.v);
+        ns = &noteSnap;
+    }
+    slot->start (key, freq, glide, o, *ns, ++orderCounter, mc);
     lastFreq = freq;
 }
 
@@ -1313,8 +1324,22 @@ void Engine::allNotesOff()
     for (auto& v : voices) if (v.active) v.release();
 }
 
-void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, const WaveSample* const* wavs)
+void Engine::render (float* L, float* R, int numSamples, const Snapshot& sIn, const WaveSample* const* wavs)
 {
+    // ---- Master Mutate: seeded offsets on top of the patch (the knobs are never changed)
+    const uint32_t seed = (uint32_t) std::lround (sIn.v[P_mutSeed]);
+    if (seed != mutTab.seed) mutTab.build (seed);
+    const uint32_t lockMask = mutLockMask (sIn);
+    const bool mutRouted = routeStore != nullptr && [&] { RouteSet tmp; tmp.build (*routeStore); return tmp.anyMutAmt; }();
+    const Snapshot* base = &sIn;
+    if (! mutRouted && sIn.v[P_mutAmount] > 1.0e-4f)
+    {
+        mutSnap = sIn;
+        applyMutation (mutTab, sIn.v[P_mutAmount], lockMask, mutSnap.v);
+        base = &mutSnap;
+    }
+    const Snapshot& s = *base;
+
     Voice* newest = nullptr;
     for (auto& v : voices) if (v.active && (! newest || v.order > newest->order)) newest = &v;
 
@@ -1323,6 +1348,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, cons
     {
         routeSet.build (*routeStore);
         mc.routes = &routeSet; mc.in = modIn; mc.scenes = scenes; mc.morph = s.v[P_sceneMorph] > 0.5f;
+        if (mutRouted) { mc.mut = &mutTab; mc.lockMask = lockMask; }
     }
     std::fill (std::begin (liveScratch), std::end (liveScratch), 0.0f);
 
@@ -1358,6 +1384,12 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, cons
         }
         else applyRoutes (routeSet, s.v, fxSnap.v, srcW, globalRouteState, dt, RF_Global, liveScratch);
         fs = &fxSnap;
+    }
+    if (mutRouted && s.v[P_mutAmount] > 1.0e-4f)
+    {
+        // the voices mutate themselves (their Mutate amount is modulated); the effects use the knob's amount
+        if (fs != &fxSnap) { fxSnap = s; fs = &fxSnap; }
+        applyMutation (mutTab, s.v[P_mutAmount], lockMask, fxSnap.v, true);
     }
     // ---- bus mutation stages, then the effects
     {

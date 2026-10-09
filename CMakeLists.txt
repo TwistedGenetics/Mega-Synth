@@ -34,6 +34,7 @@ set(MEGASYNTH_SOURCES
     Source/Engine.cpp
     Source/Registry.cpp
     Source/ModMatrix.cpp
+    Source/Mut/Mutator.cpp
     Source/Sequencer.cpp
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp)

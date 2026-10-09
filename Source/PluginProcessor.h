@@ -75,6 +75,11 @@ public:
     void setRawCapture (const juce::AudioBuffer<float>& b, double rate) { capRaw = b; capRate = rate; }
     juce::var captureToVar() const;
     void captureFromVar (const juce::var&);
+    // ---- Master Mutate (message thread)
+    void mutateNewSeed();                    // a fresh random seed
+    void mutateStepSeed (int delta);         // previous / next seed
+    void commitMutation();                   // bake the current mutation into the knobs; Mutate goes back to 0
+    juce::StringArray getMutationHistory() const { const juce::ScopedLock sl (nameLock); return mutHistory; }
     juce::String getMacroName (int k) const;
     void setMacroName (int k, const juce::String&);
 
@@ -156,6 +161,7 @@ private:
     bool lastMorph = false;
     uint32_t lastScenesVersion = 0;
     juce::String macroNames[8];
+    juce::StringArray mutHistory;            // committed mutations, oldest first
     juce::String macroNamesJoined() const;
     void setMacroNamesJoined (const juce::String&);
     juce::CriticalSection historyLock;

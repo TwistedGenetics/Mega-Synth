@@ -13,7 +13,7 @@ namespace
     bool isNewPluginParam (const juce::String& id)
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
-            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci");
+            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -554,6 +554,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("sceneEdit", getEditScene(), nullptr);
     state.setProperty ("macroNames", macroNamesJoined(), nullptr);
     state.setProperty ("capture", juce::JSON::toString (captureToVar(), true), nullptr);
+    state.setProperty ("mutHistory", getMutationHistory().joinIntoString ("|"), nullptr);
     state.setProperty ("patchName", getPatchName(), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
@@ -587,6 +588,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     sceneEditIndex = juce::jlimit (0, 3, (int) tree.getProperty ("sceneEdit", 0));
     setMacroNamesJoined (tree.getProperty ("macroNames").toString());
     captureFromVar (juce::JSON::parse (tree.getProperty ("capture").toString()));
+    { const juce::ScopedLock sl (nameLock); mutHistory.clear(); mutHistory.addTokens (tree.getProperty ("mutHistory").toString(), "|", {}); mutHistory.removeEmptyStrings(); }
     lastMorph = raw[P_sceneMorph]->load() > 0.5f;
 
     for (int k = 0; k < 2; ++k)
@@ -644,6 +646,11 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
     root->setProperty ("scenes", scenes.toVar());
     root->setProperty ("sceneEdit", getEditScene());
     root->setProperty ("capture", captureToVar());
+    {
+        juce::Array<juce::var> mh;
+        for (auto& h : getMutationHistory()) mh.add (h);
+        root->setProperty ("mutationHistory", mh);
+    }
     {
         juce::Array<juce::var> names;
         for (int k = 0; k < 8; ++k) names.add (getMacroName (k));
@@ -758,6 +765,9 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         for (int k = 0; k < 8; ++k) setMacroName (k, names.isArray() && k < names.size() ? names[k].toString() : juce::String());
         lastMorph = raw[P_sceneMorph]->load() > 0.5f;
         captureFromVar (patch["capture"]);
+        const juce::ScopedLock sl (nameLock);
+        mutHistory.clear();
+        if (patch["mutationHistory"].isArray()) for (auto& h : *patch["mutationHistory"].getArray()) mutHistory.add (h.toString());
     }
     {
         const juce::String n = patch["name"].toString();
@@ -1059,6 +1069,50 @@ void MegaSynthProcessor::syncSceneEdits()
         const float plain = raw[(size_t) i]->load();
         if (std::abs (normFast (nt, i, plain) - scenes.v[k][i].load()) > 1.0e-6f) scenes.storeOne (k, i, plain);
     }
+}
+
+//==============================================================================
+void MegaSynthProcessor::mutateNewSeed()
+{
+    auto* p = params[P_mutSeed];
+    p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 ((float) rng.nextInt (1000000))); p->endChangeGesture();
+}
+
+void MegaSynthProcessor::mutateStepSeed (int delta)
+{
+    auto* p = params[P_mutSeed];
+    const int cur = juce::roundToInt (raw[P_mutSeed]->load());
+    const int nv = ((cur + delta) % 1000000 + 1000000) % 1000000;
+    p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 ((float) nv)); p->endChangeGesture();
+}
+
+void MegaSynthProcessor::commitMutation()
+{
+    const float amount = raw[P_mutAmount]->load();
+    if (amount <= 1.0e-4f) return;
+    float v[P_COUNT];
+    for (int i = 0; i < P_COUNT; ++i) v[i] = raw[(size_t) i]->load();
+    tg::MutationTable t;
+    t.build ((uint32_t) juce::roundToInt (v[P_mutSeed]));
+    uint32_t mask = 0;
+    for (int k = 0; k < tg::ML_COUNT; ++k) if (v[P_mutLock1 + k] > 0.5f) mask |= 1u << k;
+    float out[P_COUNT];
+    std::copy (v, v + P_COUNT, out);
+    tg::applyMutation (t, amount, mask, out);
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        if (out[i] == v[i]) continue;
+        auto* p = params[(size_t) i];
+        p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 (out[i])); p->endChangeGesture();
+    }
+    auto* a = params[P_mutAmount];
+    a->beginChangeGesture(); a->setValueNotifyingHost (0.0f); a->endChangeGesture();
+    {
+        const juce::ScopedLock sl (nameLock);
+        mutHistory.add ("Seed #" + juce::String (juce::roundToInt (v[P_mutSeed])) + " at " + juce::String (juce::roundToInt (amount * 100.0f)) + "%");
+        while (mutHistory.size() > 50) mutHistory.remove (0);
+    }
+    pushHistory ("Commit mutation");
 }
 
 //==============================================================================

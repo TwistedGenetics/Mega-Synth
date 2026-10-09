@@ -1211,7 +1211,7 @@ void MegaSynthEditor::buildPages()
 
     // ---------------------------------------------------------------- Mixer & FM
     {
-        auto* page = addPage ("Mixer & Routing");
+        auto* page = addPage ("Mixer");
         auto* lv = sec (page, "Oscillator Levels", col::mixer);
         for (auto [idx, n] : { std::pair<int, const char*> { P_osc1Gain, "Osc 1" }, { P_osc2Gain, "Osc 2" }, { P_osc3Gain, "Osc 3" }, { P_subGain, "Sub" },
                                { P_osc4Gain, "WT 1" }, { P_wt2Gain, "WT 2" }, { P_complexGain, "Complex" }, { P_supersawGain, "SuperSaw" }, { P_masterVolume, "Master" } })
@@ -1675,7 +1675,7 @@ void MegaSynthEditor::buildPages()
 
     // ---------------------------------------------------------------- Macros & Scenes
     {
-        auto* page = addPage ("Macros & Scenes");
+        auto* page = addPage ("Macros/Scenes");
         auto* macSec = sec (page, "Macros  (right-click any knob > Assign to macro; double-click a name to rename)", col::accent);
         for (int i = 0; i < 8; ++i) macroCells.add (page->own (new MacroCell (proc, i)));
         auto* scSec = sec (page, "Scenes", col::mod);
@@ -1745,6 +1745,69 @@ void MegaSynthEditor::buildPages()
             sx->setBounds (x, y + 250, 72, 84);
             sy->setBounds (x + 80, y + 250, 72, 84);
             help->setBounds (x + 300, y, W - g - 12 - (x + 300), page->getHeight() - y - g - 8);
+        };
+    }
+
+    // ---------------------------------------------------------------- Master Mutate
+    {
+        auto* page = addPage ("Mutate");
+        auto* ms = sec (page, "Master Mutate  (seeded variations on top of your patch; the knobs don't move until you Commit)", col::complex);
+        auto* big = page->own (new Knob (proc, P_mutAmount, "Mutate", col::complex));
+        mutSeedLabel.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
+        mutSeedLabel.setColour (juce::Label::textColourId, col::text);
+        mutSeedLabel.setJustificationType (juce::Justification::centred);
+        mutSeedLabel.setTooltip ("The seed: the same patch, seed and amount always give exactly the same sound");
+        mutNew.setTooltip ("A new random seed");
+        mutPrev.setTooltip ("Previous seed");
+        mutNext.setTooltip ("Next seed");
+        mutCommit.setTooltip ("Bake the current mutation into the knobs (Mutate goes back to 0). Undo reverses it.");
+        mutNew.onClick = [this] { proc.mutateNewSeed(); };
+        mutPrev.onClick = [this] { proc.mutateStepSeed (-1); };
+        mutNext.onClick = [this] { proc.mutateStepSeed (1); };
+        mutCommit.onClick = [this]
+        {
+            if (proc.param (P_mutAmount)->getValue() <= 0.0001f) { setStatus ("Turn Mutate up first"); return; }
+            proc.commitMutation();
+            setStatus ("Mutation committed to the knobs (Undo to go back)");
+        };
+        for (auto* b : { &mutNew, &mutPrev, &mutNext, &mutCommit }) page->addAndMakeVisible (*b);
+        page->addAndMakeVisible (mutSeedLabel);
+        auto* lockTitle = page->own (new juce::Label ({}, "Locks  (a locked group never mutates)"));
+        lockTitle->setColour (juce::Label::textColourId, col::muted);
+        lockTitle->setFont (juce::Font (juce::FontOptions (12.5f, juce::Font::bold)));
+        for (int k = 0; k < ML_COUNT; ++k)
+        {
+            auto* t = mutLocks.add (new juce::ToggleButton (kMutLockNames[k]));
+            t->setColour (juce::ToggleButton::tickColourId, col::complex);
+            mutLockAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[P_mutLock1 + k], *t));
+            page->addAndMakeVisible (t);
+        }
+        mutHistLabel.setColour (juce::Label::textColourId, col::muted);
+        mutHistLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+        mutHistLabel.setJustificationType (juce::Justification::topLeft);
+        page->addAndMakeVisible (mutHistLabel);
+        auto* help = page->own (new juce::Label ({}, "Mutate adds an offset to every unlocked parameter, computed from the seed, the amount and the parameter's own value. "
+            "0% is exactly your patch. Offsets move together within each group (a shared random 'gene'), and are shaped: short attacks stay short "
+            "until extreme amounts, feedback tends to go down rather than up, FM and modulator ratios lean towards harmonic values, pitch moves in "
+            "whole semitones, and anything switched off (a level, a mix, a depth at zero) stays off. Waveforms switch at higher amounts. "
+            "Mutate is a normal parameter: automate it, put it on a macro, or route velocity to it so each note is a different variation."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.5f)));
+        help->setJustificationType (juce::Justification::topLeft);
+        page->onResize = [this, page, ms, big, lockTitle, help]
+        {
+            const int g = 10, W = page->getWidth();
+            ms->setBounds (g, g, W - 2 * g, 280);
+            big->setBounds (g + 20, 44, 140, 150);
+            mutSeedLabel.setBounds (g + 180, 52, 200, 34);
+            mutPrev.setBounds (g + 180, 94, 44, 30);
+            mutNew.setBounds (g + 230, 94, 104, 30);
+            mutNext.setBounds (g + 340, 94, 44, 30);
+            mutCommit.setBounds (g + 180, 140, 204, 34);
+            lockTitle->setBounds (g + 420, 40, 400, 20);
+            for (int k = 0; k < mutLocks.size(); ++k) mutLocks[k]->setBounds (g + 420 + (k % 4) * 180, 64 + (k / 4) * 30, 175, 26);
+            mutHistLabel.setBounds (g + 20, 200, 380, 80);
+            help->setBounds (g + 420, 190, W - 2 * g - 430, 90);
         };
     }
 
@@ -1989,6 +2052,20 @@ void MegaSynthEditor::timerCallback()
                 "Amplitude DNA: B's waveform following A's loudness contour.\nAmount = blend. Character = how fast it follows A.",
                 "Morph / Gene Shuffle: Amount moves from A to B.\nCharacter turns the smooth morph into a cycle-by-cycle shuffle, each cycle taken from A or B (Amount = chance of B)." };
             dnaInfo->setText (info[juce::jlimit (0, 6, mode)], juce::dontSendNotification);
+        }
+    }
+    if (mutSeedLabel.isShowing())
+    {
+        const int seed = juce::roundToInt (proc.param (P_mutSeed)->convertFrom0to1 (proc.param (P_mutSeed)->getValue()));
+        if (seed != lastSeedShown) { lastSeedShown = seed; mutSeedLabel.setText ("Seed #" + juce::String (seed), juce::dontSendNotification); }
+        const auto hist = proc.getMutationHistory();
+        if (hist.size() != lastHistCount)
+        {
+            lastHistCount = hist.size();
+            juce::String t = "Committed: ";
+            if (hist.isEmpty()) t << "none yet";
+            for (int i = std::max (0, hist.size() - 4); i < hist.size(); ++i) t << "\n  " << hist[i];
+            mutHistLabel.setText (t, juce::dontSendNotification);
         }
     }
     if (capView != nullptr && capView->isShowing())

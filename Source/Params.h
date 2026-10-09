@@ -379,7 +379,18 @@ inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT 
     F(mod29Amt, "Mod 29 Amount", -1, 1, 0, 0.001, 0) \
     F(mod30Amt, "Mod 30 Amount", -1, 1, 0, 0.001, 0) \
     F(mod31Amt, "Mod 31 Amount", -1, 1, 0, 0.001, 0) \
-    F(mod32Amt, "Mod 32 Amount", -1, 1, 0, 0.001, 0)
+    F(mod32Amt, "Mod 32 Amount", -1, 1, 0, 0.001, 0) \
+    F(macro1, "Macro 1", 0, 1, 0, 0.001, 0) \
+    F(macro2, "Macro 2", 0, 1, 0, 0.001, 0) \
+    F(macro3, "Macro 3", 0, 1, 0, 0.001, 0) \
+    F(macro4, "Macro 4", 0, 1, 0, 0.001, 0) \
+    F(macro5, "Macro 5", 0, 1, 0, 0.001, 0) \
+    F(macro6, "Macro 6", 0, 1, 0, 0.001, 0) \
+    F(macro7, "Macro 7", 0, 1, 0, 0.001, 0) \
+    F(macro8, "Macro 8", 0, 1, 0, 0.001, 0) \
+    F(sceneX, "Scene X", 0, 1, 0, 0.001, 0) \
+    F(sceneY, "Scene Y", 0, 1, 0, 0.001, 0) \
+    B(sceneMorph, "Scene Morph", false)
 
 enum ParamIndex
 {

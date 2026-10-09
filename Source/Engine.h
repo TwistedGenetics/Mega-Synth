@@ -157,6 +157,8 @@ struct ModContext
 {
     const RouteSet* routes = nullptr;
     const GlobalModInputs* in = nullptr;
+    const SceneStore* scenes = nullptr;
+    bool morph = false;      // scene morph on: routes onto Scene X/Y re-morph this voice's parameters
     bool any() const { return routes != nullptr && routes->n > 0; }
 };
 
@@ -357,7 +359,7 @@ public:
     void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* const* wavs);
 
     // Modulation matrix inputs (owned by the processor; read on the audio thread)
-    void setModulation (const RouteStore* r, const GlobalModInputs* in) { routeStore = r; modIn = in; }
+    void setModulation (const RouteStore* r, const GlobalModInputs* in, const SceneStore* sc = nullptr) { routeStore = r; modIn = in; scenes = sc; }
     // For the editor: how far each destination is currently moved (normalised), and source values
     std::array<std::atomic<float>, P_COUNT> liveOffset {};
     std::array<std::atomic<float>, MS_COUNT> liveSrc {};
@@ -376,6 +378,7 @@ private:
 
     const RouteStore* routeStore = nullptr;
     const GlobalModInputs* modIn = nullptr;
+    const SceneStore* scenes = nullptr;
     RouteSet routeSet;
     RouteState globalRouteState;
     Snapshot fxSnap;

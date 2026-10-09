@@ -47,6 +47,17 @@ public:
     int addRoute (int src, int destParam, float depth);
     void clearRoute (int slot);
 
+    // ---- macros and scenes (message thread)
+    tg::SceneStore scenes;
+    void storeScene (int k);                 // the panel's current sound becomes scene k
+    void recallScene (int k);                // load scene k onto the panel
+    void editScene (int k);                  // with morph on: the panel now shows and edits scene k
+    int getEditScene() const { return sceneEditIndex.load(); }
+    void clearScenes();
+    void syncSceneEdits();                   // called by the timer: panel edits go into the edited scene
+    juce::String getMacroName (int k) const;
+    void setMacroName (int k, const juce::String&);
+
     // Sample slots: 0 = Osc 4 / WT 1, 1 = WT 2
     bool loadSampleFile (const juce::File&, int slot = 0);
     bool loadSampleData (const juce::MemoryBlock&, const juce::String& name, int slot = 0);
@@ -91,7 +102,8 @@ private:
     struct Snapshot
     {
         juce::ValueTree params;
-        juce::String steps, patchName, label, routes;
+        juce::String steps, patchName, label, routes, scenes, macroNames;
+        int sceneEdit = 0;
         std::shared_ptr<const juce::MemoryBlock> wave[2];
         juce::String waveName[2];
     };
@@ -109,6 +121,12 @@ private:
     int snapshotDelay = 0;
     uint32_t lastStepsVersion = 0, lastRoutesVersion = 0;
     tg::GlobalModInputs modInputs;
+    std::atomic<int> sceneEditIndex { 0 };
+    bool lastMorph = false;
+    uint32_t lastScenesVersion = 0;
+    juce::String macroNames[8];
+    juce::String macroNamesJoined() const;
+    void setMacroNamesJoined (const juce::String&);
     juce::CriticalSection historyLock;
 
     std::array<juce::RangedAudioParameter*, tg::P_COUNT> params {};

@@ -128,6 +128,10 @@ const NormTable& normTable()
             t.envTime[i] = m.category == Category::Env && m.unit == "s";
             t.modulatable[i] = m.modulatable;
             t.audioRate[i] = m.audioRate;
+            const bool modAmt = m.id.startsWith ("mod") && m.id.endsWith ("Amt");
+            t.scene[i] = (m.modulatable || m.scale == Scale::Choice) && m.category != Category::Seq && ! modAmt
+                         && ! m.id.startsWith ("macro") && i != P_sceneX && i != P_sceneY && i != P_masterVolume;
+            t.discrete[i] = m.scale == Scale::Choice;
         }
         return t;
     }();
@@ -148,11 +152,12 @@ void RouteSet::build (const RouteStore& store)
         ResolvedRoute& r = this->r[n++];
         r.slot = i; r.src = c.src; r.dst = c.dst; r.curve = c.curve; r.via = kModSrcKind[c.via] == K_AUDIO ? MS_None : c.via;
         r.unipolar = c.unipolar; r.audio = audioSrc;
-        r.toAmount = c.dst >= P_mod1Amt && c.dst < P_mod1Amt + kNumRoutes;
+        r.early = (c.dst >= P_mod1Amt && c.dst < P_mod1Amt + kNumRoutes) || (c.dst >= P_macro1 && c.dst < P_macro1 + 8);
         r.viaDepth = c.viaDepth; r.smoothMs = c.smoothMs;
         anyAudio |= audioSrc;
         anyGlobal |= nt.global[c.dst];
         anyEnvTime |= nt.envTime[c.dst];
+        anySceneXY |= c.dst == P_sceneX || c.dst == P_sceneY;
         anyFollow |= kModSrcKind[c.src] == K_FOLLOW || kModSrcKind[r.via] == K_FOLLOW;
     }
 }
@@ -175,7 +180,7 @@ float shapeRouteValue (const ResolvedRoute& r, const float* srcV, RouteState& st
     }
     if (r.curve == MC_Stepped)
     {
-        if (st.first || st.holdPh < 0.0) st.hold[r.slot] = x;
+        if (st.first || st.tick) st.hold[r.slot] = x;
         x = st.hold[r.slot];
     }
     x = applyCurve (r.curve, x);
@@ -189,28 +194,31 @@ float shapeRouteValue (const ResolvedRoute& r, const float* srcV, RouteState& st
     return x;
 }
 
-void applyRoutes (const RouteSet& rs, const float* baseV, float* outV, const float* srcV, RouteState& st, float dt,
-                  int filter, float* liveOffsetOut)
+void applyRoutes (const RouteSet& rs, const float* baseV, float* outV, float* srcV, RouteState& st, float dt,
+                  int filter, float* liveOffsetOut, int phase)
 {
     const auto& nt = normTable();
 
-    // Stepped curve clock: a negative phase marks "update the held values now"
-    st.holdPh += dt * kStepHz;
-    const bool tick = st.holdPh >= 1.0;
-    if (tick) { st.holdPh -= std::floor (st.holdPh); st.holdPh = -1.0 + st.holdPh; }
+    // Stepped curve clock (advanced once per block, by the first phase)
+    if (phase != RP_AfterScene)
+    {
+        st.holdPh += dt * kStepHz;
+        st.tick = st.holdPh >= 1.0;
+        if (st.tick) st.holdPh -= std::floor (st.holdPh);
+    }
 
-    int dsts[kNumRoutes]; float offs[kNumRoutes]; int nd = 0;
+    int dsts[kNumRoutes]; float offs[kNumRoutes]; float bases[kNumRoutes]; int nd = 0;
     auto accumulate = [&] (int dst, float off)
     {
         for (int k = 0; k < nd; ++k) if (dsts[k] == dst) { offs[k] += off; return; }
-        dsts[nd] = dst; offs[nd] = off; ++nd;
+        dsts[nd] = dst; offs[nd] = off; bases[nd] = baseV[dst]; ++nd;
     };
     auto commit = [&] (int from)
     {
         for (int k = from; k < nd; ++k)
         {
             const int d = dsts[k];
-            const float b = normFast (nt, d, baseV[d]);
+            const float b = normFast (nt, d, bases[k]);
             const float m = juce::jlimit (0.0f, 1.0f, b + offs[k]);
             outV[d] = plainFast (nt, d, m);
             if (liveOffsetOut != nullptr) liveOffsetOut[d] = m - b;
@@ -218,34 +226,123 @@ void applyRoutes (const RouteSet& rs, const float* baseV, float* outV, const flo
     };
     auto wanted = [&] (int dst)
     {
+        const bool xy = dst == P_sceneX || dst == P_sceneY;
+        if (phase == RP_SceneXY) return xy;
+        if (phase == RP_AfterScene && xy) return false;
         if (filter == RF_Global) return nt.global[dst];
         if (filter == RF_EnvTime) return nt.envTime[dst];
         return true;
     };
 
-    // pass 1: routes that modulate another route's depth
-    for (int i = 0; i < rs.n; ++i)
+    // pass 1: routes onto other routes' depths and onto macros
+    if (phase != RP_AfterScene)
     {
-        const ResolvedRoute& r = rs.r[i];
-        if (r.audio || ! r.toAmount) continue;
-        const float x = shapeRouteValue (r, srcV, st, dt);
-        accumulate (r.dst, baseV[P_mod1Amt + r.slot] * x);
+        for (int i = 0; i < rs.n; ++i)
+        {
+            const ResolvedRoute& r = rs.r[i];
+            if (r.audio || ! r.early) continue;
+            const float x = shapeRouteValue (r, srcV, st, dt);
+            accumulate (r.dst, baseV[P_mod1Amt + r.slot] * x);
+        }
+        commit (0);
+        for (int k = 0; k < nd; ++k)
+            if (dsts[k] >= P_macro1 && dsts[k] < P_macro1 + 8) srcV[MS_Macro1 + dsts[k] - P_macro1] = outV[dsts[k]];
     }
     const int firstNormal = nd;
-    commit (0);
 
-    // pass 2: everything else, with depths that may just have been modulated
+    // pass 2: everything else, with depths (and macros) that may just have been modulated
     for (int i = 0; i < rs.n; ++i)
     {
         const ResolvedRoute& r = rs.r[i];
-        if (r.audio || r.toAmount || ! wanted (r.dst)) continue;
+        if (r.audio || r.early || ! wanted (r.dst)) continue;
         const float x = shapeRouteValue (r, srcV, st, dt);
         accumulate (r.dst, outV[P_mod1Amt + r.slot] * x);
     }
     commit (firstNormal);
 
-    if (tick) st.holdPh += 1.0;
-    st.first = false;
+    if (phase != RP_SceneXY) st.first = false;
+}
+
+//==============================================================================
+void SceneStore::store (int k, const float* plain)
+{
+    const auto& nt = normTable();
+    for (int i = 0; i < P_COUNT; ++i) if (nt.scene[i]) v[k][i].store (normFast (nt, i, plain[i]), std::memory_order_relaxed);
+    stored[k].store (true);
+    version.fetch_add (1);
+}
+
+void SceneStore::storeOne (int k, int param, float plain)
+{
+    v[k][param].store (normFast (normTable(), param, plain), std::memory_order_relaxed);
+    version.fetch_add (1);
+}
+
+float SceneStore::plainValue (int k, int param) const
+{
+    return plainFast (normTable(), param, v[k][param].load (std::memory_order_relaxed));
+}
+
+juce::var SceneStore::toVar() const
+{
+    auto* root = new juce::DynamicObject();
+    const auto& nt = normTable();
+    for (int k = 0; k < 4; ++k)
+    {
+        if (! stored[k].load()) { root->setProperty (juce::String::charToString ((juce::juce_wchar) ('A' + k)), juce::var()); continue; }
+        auto* o = new juce::DynamicObject();
+        for (int i = 0; i < P_COUNT; ++i)
+            if (nt.scene[i]) o->setProperty (kParamIds[i], plainValue (k, i));
+        root->setProperty (juce::String::charToString ((juce::juce_wchar) ('A' + k)), juce::var (o));
+    }
+    return juce::var (root);
+}
+
+void SceneStore::fromVar (const juce::var& data)
+{
+    clear();
+    if (! data.isObject()) return;
+    const auto& nt = normTable();
+    for (int k = 0; k < 4; ++k)
+    {
+        const juce::var sc = data[juce::Identifier (juce::String::charToString ((juce::juce_wchar) ('A' + k)))];
+        auto* o = sc.getDynamicObject();
+        if (o == nullptr) continue;
+        // parameters missing from an older scene keep their defaults
+        for (int i = 0; i < P_COUNT; ++i)
+        {
+            if (! nt.scene[i]) continue;
+            const float plain = o->hasProperty (kParamIds[i]) ? (float) (double) o->getProperty (kParamIds[i]) : meta (i).def;
+            v[k][i].store (normFast (nt, i, plain), std::memory_order_relaxed);
+        }
+        stored[k].store (true);
+    }
+    version.fetch_add (1);
+}
+
+void morphScenes (const SceneStore& sc, float x, float y, float* v)
+{
+    const auto& nt = normTable();
+    float w[4];
+    sceneWeights (x, y, w);
+    float total = 0.0f; int nearest = -1;
+    for (int k = 0; k < 4; ++k)
+    {
+        if (! sc.stored[k].load (std::memory_order_relaxed)) { w[k] = 0.0f; continue; }
+        total += w[k];
+        if (nearest < 0 || w[k] > w[nearest]) nearest = k;
+    }
+    if (nearest < 0) return;              // nothing stored: the panel's values stand
+    if (total <= 1.0e-6f) { for (auto& x2 : w) x2 = 0.0f; w[nearest] = 1.0f; total = 1.0f; }
+    for (auto& x2 : w) x2 /= total;
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        if (! nt.scene[i]) continue;
+        if (nt.discrete[i]) { v[i] = std::round (plainFast (nt, i, sc.v[nearest][i].load (std::memory_order_relaxed))); continue; }
+        float n = 0.0f;
+        for (int k = 0; k < 4; ++k) if (w[k] > 0.0f) n += w[k] * sc.v[k][i].load (std::memory_order_relaxed);
+        v[i] = plainFast (nt, i, n);
+    }
 }
 
 } // namespace tg

@@ -41,7 +41,7 @@ public:
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawTabButton (juce::TabBarButton&, juce::Graphics&, bool over, bool down) override;
-    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 150; }
+    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 148; }
 };
 
 // Slider that hands right-clicks to its owner instead of dragging.
@@ -164,6 +164,39 @@ public:
     void flash() { highlight = true; repaint(); }
 };
 
+// XY pad for the scene morph (A top-left, B top-right, C bottom-left, D bottom-right)
+class XYPad : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit XYPad (MegaSynthProcessor&);
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void update();   // timer
+private:
+    void setFrom (juce::Point<float>);
+    MegaSynthProcessor& proc;
+    float x = 0, y = 0, lx = 0, ly = 0;
+    bool morph = false, stored[4] {};
+    int edit = 0;
+};
+
+// A macro knob with an editable name and a count of what it drives
+class MacroCell : public juce::Component
+{
+public:
+    MacroCell (MegaSynthProcessor&, int index);
+    void resized() override;
+    void paint (juce::Graphics&) override;
+    void update();
+    Knob knob;
+private:
+    MegaSynthProcessor& proc;
+    const int index;
+    juce::Label name, info;
+};
+
 class StepCell : public juce::Component
 {
 public:
@@ -263,6 +296,14 @@ private:
     juce::TextEditor matrixSearch;
     int matrixTab = -1;
     uint32_t lastRouteVersion = 0;
+    tgui::XYPad* xyPad = nullptr;
+    juce::Array<tgui::MacroCell*> macroCells;
+    juce::TextButton sceneEditBtn[4], sceneStoreBtn[4];
+    juce::Label sceneState[4];
+    juce::ToggleButton morphBtn { "Morph between scenes" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> morphAtt;
+    juce::TextButton clearScenesBtn { "Clear scenes" };
+    void updateSceneButtons();
     void showRoute (int slot);
     juce::Array<tgui::StepCell*> stepCells;
     juce::TextButton seqRandomBtn { "Random Phrase" };

@@ -490,6 +490,77 @@ int main()
             CHECK (p->routes.get (3).active(), "undo restores a route");
         }
 
+        // ---- Stage 4: macros
+        {
+            std::cout << "Macros & scenes" << std::endl;
+            auto p = clean(); route (*p, 0, MS_Macro1, P_osc1Semi, 0.5f);
+            render (*p, 1.0, note (57, 1.0f), &cap);
+            CHECK (std::abs (freqOf (cap, 0.2, 0.8) - 220.0) < 2.0, "macro at zero");
+            setP (*p, P_macro1, 1.0f);
+            render (*p, 1.2, note (57, 1.0f), &cap);
+            CHECK (std::abs (freqOf (cap, 0.4, 1.0) - 440.0) < 3.0, "macro at full");
+            // a chain: mod wheel -> macro 2 -> (macro 2 -> osc1 semi)
+            auto q = clean(); route (*q, 0, MS_Macro2, P_osc1Semi, 0.5f); route (*q, 1, MS_ModWheel, P_macro2, 1.0f);
+            auto ev = note (57, 1.0f); ev.insert (ev.begin(), { 0.0, juce::MidiMessage::controllerEvent (1, 1, 127) });
+            render (*q, 1.0, ev, &cap);
+            const double fc = freqOf (cap, 0.2, 0.8);
+            std::cout << "  wheel -> macro -> pitch: " << fc << " Hz" << std::endl;
+            CHECK (std::abs (fc - 440.0) < 3.0, "route onto a macro drives the macro's routes");
+        }
+
+        // ---- Stage 4: scenes
+        {
+            auto p = clean();
+            p->storeScene (0);                                   // A: osc1 +0 st, Standard LP
+            setP (*p, P_osc1Semi, 12.0f); setP (*p, P_filterMode, 12.0f);
+            p->storeScene (1);                                   // B: +12 st, TB-303
+            setP (*p, P_osc1Semi, 0.0f); setP (*p, P_filterMode, 0.0f);
+            CHECK (std::abs (p->scenes.plainValue (1, P_osc1Semi) - 12.0f) < 1e-3f && ! p->scenes.stored[2].load(), "scene store");
+            setP (*p, P_sceneMorph, 1.0f);
+            auto at = [&] (float x) { setP (*p, P_sceneX, x); setP (*p, P_sceneY, 0.0f); render (*p, 1.2, note (57, 1.0f), &cap); return freqOf (cap, 0.4, 1.0); };
+            const double fa = at (0.0f), fb = at (1.0f), fm = at (0.5f);
+            std::cout << "  morph A " << fa << " Hz, B " << fb << " Hz, halfway " << fm << " Hz (expect 220 / 440 / 311)" << std::endl;
+            CHECK (std::abs (fa - 220.0) < 2.0 && std::abs (fb - 440.0) < 3.0 && std::abs (fm - 311.1) < 3.0, "scene morph pitch");
+            // choices come from the nearest scene
+            float v[P_COUNT]; for (int i = 0; i < P_COUNT; ++i) v[i] = 0.0f;
+            morphScenes (p->scenes, 0.8f, 0.0f, v);
+            CHECK ((int) std::lround (v[P_filterMode]) == 12, "nearest scene's filter type");
+            morphScenes (p->scenes, 0.2f, 0.0f, v);
+            CHECK ((int) std::lround (v[P_filterMode]) == 0, "nearest scene's filter type (A)");
+            // velocity -> Scene X: each note morphs on its own
+            setP (*p, P_sceneX, 0.0f);
+            route (*p, 0, MS_Velocity, P_sceneX, 1.0f);
+            render (*p, 1.2, note (57, 1.0f), &cap);
+            const double fv = freqOf (cap, 0.4, 1.0);
+            std::cout << "  velocity -> scene X: " << fv << " Hz" << std::endl;
+            CHECK (std::abs (fv - 440.0) < 3.0, "modulated scene position");
+            p->clearRoute (0);
+
+            // editing with morph on writes into the edited scene
+            p->editScene (1);
+            CHECK (std::abs (p->param (P_osc1Semi)->convertFrom0to1 (p->param (P_osc1Semi)->getValue()) - 12.0f) < 1e-3f, "edit scene recalls it");
+            setP (*p, P_osc1Detune, 25.0f);
+            p->syncSceneEdits();
+            CHECK (std::abs (p->scenes.plainValue (1, P_osc1Detune) - 25.0f) < 0.01f && std::abs (p->scenes.plainValue (0, P_osc1Detune)) < 0.01f, "panel edits go to the edited scene");
+
+            // save / load / patch / undo
+            p->setMacroName (2, "Wobble");
+            juce::MemoryBlock st; p->getStateInformation (st);
+            auto q = make(); q->setStateInformation (st.getData(), (int) st.getSize());
+            CHECK (q->scenes.stored[1].load() && std::abs (q->scenes.plainValue (1, P_osc1Semi) - 12.0f) < 1e-3f && q->getEditScene() == 1
+                   && q->getMacroName (2) == "Wobble", "scenes and macro names in state");
+            const auto json = p->exportBrowserPatch();
+            auto r = make(); r->importBrowserPatch (json);
+            CHECK (r->scenes.stored[0].load() && r->getMacroName (2) == "Wobble" && r->param (P_sceneMorph)->getValue() > 0.5f, "scenes in patch");
+            r->importBrowserPatch (json.replace ("\"scenes\"", "\"x\"").replace ("\"sceneMorph\"", "\"y\""));
+            CHECK (! r->scenes.stored[0].load() && r->param (P_sceneMorph)->getValue() < 0.5f, "patch without scenes clears them");
+            p->pushHistory ("before");
+            p->clearScenes();
+            p->pushHistory ("cleared");
+            p->undo();
+            CHECK (p->scenes.stored[1].load(), "undo restores scenes");
+        }
+
         // stress: every slot in use with random sources, destinations and curves
         {
             auto p = make();

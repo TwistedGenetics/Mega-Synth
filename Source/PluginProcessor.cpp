@@ -12,7 +12,8 @@ namespace
     // and reset to their defaults when a patch without them is loaded.
     bool isNewPluginParam (const juce::String& id)
     {
-        return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"));
+        return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
+            || id.startsWith ("macro") || id.startsWith ("scene");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -115,7 +116,8 @@ MegaSynthProcessor::MegaSynthProcessor()
     }
     formats.registerBasicFormats();
     WaveBank::get();   // build the oscillator tables up front
-    engine.setModulation (&routes, &modInputs);
+    engine.setModulation (&routes, &modInputs, &scenes);
+    normTable();
     addListener (this);
     lastStepsVersion = steps.getVersion();
     lastRoutesVersion = routes.getVersion();
@@ -154,6 +156,7 @@ void MegaSynthProcessor::prepareToPlay (double sr, int block)
 void MegaSynthProcessor::fillSnapshot (int)
 {
     for (int i = 0; i < P_COUNT; ++i) snap.v[i] = raw[(size_t) i]->load (std::memory_order_relaxed);
+    if (snap.v[P_sceneMorph] > 0.5f) morphScenes (scenes, snap.v[P_sceneX], snap.v[P_sceneY], snap.v);
     snap.sampleRate = sampleRate;
     const double ht = hostTempo.load();
     snap.fxTempo = ht > 0 ? ht : (double) snap.f (P_seqTempo);
@@ -399,8 +402,11 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 void MegaSynthProcessor::timerCallback()
 {
     // history: record a snapshot shortly after an edit finishes (knob released, step changed)
+    syncSceneEdits();
     if (! restoring)
     {
+        const auto sv = scenes.version.load();
+        if (sv != lastScenesVersion) { lastScenesVersion = sv; snapshotPending = true; snapshotDelay = 0; }
         const auto v = steps.getVersion();
         if (v != lastStepsVersion) { lastStepsVersion = v; snapshotPending = true; snapshotDelay = 0; }
         const auto rv = routes.getVersion();
@@ -513,6 +519,9 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("stateVersion", kStateVersion, nullptr);
     state.setProperty ("seqSteps", steps.toString(), nullptr);
     state.setProperty ("modRoutes", juce::JSON::toString (routes.toVar(), true), nullptr);
+    state.setProperty ("scenes", juce::JSON::toString (scenes.toVar(), true), nullptr);
+    state.setProperty ("sceneEdit", getEditScene(), nullptr);
+    state.setProperty ("macroNames", macroNamesJoined(), nullptr);
     state.setProperty ("patchName", getPatchName(), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
@@ -542,6 +551,10 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
     if (stepStr.isNotEmpty()) steps.fromString (stepStr);
     routes.fromVar (juce::JSON::parse (tree.getProperty ("modRoutes").toString()));   // none in v1 state
+    scenes.fromVar (juce::JSON::parse (tree.getProperty ("scenes").toString()));
+    sceneEditIndex = juce::jlimit (0, 3, (int) tree.getProperty ("sceneEdit", 0));
+    setMacroNamesJoined (tree.getProperty ("macroNames").toString());
+    lastMorph = raw[P_sceneMorph]->load() > 0.5f;
 
     for (int k = 0; k < 2; ++k)
     {
@@ -595,6 +608,13 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
         root->setProperty ("plugin", juce::var (extra));
     }
     root->setProperty ("modMatrix", routes.toVar());
+    root->setProperty ("scenes", scenes.toVar());
+    root->setProperty ("sceneEdit", getEditScene());
+    {
+        juce::Array<juce::var> names;
+        for (int k = 0; k < 8; ++k) names.add (getMacroName (k));
+        root->setProperty ("macroNames", names);
+    }
 
     static const char* ties[] = { "normal", "tie", "slide", "rest" };
     juce::Array<juce::var> seq;
@@ -698,6 +718,11 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
             else setPlain (i, meta (i).def);
         }
         routes.fromVar (patch["modMatrix"]);
+        scenes.fromVar (patch["scenes"]);
+        sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
+        const juce::var names = patch["macroNames"];
+        for (int k = 0; k < 8; ++k) setMacroName (k, names.isArray() && k < names.size() ? names[k].toString() : juce::String());
+        lastMorph = raw[P_sceneMorph]->load() > 0.5f;
     }
     {
         const juce::String n = patch["name"].toString();
@@ -771,6 +796,10 @@ void MegaSynthProcessor::resetToDefaults()
     tg::StepStore fresh;
     for (int i = 0; i < 32; ++i) steps.set (i, fresh.get (i));
     routes.clearAll();
+    scenes.clear();
+    sceneEditIndex = 0;
+    for (int k = 0; k < 8; ++k) setMacroName (k, {});
+    lastMorph = false;
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
@@ -801,6 +830,9 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
     s.params = apvts.copyState();
     s.steps = steps.toString();
     s.routes = juce::JSON::toString (routes.toVar(), true);
+    s.scenes = juce::JSON::toString (scenes.toVar(), true);
+    s.sceneEdit = getEditScene();
+    s.macroNames = macroNamesJoined();
     s.patchName = getPatchName();
     s.label = label;
     const juce::ScopedLock sl (waveLock);
@@ -810,7 +842,8 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
 
 bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
 {
-    return a.steps == b.steps && a.routes == b.routes && a.patchName == b.patchName
+    return a.steps == b.steps && a.routes == b.routes && a.scenes == b.scenes && a.macroNames == b.macroNames
+        && a.sceneEdit == b.sceneEdit && a.patchName == b.patchName
         && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1]
         && a.params.isEquivalentTo (b.params);
 }
@@ -822,6 +855,11 @@ void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
     steps.fromString (s.steps);
     routes.fromVar (juce::JSON::parse (s.routes));
     lastRoutesVersion = routes.getVersion();
+    scenes.fromVar (juce::JSON::parse (s.scenes));
+    lastScenesVersion = scenes.version.load();
+    sceneEditIndex = s.sceneEdit;
+    setMacroNamesJoined (s.macroNames);
+    lastMorph = raw[P_sceneMorph]->load() > 0.5f;
     setPatchName (s.patchName);
     for (int k = 0; k < 2; ++k)
     {
@@ -921,6 +959,100 @@ void MegaSynthProcessor::clearRoute (int slot)
     p->beginChangeGesture();
     p->setValueNotifyingHost (p->convertTo0to1 (0.0f));
     p->endChangeGesture();
+}
+
+//==============================================================================
+void MegaSynthProcessor::storeScene (int k)
+{
+    if (k < 0 || k > 3) return;
+    float v[P_COUNT];
+    for (int i = 0; i < P_COUNT; ++i) v[i] = raw[(size_t) i]->load();
+    scenes.store (k, v);
+}
+
+void MegaSynthProcessor::recallScene (int k)
+{
+    if (k < 0 || k > 3 || ! scenes.stored[k].load()) return;
+    const auto& nt = normTable();
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        if (! nt.scene[i]) continue;
+        auto* p = params[(size_t) i];
+        const float nv = p->convertTo0to1 (scenes.plainValue (k, i));
+        if (std::abs (nv - p->getValue()) < 1.0e-7f) continue;
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (nv);
+        p->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::editScene (int k)
+{
+    if (k < 0 || k > 3) return;
+    syncSceneEdits();                       // keep any pending edit in the scene being left
+    if (! scenes.stored[k].load()) storeScene (k);
+    sceneEditIndex = k;
+    recallScene (k);
+}
+
+void MegaSynthProcessor::clearScenes()
+{
+    scenes.clear();
+    auto* m = params[P_sceneMorph];
+    m->beginChangeGesture(); m->setValueNotifyingHost (0.0f); m->endChangeGesture();
+    lastMorph = false;
+}
+
+void MegaSynthProcessor::syncSceneEdits()
+{
+    const bool morph = raw[P_sceneMorph]->load() > 0.5f;
+    if (morph && ! lastMorph)
+    {
+        // morph switched on: empty scenes start as the current sound, and the panel shows the edited scene
+        for (int k = 0; k < 4; ++k) if (! scenes.stored[k].load()) storeScene (k);
+        lastMorph = true;
+        recallScene (getEditScene());
+        return;
+    }
+    lastMorph = morph;
+    if (! morph) return;
+    const int k = getEditScene();
+    const auto& nt = normTable();
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        if (! nt.scene[i]) continue;
+        const float plain = raw[(size_t) i]->load();
+        if (std::abs (normFast (nt, i, plain) - scenes.v[k][i].load()) > 1.0e-6f) scenes.storeOne (k, i, plain);
+    }
+}
+
+juce::String MegaSynthProcessor::getMacroName (int k) const
+{
+    const juce::ScopedLock sl (nameLock);
+    k = juce::jlimit (0, 7, k);
+    return macroNames[k].isNotEmpty() ? macroNames[k] : "Macro " + juce::String (k + 1);
+}
+
+void MegaSynthProcessor::setMacroName (int k, const juce::String& n)
+{
+    const juce::ScopedLock sl (nameLock);
+    k = juce::jlimit (0, 7, k);
+    macroNames[k] = (n == "Macro " + juce::String (k + 1)) ? juce::String() : n.trim().substring (0, 24).removeCharacters ("|");
+}
+
+juce::String MegaSynthProcessor::macroNamesJoined() const
+{
+    const juce::ScopedLock sl (nameLock);
+    juce::StringArray a;
+    for (auto& n : macroNames) a.add (n);
+    return a.joinIntoString ("|");
+}
+
+void MegaSynthProcessor::setMacroNamesJoined (const juce::String& s)
+{
+    juce::StringArray a;
+    a.addTokens (s, "|", {});
+    for (int k = 0; k < 8; ++k) setMacroName (k, k < a.size() ? a[k] : juce::String());
 }
 
 juce::AudioProcessorEditor* MegaSynthProcessor::createEditor()

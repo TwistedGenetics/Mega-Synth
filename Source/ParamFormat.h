@@ -22,6 +22,7 @@ inline juce::String formatParam (int idx, float v)
         || id == "seqAccentAmt" || id == "velSens")
         return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id.startsWith ("mod") && id.endsWith ("Amt")) { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
+    if (id.startsWith ("macro") || id == "sceneX" || id == "sceneY") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id == "ccANum" || id == "ccBNum") return "CC " + juce::String (juce::roundToInt (v));
     if (id == "keyboardOctave" || id.endsWith ("Oct")) return juce::String (juce::roundToInt (v)) + " oct";
     if (id.endsWith ("Semi")) { const int n = juce::roundToInt (v); return (n > 0 ? "+" : "") + juce::String (n) + " st"; }

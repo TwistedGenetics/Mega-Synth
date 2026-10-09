@@ -15,11 +15,19 @@
 namespace tg
 {
 
-enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_AUDIO };
+enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_AUDIO, K_MACRO };
 
 // key (stable, saved in patches), display name, kind, bipolar
 #define TG_MOD_SOURCES(X) \
     X(None,        "None",              K_NONE,   false) \
+    X(Macro1,      "Macro 1",           K_MACRO,  false) \
+    X(Macro2,      "Macro 2",           K_MACRO,  false) \
+    X(Macro3,      "Macro 3",           K_MACRO,  false) \
+    X(Macro4,      "Macro 4",           K_MACRO,  false) \
+    X(Macro5,      "Macro 5",           K_MACRO,  false) \
+    X(Macro6,      "Macro 6",           K_MACRO,  false) \
+    X(Macro7,      "Macro 7",           K_MACRO,  false) \
+    X(Macro8,      "Macro 8",           K_MACRO,  false) \
     X(Lfo1,        "LFO 1",             K_LFO,    true)  \
     X(Lfo2,        "LFO 2",             K_LFO,    true)  \
     X(Lfo3,        "LFO 3",             K_LFO,    true)  \
@@ -204,6 +212,8 @@ struct NormTable
     bool envTime[P_COUNT] {};    // read once at note-on (envelope stages)
     bool modulatable[P_COUNT] {};
     bool audioRate[P_COUNT] {};
+    bool scene[P_COUNT] {};      // stored in scenes A-D and morphed
+    bool discrete[P_COUNT] {};   // choices: a morph takes the nearest scene's value
 };
 const NormTable& normTable();   // call once from a non-audio thread first (prepare) to build it
 
@@ -243,14 +253,14 @@ struct RouteState
 {
     float sm[kNumRoutes] {}, hold[kNumRoutes] {};
     double holdPh = 0.0;
-    bool first = true;
-    void reset() { first = true; holdPh = 0.0; }
+    bool first = true, tick = false;
+    void reset() { first = true; holdPh = 0.0; tick = false; }
 };
 
 struct ResolvedRoute
 {
     int slot = 0, src = 0, dst = 0, curve = 0, via = 0;
-    bool unipolar = false, audio = false, toAmount = false;
+    bool unipolar = false, audio = false, early = false;   // early: onto a route depth or a macro, applied first
     float viaDepth = 1.0f, smoothMs = 0.0f;
 };
 
@@ -259,18 +269,58 @@ struct RouteSet
 {
     int n = 0;
     ResolvedRoute r[kNumRoutes];
-    bool anyAudio = false, anyGlobal = false, anyFollow = false, anyEnvTime = false;
+    bool anyAudio = false, anyGlobal = false, anyFollow = false, anyEnvTime = false, anySceneXY = false;
     void build (const RouteStore&);
 };
 
 // One source value after polarity, smoothing, curve and via scaling.
 float shapeRouteValue (const ResolvedRoute&, const float* srcV, RouteState&, float dtSeconds);
 
-// Applies the control-rate routes: out = base with each destination moved in normalised space.
-// Routes onto other routes' amounts are applied first, so depth modulation takes effect at once.
-// onlyGlobal / onlyEnvTime restrict the destinations touched.
-void applyRoutes (const RouteSet&, const float* baseV, float* outV, const float* srcV, RouteState&, float dtSeconds,
-                  int filter, float* liveOffsetOut = nullptr);
+// Applies the control-rate routes: out = base with each destination moved in normalised space
+// (base and out may be the same array).
+// Pass 1 applies routes onto route depths and macros, then the macro sources are refreshed,
+// so "wheel -> macro -> ten knobs" and "LFO -> another route's depth" act in the same block.
+// filter restricts pass-2 destinations. phase splits the work around a scene morph:
+//   RP_Full: both passes.  RP_SceneXY: pass 1 + the scene XY destinations only.
+//   RP_AfterScene: pass 2 without the scene XY destinations.
+void applyRoutes (const RouteSet&, const float* baseV, float* outV, float* srcV, RouteState&, float dtSeconds,
+                  int filter, float* liveOffsetOut = nullptr, int phase = 0);
 enum { RF_All, RF_Global, RF_EnvTime };
+enum { RP_Full, RP_SceneXY, RP_AfterScene };
+
+//==============================================================================
+// Scenes A-D: complete sets of sound parameters, stored as normalised values, morphed with
+// an XY position (A top-left, B top-right, C bottom-left, D bottom-right).
+struct SceneStore
+{
+    std::atomic<float> v[4][P_COUNT];
+    std::atomic<bool> stored[4];
+    std::atomic<uint32_t> version { 0 };
+
+    SceneStore() { clear(); }
+    void clear()
+    {
+        for (auto& sc : v) for (auto& x : sc) x.store (0.0f);
+        for (auto& b : stored) b.store (false);
+        version.fetch_add (1);
+    }
+    // plain parameter values in, normalised stored
+    void store (int k, const float* plain);
+    void storeOne (int k, int param, float plain);
+    float plainValue (int k, int param) const;
+    juce::var toVar() const;
+    void fromVar (const juce::var&);
+};
+
+// Bilinear weights for A, B, C, D at (x, y)
+inline void sceneWeights (float x, float y, float w[4])
+{
+    x = juce::jlimit (0.0f, 1.0f, x); y = juce::jlimit (0.0f, 1.0f, y);
+    w[0] = (1 - x) * (1 - y); w[1] = x * (1 - y); w[2] = (1 - x) * y; w[3] = x * y;
+}
+
+// Writes the morph of the stored scenes into v (scene parameters only). Continuous parameters
+// are blended in normalised space; choices (waveforms, filter type...) come from the nearest scene.
+void morphScenes (const SceneStore&, float x, float y, float* v);
 
 } // namespace tg

@@ -189,6 +189,12 @@ void Knob::showMenu()
         add.addItem (1000 + s, kModSrcNames[s]);
     }
     menu.addSubMenu ("Modulate with", add);
+    if (paramIndex < P_macro1 || paramIndex >= P_macro1 + 8)
+    {
+        juce::PopupMenu mac;
+        for (int k = 0; k < 8; ++k) mac.addItem (1000 + MS_Macro1 + k, proc.getMacroName (k));
+        menu.addSubMenu ("Assign to macro", mac);
+    }
     bool any = false;
     for (int i = 0; i < kNumRoutes; ++i)
     {
@@ -206,7 +212,8 @@ void Knob::showMenu()
                         {
                             if (r >= 1000 && r < 1000 + MS_COUNT)
                             {
-                                const int slot = proc.addRoute (r - 1000, paramIndex, 0.25f);
+                                const bool macro = r - 1000 >= MS_Macro1 && r - 1000 < MS_Macro1 + 8;
+                                const int slot = proc.addRoute (r - 1000, paramIndex, macro ? 0.5f : 0.25f);
                                 if (slot >= 0 && onShowRoute) onShowRoute (-1 - slot);   // negative: just note it, don't switch tabs
                             }
                             else if (r >= 2000 && r < 2000 + kNumRoutes) { if (onShowRoute) onShowRoute (r - 2000); }
@@ -414,7 +421,7 @@ void AssignSlot::resized()
 static void addSourceItems (juce::ComboBox& box, bool includeAudio, const juce::String& noneText)
 {
     box.addItem (noneText, MS_None + 1);
-    const char* headings[] = { "", "LFOs", "Envelopes", "MIDI / Performance", "MPE", "Random", "Note", "Followers", "Audio rate (pitch, level, filter, FM)" };
+    const char* headings[] = { "", "LFOs", "Envelopes", "MIDI / Performance", "MPE", "Random", "Note", "Followers", "Audio rate (pitch, level, filter, FM)", "Macros" };
     SrcKind last = K_NONE;
     for (int s = 1; s < MS_COUNT; ++s)
     {
@@ -632,6 +639,150 @@ void RouteRow::resized()
     viaDepth.setBounds (r.removeFromLeft (72)); r.removeFromLeft (4);
     smooth.setBounds (r.removeFromLeft (80));
     clear.setBounds (r.removeFromRight (28));
+}
+
+//==============================================================================
+XYPad::XYPad (MegaSynthProcessor& p) : proc (p)
+{
+    setTooltip ("Drag to morph between scenes A-D (Morph must be on). Scene X and Y can also be automated or modulated in the Mod Matrix.");
+}
+
+void XYPad::update()
+{
+    auto plain = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+    const float nx = plain (P_sceneX), ny = plain (P_sceneY);
+    const float nlx = juce::jlimit (0.0f, 1.0f, nx + proc.getEngine().liveOffset[P_sceneX].load());
+    const float nly = juce::jlimit (0.0f, 1.0f, ny + proc.getEngine().liveOffset[P_sceneY].load());
+    const bool nm = plain (P_sceneMorph) > 0.5f;
+    bool st[4]; bool changed = false;
+    for (int k = 0; k < 4; ++k) { st[k] = proc.scenes.stored[k].load(); changed |= st[k] != stored[k]; stored[k] = st[k]; }
+    const int ne = proc.getEditScene();
+    if (changed || nm != morph || ne != edit || std::abs (nx - x) > 1e-4f || std::abs (ny - y) > 1e-4f
+        || std::abs (nlx - lx) > 2e-3f || std::abs (nly - ly) > 2e-3f)
+    {
+        x = nx; y = ny; lx = nlx; ly = nly; morph = nm; edit = ne;
+        repaint();
+    }
+}
+
+void XYPad::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    g.setColour (col::panel2);
+    g.fillRoundedRectangle (r, 8.0f);
+    g.setColour (col::border);
+    g.drawRoundedRectangle (r, 8.0f, 1.0f);
+    auto inner = r.reduced (14.0f);
+    g.setColour (col::panel3);
+    for (int i = 1; i < 4; ++i)
+    {
+        const float fx = inner.getX() + inner.getWidth() * i / 4.0f, fy = inner.getY() + inner.getHeight() * i / 4.0f;
+        g.drawVerticalLine ((int) fx, inner.getY(), inner.getBottom());
+        g.drawHorizontalLine ((int) fy, inner.getX(), inner.getRight());
+    }
+    // corner weights shown as a glow
+    float w[4]; sceneWeights (lx, ly, w);
+    const juce::Point<float> corners[4] = { inner.getTopLeft(), inner.getTopRight(), inner.getBottomLeft(), inner.getBottomRight() };
+    for (int k = 0; k < 4; ++k)
+    {
+        const auto c = corners[k];
+        if (morph && stored[k])
+        {
+            g.setColour (col::mod.withAlpha (0.12f + 0.5f * w[k]));
+            g.fillEllipse (juce::Rectangle<float> (28.0f + 30.0f * w[k], 28.0f + 30.0f * w[k]).withCentre (c));
+        }
+        g.setColour (k == edit && morph ? col::mod : (stored[k] ? col::text : col::muted));
+        g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
+        g.drawText (juce::String::charToString ((juce::juce_wchar) ('A' + k)), juce::Rectangle<float> (24, 24).withCentre (c), juce::Justification::centred);
+    }
+    auto pt = [&] (float px, float py) { return juce::Point<float> (inner.getX() + px * inner.getWidth(), inner.getY() + py * inner.getHeight()); };
+    if (std::abs (lx - x) > 1e-3f || std::abs (ly - y) > 1e-3f)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.8f));
+        g.fillEllipse (juce::Rectangle<float> (9, 9).withCentre (pt (lx, ly)));
+    }
+    g.setColour (morph ? col::mod : col::muted);
+    g.fillEllipse (juce::Rectangle<float> (16, 16).withCentre (pt (x, y)));
+    g.setColour (col::bg);
+    g.drawEllipse (juce::Rectangle<float> (16, 16).withCentre (pt (x, y)), 2.0f);
+    if (! morph)
+    {
+        g.setColour (col::muted);
+        g.setFont (juce::Font (juce::FontOptions (12.5f)));
+        g.drawText ("Morph is off", r.removeFromBottom (30), juce::Justification::centred);
+    }
+}
+
+void XYPad::setFrom (juce::Point<float> p)
+{
+    auto inner = getLocalBounds().toFloat().reduced (15.0f);
+    const float nx = juce::jlimit (0.0f, 1.0f, (p.x - inner.getX()) / inner.getWidth());
+    const float ny = juce::jlimit (0.0f, 1.0f, (p.y - inner.getY()) / inner.getHeight());
+    proc.param (P_sceneX)->setValueNotifyingHost (nx);
+    proc.param (P_sceneY)->setValueNotifyingHost (ny);
+    update();
+}
+
+void XYPad::mouseDown (const juce::MouseEvent& e)
+{
+    proc.param (P_sceneX)->beginChangeGesture(); proc.param (P_sceneY)->beginChangeGesture();
+    setFrom (e.position);
+}
+void XYPad::mouseDrag (const juce::MouseEvent& e) { setFrom (e.position); }
+void XYPad::mouseUp (const juce::MouseEvent&)
+{
+    proc.param (P_sceneX)->endChangeGesture(); proc.param (P_sceneY)->endChangeGesture();
+}
+
+//==============================================================================
+MacroCell::MacroCell (MegaSynthProcessor& p, int i)
+    : knob (p, P_macro1 + i, {}, col::accent), proc (p), index (i)
+{
+    addAndMakeVisible (knob);
+    name.setText (p.getMacroName (i), juce::dontSendNotification);
+    name.setEditable (false, true, false);
+    name.setJustificationType (juce::Justification::centred);
+    name.setColour (juce::Label::textColourId, col::text);
+    name.setColour (juce::Label::backgroundWhenEditingColourId, col::panel3);
+    name.setColour (juce::Label::textWhenEditingColourId, col::text);
+    name.setFont (juce::Font (juce::FontOptions (12.5f, juce::Font::bold)));
+    name.setTooltip ("Double-click to rename");
+    name.onTextChange = [this]
+    {
+        proc.setMacroName (index, name.getText());
+        name.setText (proc.getMacroName (index), juce::dontSendNotification);
+        proc.pushHistory ("Rename macro");
+    };
+    addAndMakeVisible (name);
+    info.setJustificationType (juce::Justification::centred);
+    info.setColour (juce::Label::textColourId, col::muted);
+    info.setFont (juce::Font (juce::FontOptions (11.0f)));
+    addAndMakeVisible (info);
+    update();
+}
+
+void MacroCell::update()
+{
+    int n = 0;
+    for (int r = 0; r < kNumRoutes; ++r) { const auto c = proc.routes.get (r); if (c.active() && c.src == MS_Macro1 + index) ++n; }
+    const juce::String t = n == 0 ? juce::String ("right-click a knob to assign") : juce::String (n) + (n == 1 ? " target" : " targets");
+    if (info.getText() != t) info.setText (t, juce::dontSendNotification);
+    const auto nm = proc.getMacroName (index);
+    if (! name.isBeingEdited() && name.getText() != nm) name.setText (nm, juce::dontSendNotification);
+}
+
+void MacroCell::resized()
+{
+    auto r = getLocalBounds();
+    name.setBounds (r.removeFromTop (20));
+    info.setBounds (r.removeFromBottom (16));
+    knob.setBounds (r.withSizeKeepingCentre (76, r.getHeight()));
+}
+
+void MacroCell::paint (juce::Graphics& g)
+{
+    g.setColour (col::panel2);
+    g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 8.0f);
 }
 
 //==============================================================================
@@ -1167,6 +1318,81 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Macros & Scenes
+    {
+        auto* page = addPage ("Macros & Scenes");
+        auto* macSec = sec (page, "Macros  (right-click any knob > Assign to macro; double-click a name to rename)", col::accent);
+        for (int i = 0; i < 8; ++i) macroCells.add (page->own (new MacroCell (proc, i)));
+        auto* scSec = sec (page, "Scenes", col::mod);
+        xyPad = page->own (new XYPad (proc));
+        for (int k = 0; k < 4; ++k)
+        {
+            const juce::String L = juce::String::charToString ((juce::juce_wchar) ('A' + k));
+            sceneEditBtn[k].setButtonText (L);
+            sceneEditBtn[k].setClickingTogglesState (false);
+            sceneEditBtn[k].onClick = [this, k]
+            {
+                const bool morph = proc.param (P_sceneMorph)->getValue() > 0.5f;
+                if (morph) { proc.editScene (k); setStatus ("Editing scene " + juce::String::charToString ((juce::juce_wchar) ('A' + k))); }
+                else if (proc.scenes.stored[k].load()) { proc.recallScene (k); proc.pushHistory ("Recall scene"); setStatus ("Recalled scene " + juce::String::charToString ((juce::juce_wchar) ('A' + k))); }
+                else setStatus ("Scene " + juce::String::charToString ((juce::juce_wchar) ('A' + k)) + " is empty - press Store first");
+                updateSceneButtons();
+            };
+            sceneStoreBtn[k].setButtonText ("Store " + L);
+            sceneStoreBtn[k].setTooltip ("Store the panel's current sound as scene " + L);
+            sceneStoreBtn[k].onClick = [this, k] { proc.storeScene (k); setStatus ("Stored scene " + juce::String::charToString ((juce::juce_wchar) ('A' + k))); updateSceneButtons(); };
+            sceneState[k].setColour (juce::Label::textColourId, col::muted);
+            sceneState[k].setFont (juce::Font (juce::FontOptions (12.0f)));
+            for (juce::Component* c : { (juce::Component*) &sceneEditBtn[k], (juce::Component*) &sceneStoreBtn[k], (juce::Component*) &sceneState[k] })
+                page->addAndMakeVisible (c);
+        }
+        morphAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_sceneMorph], morphBtn);
+        morphBtn.setColour (juce::ToggleButton::tickColourId, col::mod);
+        morphBtn.setTooltip ("On: the sound is a blend of the four scenes at the XY position, and the panel edits the selected scene");
+        clearScenesBtn.onClick = [this] { proc.clearScenes(); proc.pushHistory ("Clear scenes"); setStatus ("Scenes cleared"); updateSceneButtons(); };
+        page->addAndMakeVisible (morphBtn);
+        page->addAndMakeVisible (clearScenesBtn);
+        auto* sx = page->own (new Knob (proc, P_sceneX, "Scene X", col::mod));
+        auto* sy = page->own (new Knob (proc, P_sceneY, "Scene Y", col::mod));
+        auto* help = page->own (new juce::Label ({}, "Each scene is a complete sound: every oscillator, filter, envelope, LFO and effect setting "
+            "(not the matrix routes, macros, volume or sequencer).\n\n"
+            "1. Make a sound and press Store A. Change it and Store B, and so on.\n"
+            "2. Turn on Morph and drag the pad. Knobs blend smoothly; switches (waveforms, filter type) "
+            "take the nearest scene's setting.\n"
+            "3. With Morph on, the panel shows the selected scene (A-D buttons) and every knob you turn edits that scene.\n"
+            "With Morph off, the A-D buttons recall a scene onto the panel.\n\n"
+            "Scene X / Y are ordinary parameters: automate them, assign them to a macro, or route an LFO or the mod wheel to them in the Mod Matrix "
+            "(each note then morphs on its own)."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.5f)));
+        help->setJustificationType (juce::Justification::topLeft);
+        juce::Array<MacroCell*> cells (macroCells);
+        auto* pad = xyPad;
+        updateSceneButtons();
+        page->onResize = [this, page, macSec, cells, scSec, pad, sx, sy, help]
+        {
+            const int g = 10, W = page->getWidth();
+            macSec->setBounds (g, g, W - 2 * g, 160);
+            const int cw = (W - 2 * g - 20) / 8;
+            for (int i = 0; i < cells.size(); ++i) cells[i]->setBounds (g + 10 + i * cw, g + 32, cw - 8, 120);
+            scSec->setBounds (g, 180, W - 2 * g, page->getHeight() - 180 - g);
+            const int padSize = juce::jmin (380, page->getHeight() - 180 - g - 44);
+            pad->setBounds (g + 12, 214, padSize, padSize);
+            int x = g + 12 + padSize + 24, y = 214;
+            for (int k = 0; k < 4; ++k)
+            {
+                sceneEditBtn[k].setBounds (x, y + k * 40, 44, 32);
+                sceneStoreBtn[k].setBounds (x + 52, y + k * 40, 90, 32);
+                sceneState[k].setBounds (x + 150, y + k * 40, 130, 32);
+            }
+            morphBtn.setBounds (x, y + 170, 220, 26);
+            clearScenesBtn.setBounds (x, y + 206, 120, 28);
+            sx->setBounds (x, y + 250, 72, 84);
+            sy->setBounds (x + 80, y + 250, 72, 84);
+            help->setBounds (x + 300, y, W - g - 12 - (x + 300), page->getHeight() - y - g - 8);
+        };
+    }
+
     // ---------------------------------------------------------------- Sequencer
     {
         auto* page = addPage ("Sequencer");
@@ -1288,6 +1514,22 @@ void MegaSynthEditor::shiftOctave (int delta)
     p->endChangeGesture();
 }
 
+void MegaSynthEditor::updateSceneButtons()
+{
+    const bool morph = proc.param (P_sceneMorph)->getValue() > 0.5f;
+    const int edit = proc.getEditScene();
+    for (int k = 0; k < 4; ++k)
+    {
+        const bool stored = proc.scenes.stored[k].load();
+        const bool editing = morph && k == edit;
+        sceneEditBtn[k].setColour (juce::TextButton::buttonColourId, editing ? col::mod.withAlpha (0.55f) : col::panel3);
+        sceneEditBtn[k].setTooltip (morph ? "Edit scene " + sceneEditBtn[k].getButtonText() + " (the panel shows it)"
+                                          : "Recall scene " + sceneEditBtn[k].getButtonText() + " onto the panel");
+        const juce::String t = ! stored ? "empty" : (editing ? "stored - editing" : "stored");
+        if (sceneState[k].getText() != t) sceneState[k].setText (t, juce::dontSendNotification);
+    }
+}
+
 void MegaSynthEditor::showRoute (int slot)
 {
     if (slot < 0)
@@ -1357,6 +1599,12 @@ void MegaSynthEditor::timerCallback()
     if (matrixTab >= 0 && tabs.getCurrentTabIndex() == matrixTab)
         for (auto* r : routeRows) r->updateLive();
     for (auto* k : allKnobs) if (k->isShowing()) k->updateMod();
+    if (xyPad != nullptr && xyPad->isShowing())
+    {
+        xyPad->update();
+        for (auto* m : macroCells) m->update();
+        updateSceneButtons();
+    }
 
     if (statusTicks > 0 && --statusTicks == 0) status.setText ({}, juce::dontSendNotification);
 }

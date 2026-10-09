@@ -338,6 +338,7 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
         v[MS_MpeGlide]    = in->mpeGlide[ch];
     }
     v[MS_RandNote] = randNote;
+    for (int k = 0; k < 8; ++k) v[MS_Macro1 + k] = s.v[P_macro1 + k];
 
     // random clock (Random Rate): smooth random, stepped random, sample & hold of LFO 1, chaos
     rndPh += (double) clampv (s.f (P_randRate), 0.01f, 50.0f) * dt;
@@ -599,7 +600,14 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         {
             computeSources (s, mc.in, lastDt);
             modSnap = s;
-            applyRoutes (*mc.routes, s.v, modSnap.v, srcV, rstate, lastDt, RF_All, liveOut);
+            if (mc.morph && mc.scenes != nullptr && mc.routes->anySceneXY)
+            {
+                // the scene XY position is modulated: move it, re-morph, then apply the other routes on top
+                applyRoutes (*mc.routes, s.v, modSnap.v, srcV, rstate, lastDt, RF_All, liveOut, RP_SceneXY);
+                morphScenes (*mc.scenes, modSnap.v[P_sceneX], modSnap.v[P_sceneY], modSnap.v);
+                applyRoutes (*mc.routes, modSnap.v, modSnap.v, srcV, rstate, lastDt, RF_All, liveOut, RP_AfterScene);
+            }
+            else applyRoutes (*mc.routes, s.v, modSnap.v, srcV, rstate, lastDt, RF_All, liveOut);
             sp = &modSnap;
         }
         const Snapshot& ps = *sp;
@@ -1087,7 +1095,7 @@ void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const S
     if (routeStore != nullptr)
     {
         routeSet.build (*routeStore);
-        mc.routes = &routeSet; mc.in = modIn;
+        mc.routes = &routeSet; mc.in = modIn; mc.scenes = scenes; mc.morph = s.v[P_sceneMorph] > 0.5f;
     }
     slot->start (key, freq, glide, o, s, ++orderCounter, mc);
     lastFreq = freq;
@@ -1112,7 +1120,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, cons
     if (routeStore != nullptr)
     {
         routeSet.build (*routeStore);
-        mc.routes = &routeSet; mc.in = modIn;
+        mc.routes = &routeSet; mc.in = modIn; mc.scenes = scenes; mc.morph = s.v[P_sceneMorph] > 0.5f;
     }
     std::fill (std::begin (liveScratch), std::end (liveScratch), 0.0f);
 
@@ -1133,11 +1141,20 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, cons
             globalSrc[MS_ModWheel] = modIn->wheel; globalSrc[MS_PitchBend] = modIn->bend;
             globalSrc[MS_Aftertouch] = modIn->aftertouch; globalSrc[MS_CcA] = modIn->ccA; globalSrc[MS_CcB] = modIn->ccB;
         }
+        for (int k = 0; k < 8; ++k) globalSrc[MS_Macro1 + k] = s.v[P_macro1 + k];
     }
-    if (mc.any() && routeSet.anyGlobal)
+    float* srcW = newest != nullptr ? newest->srcV : globalSrc;
+    if (mc.any() && (routeSet.anyGlobal || (mc.morph && scenes != nullptr && routeSet.anySceneXY)))
     {
         fxSnap = s;
-        applyRoutes (routeSet, s.v, fxSnap.v, src, globalRouteState, (float) (numSamples / sr), RF_Global, liveScratch);
+        const float dt = (float) (numSamples / sr);
+        if (mc.morph && scenes != nullptr && routeSet.anySceneXY)
+        {
+            applyRoutes (routeSet, s.v, fxSnap.v, srcW, globalRouteState, dt, RF_Global, nullptr, RP_SceneXY);
+            morphScenes (*scenes, fxSnap.v[P_sceneX], fxSnap.v[P_sceneY], fxSnap.v);
+            applyRoutes (routeSet, fxSnap.v, fxSnap.v, srcW, globalRouteState, dt, RF_Global, liveScratch, RP_AfterScene);
+        }
+        else applyRoutes (routeSet, s.v, fxSnap.v, srcW, globalRouteState, dt, RF_Global, liveScratch);
         fs = &fxSnap;
     }
     fxBus.process (L, R, numSamples, *fs, globalMod);

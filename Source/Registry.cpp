@@ -52,6 +52,8 @@ namespace
         if (id.startsWith ("lfoAssign")) return "LFO Slots";
         if (id.startsWith ("mod") && id.endsWith ("Amt")) return "Mod Matrix";
         if (id == "randRate") return "Random";
+        if (id.startsWith ("macro")) return "Macros";
+        if (id.startsWith ("scene")) return "Scenes";
         if (id.startsWith ("cc")) return "MIDI";
         if (id.startsWith ("envAssign")) return "Envelope Slots";
         if (id.startsWith ("lfo")) return "LFO " + id.substring (3, 4);
@@ -136,6 +138,8 @@ namespace
                 { m.category = Category::Performance; m.group = MutGroup::None; }
             else if (id.startsWith ("mod") && id.endsWith ("Amt"))
                 { m.category = Category::Mod; m.group = MutGroup::Modulation; }
+            else if (id.startsWith ("macro") || isAny (id, { "sceneX", "sceneY", "sceneMorph" }))
+                { m.category = Category::Mod; m.group = MutGroup::None; }
             else if (id == "randRate")
                 { m.category = Category::Lfo; m.group = MutGroup::Modulation; }
             else if (startsAny (id, { "lfoAssign", "envAssign" }))

@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include "ParamFormat.h"
 #include "Registry.h"
+#include "UI/Overview.h"
 
 using namespace tg;
 using namespace tgui;
@@ -138,7 +139,7 @@ void Look::drawTabButton (juce::TabBarButton& b, juce::Graphics& g, bool over, b
     g.setColour (front ? col::accent : col::border);
     g.drawRoundedRectangle (r, 7.0f, front ? 2.0f : 1.0f);
     g.setColour (front ? col::text : col::muted);
-    g.setFont (juce::Font (juce::FontOptions (12.5f, juce::Font::bold)));
+    g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
     g.drawText (b.getButtonText(), r, juce::Justification::centred);
 }
 
@@ -1169,6 +1170,24 @@ void MegaSynthEditor::buildPages()
         return page;
     };
     auto sec = [this] (Page* page, const juce::String& t, juce::Colour c) { return page->own (new Section (proc, t, c)); };
+
+    // ---------------------------------------------------------------- Overview
+    {
+        auto* page = addPage ("Overview");
+        auto* flow = page->own (new SignalFlowView (proc));
+        auto* net = page->own (new NetworkView (proc));
+        auto* spec = page->own (new SpectrumView (proc));
+        auto* dna = page->own (new DnaStrandView (proc));
+        flowView = flow; netView = net; specView = spec; dnaView = dna;
+        page->onResize = [page, flow, net, spec, dna]
+        {
+            const int g = 10, W = page->getWidth();
+            flow->setBounds (g, g, W - 2 * g, 150);
+            net->setBounds (g, 170, 690, 270);
+            spec->setBounds (g + 700, 170, W - 2 * g - 700, 270);
+            dna->setBounds (g, 450, W - 2 * g, 146);
+        };
+    }
 
     // ---------------------------------------------------------------- Oscillators
     {
@@ -2280,6 +2299,13 @@ void MegaSynthEditor::timerCallback()
         }
     }
     if (labLine.isShowing()) updateLab();
+    if (flowView != nullptr && flowView->isShowing())
+    {
+        static_cast<SignalFlowView*> (flowView)->update();
+        static_cast<NetworkView*> (netView)->update();
+        static_cast<SpectrumView*> (specView)->update();
+        static_cast<DnaStrandView*> (dnaView)->update();
+    }
     if (! dnaCells.isEmpty() && dnaCells[0]->isShowing())
     {
         const auto dv = proc.dnaSteps.getVersion();

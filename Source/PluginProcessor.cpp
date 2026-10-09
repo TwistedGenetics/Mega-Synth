@@ -436,6 +436,22 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         float* d = buffer.getWritePointer (c);
         for (int i = 0; i < n; ++i) if (! std::isfinite (d[i])) { engine.reset(); buffer.clear(); return; }
     }
+
+    // spectrum display tap (a copy only; the analysis happens in the editor)
+    {
+        const float* l = buffer.getReadPointer (0);
+        const float* r = buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : l;
+        int w = scopeWrite.load (std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i) { scope[w] = 0.5f * (l[i] + r[i]); w = (w + 1) & (kScopeLen - 1); }
+        scopeWrite.store (w, std::memory_order_release);
+    }
+}
+
+void MegaSynthProcessor::readScope (float* dest, int n) const
+{
+    n = std::min (n, kScopeLen);
+    const int w = scopeWrite.load (std::memory_order_acquire);
+    for (int i = 0; i < n; ++i) dest[i] = scope[(w - n + i + kScopeLen) & (kScopeLen - 1)];
 }
 
 //==============================================================================

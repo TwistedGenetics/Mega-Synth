@@ -41,7 +41,7 @@ public:
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawTabButton (juce::TabBarButton&, juce::Graphics&, bool over, bool down) override;
-    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 92; }
+    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 85; }
 };
 
 // Slider that hands right-clicks to its owner instead of dragging.
@@ -357,6 +357,10 @@ private:
     int labGen = -1;
     juce::String labShownState;
     void updateLab();
+    juce::Component* flowView = nullptr;   // Overview tab (UI/Overview.h)
+    juce::Component* netView = nullptr;
+    juce::Component* specView = nullptr;
+    juce::Component* dnaView = nullptr;
     juce::Array<tgui::DnaStepCell*> dnaCells;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> dsOnAtt;
     uint32_t lastDnaVersion = 0;

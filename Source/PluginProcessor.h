@@ -45,6 +45,11 @@ public:
     std::atomic<int> currentStep { -1 };
     tg::RouteStore routes;
     tg::DnaSeqStore dnaSteps;                 // Sonic DNA Sequencer steps
+    // Output tap for the spectrum display: the audio thread only copies samples in; the editor reads
+    static constexpr int kScopeLen = 8192;
+    float scope[kScopeLen] {};
+    std::atomic<int> scopeWrite { 0 };
+    void readScope (float* dest, int n) const;   // the newest n samples (message thread)
     int getDnaSeqStep() const { return engine.dnaSeqStep.load(); }                    // modulation matrix routes (amounts are the mod1Amt.. parameters)
     const tg::Engine& getEngine() const { return engine; }
     // Adds a route from src to dest in the first free slot with the given depth; returns the slot or -1.

@@ -72,6 +72,10 @@ Make two sounds the parents (**Current sound > A**, then build or load another a
 
 Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (Wave Mutation), Shift, Ring, FM (Audio-Rate Transform), Splice (DNA Splice), Resonate (Resonator), Filter (closes the filter), Grain (Granular), Blur (Spectral, which must be On), Mutate (Master Mutate) and Octave (+12 semitones). The running step pushes its transform's destinations, **Glide** crossfades into the next step and **Depth** scales everything. **Rate** is a note value (1/32 to 1 bar, locked to the DAW's beat position while it plays, the internal tempo otherwise) or **Free** in Hz. The sequencer's output (the blended step amount) is also a Mod Matrix source, "DNA Sequencer". Steps are saved with the project and in patches.
 
+## Overview tab
+
+The first tab shows the whole synth at a glance: the **signal flow** (each note's chain, then the bus, with the stages that are switched in lit up, cyan badges for Mod Matrix routes into each stage and red arcs for Feedback Matrix paths), the **genetic network** (every active route as a line from its source to its destination, pulsing with the source's live value), a **spectrum** of the output, and the **DNA strand**: 13 base pairs for the 13 genetic groups, glowing with how hard the current seed and Mutate amount push each one, grey when locked. All of it is drawn from values the audio already publishes; the only addition to the audio path is copying the output into the analyser's buffer.
+
 ## Modulation matrix (Mod Matrix tab)
 
 Any source can drive any sound parameter: 32 routes, each with its own depth.

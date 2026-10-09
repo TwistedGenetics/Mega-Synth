@@ -37,7 +37,8 @@ set(MEGASYNTH_SOURCES
     Source/Mut/Mutator.cpp
     Source/Sequencer.cpp
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    Source/PluginEditor.cpp
+    Source/UI/Overview.cpp)
 
 set(MEGASYNTH_DEFINES
     JUCE_WEB_BROWSER=0

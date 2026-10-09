@@ -1404,6 +1404,17 @@ int main()
         }
     }
 
+    // ---- Stage 16: the spectrum tap is a copy of the output, nothing more
+    {
+        auto p = make();
+        juce::AudioBuffer<float> cap;
+        render (*p, 0.5, chord (0.0, 0.4, { 57 }), &cap);
+        float tail[512]; p->readScope (tail, 512);
+        float md = 0;
+        for (int i = 0; i < 512; ++i) md = std::max (md, std::abs (tail[i] - 0.5f * (cap.getSample (0, cap.getNumSamples() - 512 + i) + cap.getSample (1, cap.getNumSamples() - 512 + i))));
+        CHECK (md < 1e-7f, "spectrum tap mirrors the output");
+    }
+
     // ---- 7. CPU: 16 voices of everything
     {
         std::cout << "CPU load" << std::endl;
@@ -1483,7 +1494,10 @@ int main()
         p->addRoute (MS_Velocity, P_osc1Semi, 0.25f);
         p->addRoute (MS_Osc2Audio, P_filterRes, -0.2f);
         p->addRoute (MS_ModWheel, P_delayMix, 0.5f);
-        render (*p, 0.3, chord (0.0, 0.25, { 60 }));
+        for (auto [i, v] : { std::pair<int, float> { P_dnaMix, 0.4f }, { P_wmMix, 0.5f }, { P_resMix, 0.2f }, { P_grMix, 0.3f }, { P_fbGrSp, 0.4f },
+                             { P_fbOutGr, 0.2f }, { P_mutAmount, 0.35f }, { P_mutLock3, 1.0f }, { P_mutLock7, 1.0f } })
+            setP (*p, i, v);
+        render (*p, 0.6, chord (0.0, 0.55, { 48, 60, 64 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
         ed->setSize (1200, 860);
         std::function<void (juce::Component*)> rings = [&] (juce::Component* c)

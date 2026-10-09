@@ -594,7 +594,8 @@ int main()
             // mix at zero = untouched, whatever the other settings
             run ([] (MegaSynthProcessor& p) { setP (p, P_wmFold, 1.0f); setP (p, P_wmBits, 3.0f); setP (p, P_arShift, 300.0f); setP (p, P_arRing, 0.0f);
                                               setP (p, P_dnaMode, 3.0f); setP (p, P_dnaAmount, 1.0f); setP (p, P_dnaA, 6.0f);
-                                              setP (p, P_resTuning, 5.0f); setP (p, P_resFeedback, 1.0f); }, b);
+                                              setP (p, P_resTuning, 5.0f); setP (p, P_resFeedback, 1.0f);
+                                              setP (p, P_grFreeze, 1.0f); setP (p, P_grFeedback, 0.9f); setP (p, P_grPitch, 7.0f); }, b);
             float md = 0; for (int i = 0; i < b.getNumSamples(); ++i) md = std::max (md, std::abs (b.getSample (0, i) - base.getSample (0, i)));
             CHECK (md == 0.0f, "modules at zero mix must be bit-exact");
 
@@ -787,10 +788,52 @@ int main()
                 }
             }
 
+            // ---- Stage 8: Granular (bus)
+            {
+                std::cout << "Granular" << std::endl;
+                auto rmsOf = [&] (const juce::AudioBuffer<float>& x, double t0, double t1) { double e = 0; int c = 0; for (int i = (int) (t0 * sr); i < (int) (t1 * sr) && i < x.getNumSamples(); ++i, ++c) e += x.getSample (0, i) * x.getSample (0, i); return std::sqrt (e / std::max (1, c)); };
+                // grains an octave up
+                run ([] (MegaSynthProcessor& p) { setP (p, P_grMix, 1.0f); setP (p, P_grPitch, 12.0f); setP (p, P_grDensity, 10.0f); setP (p, P_grSize, 250.0f); setP (p, P_grJitter, 0.0f); }, b);
+                const double gp = peakHz (spectrum (b));
+                std::cout << "  grains +12 st: " << gp << " Hz" << std::endl;
+                CHECK (std::abs (gp - 440.0) < 4.0, "grain pitch");
+                // level stays close to the dry level at moderate settings
+                run ([] (MegaSynthProcessor& p) { setP (p, P_grMix, 1.0f); }, b);
+                const double ratio = rmsOf (b, 0.3, 0.8) / rmsOf (base, 0.3, 0.8);
+                std::cout << "  granular level " << ratio << " of dry" << std::endl;
+                CHECK (ratio > 0.4 && ratio < 2.5, "granular level");
+                // freeze: the sound keeps going after the note has gone
+                {
+                    auto p = clean(); setP (*p, P_ampR, 0.05f); setP (*p, P_grMix, 1.0f); setP (*p, P_grPosition, 0.1f); setP (*p, P_grJitter, 0.05f);
+                    juce::AudioBuffer<float> x;
+                    render (*p, 0.5, { { 0.0, juce::MidiMessage::noteOn (1, 57, 1.0f) } }, &x);
+                    setP (*p, P_grFreeze, 1.0f);
+                    render (*p, 2.0, { { 0.0, juce::MidiMessage::noteOff (1, 57) } }, &x);
+                    const double held = rmsOf (x, 1.4, 1.9);
+                    std::cout << "  frozen 1.5 s after note-off: rms " << held << ", pitch " << peakHz (spectrum (x)) << " Hz" << std::endl;
+                    CHECK (held > 0.01 && std::abs (peakHz (spectrum (x)) - 220.0) < 4.0 && p->getEngine().granular().activeGrains() > 0, "granular freeze");
+                    setP (*p, P_grFreeze, 0.0f);
+                    render (*p, 4.5, {}, &x);
+                    CHECK (rmsOf (x, 4.0, 4.4) < 1e-4, "unfrozen buffer empties");
+                }
+                // maximum density and size, every random option, feedback, and LFOs sweeping position and pitch
+                {
+                    auto p = make();
+                    setP (*p, P_grMix, 1.0f); setP (*p, P_grDensity, 200.0f); setP (*p, P_grSize, 500.0f); setP (*p, P_grJitter, 1.0f);
+                    setP (*p, P_grPitchRand, 1.0f); setP (*p, P_grReverse, 0.5f); setP (*p, P_grSpread, 1.0f); setP (*p, P_grFeedback, 0.95f);
+                    route (*p, 0, MS_Lfo1, P_grPosition, 0.5f); route (*p, 1, MS_Lfo2, P_grPitch, 0.3f); route (*p, 2, MS_RandStep, P_grSize, 0.4f);
+                    double cpu = 0;
+                    auto st = render (*p, 6.0, chord (0.0, 4.0, { 48, 55, 60, 64 }), nullptr, &cpu);
+                    std::cout << "  max density + feedback + modulation: peak " << st.peak << ", " << cpu / 6.0 * 100.0 << "% of one core" << std::endl;
+                    CHECK (st.finite && st.peak < 4.0f, "granular at maximum");
+                }
+            }
+
             // everything at maximum stays finite and bounded
             {
                 auto p = make();
-                for (int i : { P_wmMix, P_wmDrive, P_wmFold, P_wmShape, P_wmBend, P_wmAsym, P_wmRect, P_arFm, P_arAm, P_arRing, P_arShiftMix, P_dnaMix, P_dnaAmount, P_resMix, P_resFeedback, P_resInharm }) setP (*p, i, 1.0f);
+                for (int i : { P_wmMix, P_wmDrive, P_wmFold, P_wmShape, P_wmBend, P_wmAsym, P_wmRect, P_arFm, P_arAm, P_arRing, P_arShiftMix, P_dnaMix, P_dnaAmount, P_resMix, P_resFeedback, P_resInharm, P_grMix, P_grJitter, P_grPitchRand, P_grReverse }) setP (*p, i, 1.0f);
+                setP (*p, P_grFeedback, 0.95f); setP (*p, P_grDensity, 200.0f); setP (*p, P_grSize, 500.0f);
                 setP (*p, P_dnaMode, 3.0f);
                 setP (*p, P_wmBits, 1.0f); setP (*p, P_wmDown, 32.0f); setP (*p, P_arShift, 1000.0f); setP (*p, P_arMod, 5.0f);
                 auto st = render (*p, 2.0, chord (0.0, 1.5, { 36, 48, 60, 72 }));

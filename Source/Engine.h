@@ -9,6 +9,7 @@
 #include "Mut/AudioRate.h"
 #include "Mut/DnaSplice.h"
 #include "Mut/Resonator.h"
+#include "Mut/Granular.h"
 
 namespace tg
 {
@@ -380,11 +381,13 @@ public:
     std::array<std::atomic<float>, MS_COUNT> liveSrc {};
 
     FxBus& fx() { return fxBus; }
+    const Granular& granular() const { return gran; }
     int activeVoiceCount() const;
 
 private:
     Voice voices[kMaxVoices];
     FxBus fxBus;
+    Granular gran;           // bus stage: summed voices -> granular -> effects
     ModState globalMod;     // modulation of global effects, taken from the newest voice
     uint64_t orderCounter = 0;
     double lastFreq = -1.0;

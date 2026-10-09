@@ -1187,6 +1187,42 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Bus mutation (runs once on all notes, before the effects)
+    {
+        auto* page = addPage ("Bus Mutation");
+        auto* grS = sec (page, "Granular  (all notes together, before the effects)", col::supersaw);
+        grS->knob (P_grMix, "Mix");
+        grS->knob (P_grSize, "Size");
+        grS->knob (P_grDensity, "Density");
+        grS->knob (P_grPosition, "Position");
+        grS->knob (P_grJitter, "Jitter");
+        grS->knob (P_grPitch, "Pitch");
+        grS->knob (P_grPitchRand, "Pitch Jitter");
+        grS->knob (P_grReverse, "Reverse");
+        grS->knob (P_grSpread, "Spread");
+        grS->knob (P_grFeedback, "Feedback");
+        auto* frz = new juce::ToggleButton ("Freeze");
+        frz->setColour (juce::ToggleButton::tickColourId, col::supersaw);
+        frz->setTooltip ("Stop recording: the grains keep playing what's in the buffer, even after the notes end");
+        grS->add (frz, 90, 30);
+        freezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_grFreeze], *frz);
+        auto* help = page->own (new juce::Label ({}, "Granular records the last 4 seconds of the synth and plays it back as up to 64 overlapping grains. "
+            "Position = how far back the grains read (Jitter scatters it), Size and Density set the grain length and how many start each second, "
+            "Pitch / Pitch Jitter transpose them, Reverse is the chance a grain plays backwards, Spread pans them. Feedback writes the grains back "
+            "into the recording for washes that build up. Freeze holds the buffer: play a chord, freeze, and keep playing over the frozen cloud. "
+            "These modules run once on all notes (per-note granular would cost about 16x the CPU); their knobs still take Mod Matrix routes, using "
+            "the newest note's sources."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.5f)));
+        help->setJustificationType (juce::Justification::topLeft);
+        page->onResize = [page, grS, help]
+        {
+            const int g = 10, W = page->getWidth();
+            grS->setBounds (g, g, W - 2 * g, 136);
+            help->setBounds (g + 6, 156, W - 2 * g - 12, 80);
+        };
+    }
+
     // ---------------------------------------------------------------- Filter & Envelopes
     {
         auto* page = addPage ("Filter & Env");

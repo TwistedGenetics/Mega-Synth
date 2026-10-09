@@ -124,7 +124,7 @@ const NormTable& normTable()
                 t.invSkew[i] = 1.0f / t.skew[i];
             }
             else { t.skew[i] = t.invSkew[i] = 1.0f; }
-            t.global[i] = m.category == Category::Fx || i == P_masterVolume || i == P_warmth;
+            t.global[i] = m.category == Category::Fx || i == P_masterVolume || i == P_warmth || m.module == "Granular";   // bus stages
             t.envTime[i] = m.category == Category::Env && m.unit == "s";
             t.modulatable[i] = m.modulatable;
             t.audioRate[i] = m.audioRate;

@@ -438,7 +438,18 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(resDamping,  "Resonator Damping", 0, 1, 0.5, 0.01, 0) \
     F(resInharm,   "Resonator Inharmonicity", 0, 1, 0, 0.01, 0) \
     F(resSpread,   "Resonator Stereo Spread", 0, 1, 0.5, 0.01, 0) \
-    F(resFeedback, "Resonator Feedback", 0, 1, 0, 0.01, 0)
+    F(resFeedback, "Resonator Feedback", 0, 1, 0, 0.01, 0) \
+    F(grMix,       "Granular Mix", 0, 1, 0, 0.01, 0) \
+    F(grSize,      "Grain Size", 5, 500, 80, 0.1, 60) \
+    F(grDensity,   "Grain Density", 1, 200, 20, 0.01, 20) \
+    F(grPosition,  "Grain Position", 0, 3, 0.25, 0.001, 0.5) \
+    F(grJitter,    "Grain Position Jitter", 0, 1, 0.2, 0.01, 0) \
+    F(grPitch,     "Grain Pitch", -24, 24, 0, 0.01, 0) \
+    F(grPitchRand, "Grain Pitch Jitter", 0, 1, 0, 0.01, 0) \
+    F(grReverse,   "Grain Reverse Chance", 0, 1, 0, 0.01, 0) \
+    F(grSpread,    "Grain Stereo Spread", 0, 1, 0.5, 0.01, 0) \
+    F(grFeedback,  "Granular Feedback", 0, 0.95, 0, 0.01, 0) \
+    B(grFreeze,    "Granular Freeze", false)
 
 enum ParamIndex
 {

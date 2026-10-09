@@ -41,7 +41,7 @@ public:
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawTabButton (juce::TabBarButton&, juce::Graphics&, bool over, bool down) override;
-    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 133; }
+    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 120; }
 };
 
 // Slider that hands right-clicks to its owner instead of dragging.
@@ -303,7 +303,7 @@ private:
     juce::TextButton sceneEditBtn[4], sceneStoreBtn[4];
     juce::Label sceneState[4];
     juce::ToggleButton morphBtn { "Morph between scenes" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> morphAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> morphAtt, freezeAtt;
     juce::TextButton clearScenesBtn { "Clear scenes" };
     void updateSceneButtons();
     void showRoute (int slot);

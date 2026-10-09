@@ -278,6 +278,23 @@ int main()
         CHECK (s.finite && s.peak > 0.001f, "imported patch silent");
     }
 
+    // ---- 6b. semitone dial tunes correctly (A3 + 7 semitones = E4, 329.6 Hz)
+    {
+        auto p = make();
+        for (int i : { P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain, P_delayMix, P_reverbMix, P_chorusMix, P_analogDrift })
+            setP (*p, i, 0.0f);
+        setP (*p, P_osc1Wave, 3.0f);   // sine
+        setP (*p, P_osc1Semi, 7.0f);
+        setP (*p, P_filterCutoff, 12000.0f);
+        juce::AudioBuffer<float> cap;
+        render (*p, 1.0, chord (0.0, 0.9, { 57 }), &cap);
+        int zc = 0; const int a = 12000, b = 36000;
+        for (int i = a + 1; i < b; ++i) if (cap.getSample (0, i - 1) < 0 && cap.getSample (0, i) >= 0) ++zc;
+        const double f = zc / ((b - a) / sr);
+        std::cout << "Semitone dial: measured " << f << " Hz (expected 329.6)" << std::endl;
+        CHECK (std::abs (f - 329.63) < 3.0, "semitone tuning off");
+    }
+
     // ---- 7. CPU: 16 voices of everything
     {
         std::cout << "CPU load" << std::endl;
@@ -316,6 +333,35 @@ int main()
                 juce::AudioBuffer<float> cap;
                 render (*p, 1.2, chord (0.02, 1.0, { 36, 48 }), &cap);
                 writeWav (cap, sr, "warm_" + juce::String (mode).paddedLeft ('0', 2) + (on ? "_on.wav" : "_off.wav"));
+            }
+    }
+
+    // ---- 10. TB-303 closing test
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_303", {}).isNotEmpty())
+    {
+        for (int variant = 0; variant < 4; ++variant)
+            for (float cut : { 40.0f, 400.0f, 2000.0f })
+            {
+                const float envAmt = 0.0f;
+                auto p = make();
+                setP (*p, P_filterMode, variant == 1 ? 0.0f : 12.0f);
+                if (variant == 2) for (int i : { P_warmth, P_bassKeep, P_analogDrift }) setP (*p, i, 0.0f);
+                if (variant == 3) setP (*p, P_lfoAssignTarget0, 0.0f);
+                std::cout << "  variant " << variant;
+                setP (*p, P_filterRes, 12.0f);
+                setP (*p, P_filterCutoff, cut);
+                setP (*p, P_fEnvAmt, envAmt);
+                for (int i : { P_delayMix, P_reverbMix, P_chorusMix }) setP (*p, i, 0.0f);
+                for (int i : { P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain }) setP (*p, i, 0.0f);
+                juce::AudioBuffer<float> cap;
+                render (*p, 0.6, chord (0.0, 0.5, { 45 }), &cap);
+                writeWav (cap, sr, "tb_v" + juce::String (variant) + "_" + juce::String ((int) cut) + ".wav");
+                float first = 0, sustain = 0;
+                for (int i = 0; i < 2400; ++i) first = std::max (first, std::abs (cap.getSample (0, i)));
+                double ss = 0; for (int i = 12000; i < 22000; ++i) ss += cap.getSample (0, i) * cap.getSample (0, i);
+                sustain = (float) std::sqrt (ss / 10000);
+                std::cout << "  envAmt " << envAmt << " cutoff " << cut << ": first 50ms peak " << juce::Decibels::gainToDecibels (first)
+                          << " dB, sustain rms " << juce::Decibels::gainToDecibels (sustain) << " dB" << std::endl;
             }
     }
 

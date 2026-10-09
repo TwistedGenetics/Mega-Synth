@@ -176,6 +176,14 @@ inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT 
     F(warmth,        "Warmth",             0, 1, 0.5, 0.01, 0) \
     F(bassKeep,      "Bass Keep",          0, 1, 0.5, 0.01, 0) \
     F(analogDrift,   "Analog Drift",       0, 1, 0.3, 0.01, 0) \
+    F(osc1Semi,      "Osc1 Semitones",   -12, 12, 0, 1, 0) \
+    F(osc2Semi,      "Osc2 Semitones",   -12, 12, 0, 1, 0) \
+    F(osc3Semi,      "Osc3 Semitones",   -12, 12, 0, 1, 0) \
+    F(subSemi,       "Sub Semitones",    -12, 12, 0, 1, 0) \
+    F(osc4Semi,      "WT1 Semitones",    -12, 12, 0, 1, 0) \
+    F(wt2Semi,       "WT2 Semitones",    -12, 12, 0, 1, 0) \
+    F(complexSemi,   "Complex Semitones",-12, 12, 0, 1, 0) \
+    F(supersawSemi,  "SuperSaw Semitones",-12, 12, 0, 1, 0) \
     C(osc1Wave,  "Osc1 Waveform", kListWave, 0) \
     F(osc1Detune,"Osc1 Detune", -50, 50, 0, 1, 0) \
     F(osc1Oct,   "Osc1 Octave", -2, 2, 0, 1, 0) \

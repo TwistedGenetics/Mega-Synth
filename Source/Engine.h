@@ -69,6 +69,11 @@ struct FilterChain
     float lg[4] { 0.5f, 0.5f, 0.5f, 0.5f };
     float ls[2][4] {};
     float lk = 0.0f;
+    // TB-303 mode: the ladder with its resonance feedback high-passed (~150 Hz), as in the
+    // real 303, so resonance fades at low cutoff and the filter closes right down.
+    bool tb303 = false;
+    float tbA = 0.98f;
+    float tbX[2] { 0, 0 }, tbY[2] { 0, 0 };
 
     // Analog warmth (0 = exactly the browser's behaviour)
     float warm = 0.0f;       // soft, slightly asymmetric input saturation instead of a hard clip
@@ -103,7 +108,14 @@ struct FilterChain
     {
         if (ladder)
         {
-            float v = inputShape (x - lk * fbState[ch], drive);
+            float fb = fbState[ch];
+            if (tb303)
+            {
+                const float y = tbA * (tbY[ch] + fb - tbX[ch]);
+                tbX[ch] = fb; tbY[ch] = y;
+                fb = y;
+            }
+            float v = inputShape (x - lk * fb, drive);
             float* s = ls[ch];
             for (int k = 0; k < 4; ++k)
             {
@@ -113,7 +125,9 @@ struct FilterChain
             }
             if (! std::isfinite (v)) { reset(); v = 0.0f; }
             fbState[ch] = v;
-            return dcBlock (v * (1.0f + lk * 0.35f), ch);   // make up some of the bass lost to resonance
+            v *= tb303 ? (1.0f + lk * 0.45f) : (1.0f + lk * 0.35f);   // make up some of the bass lost to resonance
+            if (limitOut) v = 1.5f * std::tanh (v * (1.0f / 1.5f));
+            return dcBlock (v, ch);
         }
 
         float v = inputShape (x, drive);

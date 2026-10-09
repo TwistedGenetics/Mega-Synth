@@ -505,21 +505,23 @@ void MegaSynthEditor::buildPages()
             o[i] = sec (page, "Oscillator " + juce::String (i + 1), col::osc);
             o[i]->choice (P_osc1Wave + 3 * i, "Waveform", 254);
             o[i]->newRow();
-            o[i]->knob (P_osc1Detune + 3 * i, "Detune");
-            o[i]->knob (P_osc1Oct + 3 * i, "Octave");
-            o[i]->knob (P_osc1Gain + i, "Level");
+            o[i]->knob (P_osc1Oct + 3 * i, "Octave", 60);
+            o[i]->knob (P_osc1Semi + i, "Semi", 60);
+            o[i]->knob (P_osc1Detune + 3 * i, "Detune", 60);
+            o[i]->knob (P_osc1Gain + i, "Level", 60);
         }
         auto* sub = sec (page, "Sub Oscillator", col::osc);
         sub->choice (P_subWave, "Waveform", 254);
         sub->newRow();
-        sub->knob (P_subOct, "Octave");
-        sub->knob (P_subGain, "Level");
+        sub->knob (P_subOct, "Octave", 60);
+        sub->knob (P_subSemi, "Semi", 60);
+        sub->knob (P_subGain, "Level", 60);
 
         // the two sample / wavetable oscillators
-        struct WtIds { int mode, dir, norm, det, oct, root, pos, win, ls, le, gain; };
+        struct WtIds { int mode, dir, norm, semi, det, oct, root, pos, win, ls, le, gain; };
         const WtIds ids[2] = {
-            { P_osc4LoopMode, P_osc4Direction, P_osc4Normalize, P_osc4Detune, P_osc4Oct, P_osc4Root, P_osc4Position, P_osc4Window, P_osc4LoopStart, P_osc4LoopEnd, P_osc4Gain },
-            { P_wt2LoopMode, P_wt2Direction, P_wt2Normalize, P_wt2Detune, P_wt2Oct, P_wt2Root, P_wt2Position, P_wt2Window, P_wt2LoopStart, P_wt2LoopEnd, P_wt2Gain } };
+            { P_osc4LoopMode, P_osc4Direction, P_osc4Normalize, P_osc4Semi, P_osc4Detune, P_osc4Oct, P_osc4Root, P_osc4Position, P_osc4Window, P_osc4LoopStart, P_osc4LoopEnd, P_osc4Gain },
+            { P_wt2LoopMode, P_wt2Direction, P_wt2Normalize, P_wt2Semi, P_wt2Detune, P_wt2Oct, P_wt2Root, P_wt2Position, P_wt2Window, P_wt2LoopStart, P_wt2LoopEnd, P_wt2Gain } };
         Section* wtS[2];
         for (int k = 0; k < 2; ++k)
         {
@@ -546,24 +548,26 @@ void MegaSynthEditor::buildPages()
             wtS[k]->choice (ids[k].dir, "Direction", 110);
             wtS[k]->choice (ids[k].norm, "Normalize", 110);
             wtS[k]->newRow();
-            for (auto [idx, n] : { std::pair<int, const char*> { ids[k].det, "Detune" }, { ids[k].oct, "Octave" }, { ids[k].root, "Root Note" },
-                                   { ids[k].pos, "Scan Pos" }, { ids[k].win, "Window" }, { ids[k].ls, "Loop Start" },
-                                   { ids[k].le, "Loop End" }, { ids[k].gain, "Level" } })
-                wtS[k]->knob (idx, n, 62);
+            for (auto [idx, n] : { std::pair<int, const char*> { ids[k].oct, "Octave" }, { ids[k].semi, "Semi" }, { ids[k].det, "Detune" },
+                                   { ids[k].root, "Root Note" }, { ids[k].pos, "Scan Pos" }, { ids[k].win, "Window" },
+                                   { ids[k].ls, "Loop Start" }, { ids[k].le, "Loop End" }, { ids[k].gain, "Level" } })
+                wtS[k]->knob (idx, n, 56);
         }
 
         auto* cx = sec (page, "Oscillator 5 / Complex", col::complex);
         cx->choice (P_complexWaveA, "Primary Wave A", 170);
         cx->choice (P_complexWaveB, "Mod Wave B", 170);
         cx->newRow();
-        for (auto [idx, n] : { std::pair<int, const char*> { P_complexDetune, "Detune" }, { P_complexOct, "Octave" }, { P_complexRatio, "Mod Ratio" },
-                               { P_complexFm, "FM Index" }, { P_complexShape, "Wavefold" }, { P_complexMix, "A/B Blend" }, { P_complexGain, "Level" } })
-            cx->knob (idx, n);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_complexOct, "Octave" }, { P_complexSemi, "Semi" }, { P_complexDetune, "Detune" },
+                               { P_complexRatio, "Mod Ratio" }, { P_complexFm, "FM Index" }, { P_complexShape, "Wavefold" },
+                               { P_complexMix, "A/B Blend" }, { P_complexGain, "Level" } })
+            cx->knob (idx, n, 64);
 
         auto* ss = sec (page, "Oscillator 6 / Unison SuperSaw", col::supersaw);
-        for (auto [idx, n] : { std::pair<int, const char*> { P_supersawDetune, "Detune" }, { P_supersawOct, "Octave" }, { P_supersawVoices, "Voices" },
-                               { P_supersawSpread, "Spread" }, { P_supersawStereo, "Stereo" }, { P_supersawDrift, "Drift" }, { P_supersawGain, "Level" } })
-            ss->knob (idx, n);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_supersawOct, "Octave" }, { P_supersawSemi, "Semi" }, { P_supersawDetune, "Detune" },
+                               { P_supersawVoices, "Voices" }, { P_supersawSpread, "Spread" }, { P_supersawStereo, "Stereo" },
+                               { P_supersawDrift, "Drift" }, { P_supersawGain, "Level" } })
+            ss->knob (idx, n, 64);
 
         page->onResize = [page, o, sub, wtS, cx, ss]
         {

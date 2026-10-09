@@ -45,7 +45,7 @@ enum FilterMode { FM_LP, FM_SALLENKEY, FM_LADDER, FM_STEINER, FM_SVF, FM_OTA, FM
 void FilterChain::configure (int newMode)
 {
     mode = newMode;
-    fbKind = FbNone; preK = 0; postK = 0; fbGain = 0; ladder = false; limitOut = false;
+    fbKind = FbNone; preK = 0; postK = 0; fbGain = 0; ladder = false; limitOut = false; tb303 = false;
     auto set = [this] (std::initializer_list<Biquad::Type> t)
     {
         numStages = 0;
@@ -65,7 +65,7 @@ void FilterChain::configure (int newMode)
         case FM_MS20:        set ({ B::HP, B::LP }); break;
         case FM_OBERHEIM:    set ({ B::HP, B::LP }); break;
         case FM_SEM:         set ({ B::BP, B::LP }); break;
-        case FM_TB303:       set ({ B::LP, B::LP }); preK = 7.5f; limitOut = true; break;
+        case FM_TB303:       set ({}); ladder = true; tb303 = true; limitOut = true; break;
         case FM_MOOGFAT:     set ({}); ladder = true; break;
         case FM_ARPODYSSEY:  set ({ B::HP, B::LP }); break;
         case FM_CS15:        set ({ B::HP, B::BP, B::LP }); break;
@@ -83,6 +83,7 @@ void FilterChain::reset()
     for (auto& ch : ls) for (auto& v : ch) v = 0.0f;
     for (auto& b : par) b.reset();
     dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
+    tbX[0] = tbX[1] = tbY[0] = tbY[1] = 0.0f;
 }
 
 void FilterChain::copyChannel (int from, int to)
@@ -92,6 +93,7 @@ void FilterChain::copyChannel (int from, int to)
     for (int k = 0; k < 4; ++k) ls[to][k] = ls[from][k];
     for (auto& b : par) b.copyState (from, to);
     dcX[to] = dcX[from]; dcY[to] = dcY[from];
+    tbX[to] = tbX[from]; tbY[to] = tbY[from];
 }
 
 void FilterChain::setLadder (float c, float spread, float k, double sr)
@@ -152,9 +154,8 @@ void FilterChain::update (float c, float res, double sr)
             S (0, c, mx (0.2f, res * 0.18f));
             S (1, mn (18000, c * 1.12f), mx (0.2f, res * 0.14f)); break;
         case FM_TB303:
-            S (0, c, mx (0.25f, res * 0.95f));
-            S (1, mx (20, c * 0.93f), mx (0.25f, res * 1.35f));
-            fbGain = mn (0.96f, res / 24.0f); break;
+            tbA = (float) (1.0 / (1.0 + 2.0 * kPi * 150.0 / sr));
+            setLadder (c, 0.0f, 4.0f * mn (0.98f, res / 24.0f), sr); break;
         case FM_MOOGFAT:
             setLadder (c, 0.03f, 4.0f * mn (0.985f, res / 22.0f), sr); break;
         case FM_ARPODYSSEY:
@@ -169,9 +170,13 @@ void FilterChain::update (float c, float res, double sr)
             S (1, mx (20, c * 0.9f), mx (0.2f, res * 0.36f)); break;
         case FM_ACID:
         default:
-            S (0, c, res * 0.8f);
-            S (1, mx (20, c * 0.95f), res * 1.2f);
+        {
+            // resonance fades below ~500 Hz so a closed filter doesn't boom at its cutoff
+            const float rs = clampv ((c - 60.0f) / 440.0f, 0.2f, 1.0f);
+            S (0, c, res * 0.8f * rs);
+            S (1, mx (20, c * 0.95f), res * 1.2f * rs);
             fbGain = mn (0.92f, res / 28.0f); break;
+        }
     }
 }
 
@@ -229,9 +234,6 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     updateControl (s, nullptr, m, true);
     baseFreq = freq;
 
-    // The browser's filters start from the BiquadFilterNode default (350 Hz) and
-    // sweep to the cutoff with a 10 ms time constant; keep that little attack.
-    cutoff.v = 350.0f;
     srcMute.v = 0.0f;
 }
 
@@ -276,11 +278,11 @@ void Voice::computeMod (const Snapshot& s, ModState& mod) const
     }
 }
 
-struct WtParamSet { int det, oct, root, pos, win, mode, ls, le, dir, norm, gain; int mGain, mDet, mPos, mWin, mLs, mLe; };
+struct WtParamSet { int semi, det, oct, root, pos, win, mode, ls, le, dir, norm, gain; int mGain, mDet, mPos, mWin, mLs, mLe; };
 static const WtParamSet kWtParams[2] = {
-    { P_osc4Detune, P_osc4Oct, P_osc4Root, P_osc4Position, P_osc4Window, P_osc4LoopMode, P_osc4LoopStart, P_osc4LoopEnd,
+    { P_osc4Semi, P_osc4Detune, P_osc4Oct, P_osc4Root, P_osc4Position, P_osc4Window, P_osc4LoopMode, P_osc4LoopStart, P_osc4LoopEnd,
       P_osc4Direction, P_osc4Normalize, P_osc4Gain, MT_osc4Gain, MT_osc4Detune, MT_osc4Position, MT_osc4Window, MT_osc4LoopStart, MT_osc4LoopEnd },
-    { P_wt2Detune, P_wt2Oct, P_wt2Root, P_wt2Position, P_wt2Window, P_wt2LoopMode, P_wt2LoopStart, P_wt2LoopEnd,
+    { P_wt2Semi, P_wt2Detune, P_wt2Oct, P_wt2Root, P_wt2Position, P_wt2Window, P_wt2LoopMode, P_wt2LoopStart, P_wt2LoopEnd,
       P_wt2Direction, P_wt2Normalize, P_wt2Gain, MT_wt2Gain, MT_wt2Detune, MT_wt2Position, MT_wt2Window, MT_wt2LoopStart, MT_wt2LoopEnd } };
 
 void Voice::updateWt (int slot, const Snapshot& s, const ModState& mod, double bendC, float cPort, float c10)
@@ -293,7 +295,7 @@ void Voice::updateWt (int slot, const Snapshot& s, const ModState& mod, double b
     if (! w.loaded) return;
 
     const double det = clampv (s.f (P.det) + mod[P.mDet], -50.0f, 50.0f);
-    const double f = baseFreq * pow2 (std::round (s.f (P.oct))) * pow2 ((det + bendC) / 1200.0);
+    const double f = baseFreq * pow2 (std::round (s.f (P.oct))) * pow2 ((100.0 * std::round (s.f (P.semi)) + det + bendC) / 1200.0);
     const double root = midiToFreq (std::round (s.f (P.root)));
     w.rate.target = (float) clampv (f / std::max (10.0, root), 0.01, 16.0);
     w.rate.step (cPort);
@@ -343,10 +345,11 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
         driftPh[k] = wrap01 (driftPh[k] + driftRate[k] * dtc);
         driftCents[k] = driftAmt * 6.0f * (float) (0.65 * std::sin (2.0 * kPi * driftPh[k]) + 0.35 * std::sin (2.0 * kPi * (2.37 * driftPh[k] + 0.3 * k)));
     }
-    f1.target = (float) oscF (P_osc1Oct, s.f (P_osc1Detune) + pitch + driftCents[0]);
-    f2.target = (float) oscF (P_osc2Oct, s.f (P_osc2Detune) + pitch + driftCents[1]);
-    f3.target = (float) oscF (P_osc3Oct, s.f (P_osc3Detune) + pitch + driftCents[2]);
-    fSub.target = (float) oscF (P_subOct, pitch + driftCents[3]);
+    auto semi = [&] (int p) { return 100.0 * std::round (s.f (p)); };
+    f1.target = (float) oscF (P_osc1Oct, semi (P_osc1Semi) + s.f (P_osc1Detune) + pitch + driftCents[0]);
+    f2.target = (float) oscF (P_osc2Oct, semi (P_osc2Semi) + s.f (P_osc2Detune) + pitch + driftCents[1]);
+    f3.target = (float) oscF (P_osc3Oct, semi (P_osc3Semi) + s.f (P_osc3Detune) + pitch + driftCents[2]);
+    fSub.target = (float) oscF (P_subOct, semi (P_subSemi) + pitch + driftCents[3]);
     f1.step (cPort); f2.step (cPort); f3.step (cPort); fSub.step (cPort);
 
     wave1 = kWaveChoiceToId[clampv (s.i (P_osc1Wave), 0, 9)];
@@ -436,7 +439,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
 
     // --- Osc 5: complex oscillator
     const double cDet = clampv (s.f (P_complexDetune) + mod[MT_complexDetune], -50.0f, 50.0f);
-    cBase.target = (float) oscF (P_complexOct, cDet + bendC + driftCents[4]);
+    cBase.target = (float) oscF (P_complexOct, semi (P_complexSemi) + cDet + bendC + driftCents[4]);
     cRatio.target = clampv (s.f (P_complexRatio) + mod[MT_complexRatio], 0.125f, 8.0f);
     cFm.target = clampv (s.f (P_complexFm) + mod[MT_complexFm], 0.0f, 1500.0f);
     cShapeK = clampv (s.f (P_complexShape) + mod[MT_complexShape], 1.0f, 25.0f);
@@ -445,7 +448,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
 
     // --- Osc 6: unison SuperSaw
     const double ssDet = clampv (s.f (P_supersawDetune) + mod[MT_supersawDetune], -50.0f, 50.0f);
-    ssBase.target = (float) oscF (P_supersawOct, ssDet + bendC);
+    ssBase.target = (float) oscF (P_supersawOct, semi (P_supersawSemi) + ssDet + bendC);
     ssBase.step (cPort);
     ssVoices = clampv ((int) std::lround (s.f (P_supersawVoices) + mod[MT_supersawVoices]), 2, 9);
     const float spread = clampv (s.f (P_supersawSpread) + mod[MT_supersawSpread], 0.0f, 80.0f);

@@ -592,7 +592,8 @@ int main()
             CHECK (std::abs (peakHz (sBase) - 220.0) < 3.0, "spectrum helper");
 
             // mix at zero = untouched, whatever the other settings
-            run ([] (MegaSynthProcessor& p) { setP (p, P_wmFold, 1.0f); setP (p, P_wmBits, 3.0f); setP (p, P_arShift, 300.0f); setP (p, P_arRing, 0.0f); }, b);
+            run ([] (MegaSynthProcessor& p) { setP (p, P_wmFold, 1.0f); setP (p, P_wmBits, 3.0f); setP (p, P_arShift, 300.0f); setP (p, P_arRing, 0.0f);
+                                              setP (p, P_dnaMode, 3.0f); setP (p, P_dnaAmount, 1.0f); setP (p, P_dnaA, 6.0f); }, b);
             float md = 0; for (int i = 0; i < b.getNumSamples(); ++i) md = std::max (md, std::abs (b.getSample (0, i) - base.getSample (0, i)));
             CHECK (md == 0.0f, "modules at zero mix must be bit-exact");
 
@@ -646,10 +647,77 @@ int main()
                 std::cout << "  neutral 50% mix level " << std::sqrt (e1 / e0) << " of dry" << std::endl;
                 CHECK (std::abs (std::sqrt (e1 / e0) - 1.0) < 0.05, "dry/wet latency match");
             }
+            // ---- Stage 6: DNA Splice
+            {
+                std::cout << "DNA Splice" << std::endl;
+                auto two = [&] (MegaSynthProcessor& p, int waveA, int waveB, float semiB)
+                {
+                    setP (p, P_osc1Wave, (float) waveA); setP (p, P_osc2Wave, (float) waveB);
+                    setP (p, P_osc2Semi, std::fmod (semiB, 12.0f)); setP (p, P_osc2Oct, std::floor (semiB / 12.0f));
+                    setP (p, P_osc2Detune, 0.0f); setP (p, P_dnaMix, 1.0f);
+                    setP (p, P_dnaA, 0.0f); setP (p, P_dnaB, 1.0f);
+                };
+                auto rms = [&] (const juce::AudioBuffer<float>& x) { double e = 0; int c = 0; for (int i = (int) (0.2 * sr); i < (int) (0.8 * sr); ++i, ++c) e += x.getSample (0, i) * x.getSample (0, i); return std::sqrt (e / c); };
+
+                // crossover with A = B, right at the crossover frequency: flat (Linkwitz-Riley sums to an all-pass)
+                for (float ch : { 0.0f, 1.0f })
+                {
+                    run ([&] (MegaSynthProcessor& p) { two (p, 3, 3, 0); setP (p, P_dnaB, 0.0f); setP (p, P_dnaMode, 1.0f); setP (p, P_dnaAmount, 0.0f); setP (p, P_dnaChar, ch); }, b);
+                    juce::AudioBuffer<float> ref;
+                    run ([&] (MegaSynthProcessor& p) { setP (p, P_osc1Gain, 1.0f); }, ref);
+                    std::cout << "  crossover A=B (" << (ch < 0.5f ? "12" : "24") << " dB) level " << rms (b) / rms (ref) << " of the source" << std::endl;
+                    CHECK (std::abs (rms (b) / rms (ref) - 1.0) < 0.05, "crossover balance");
+                }
+                // crossover at ~440 Hz: 220 Hz from A and 880 Hz from B pass; swapped, both are filtered out
+                run ([&] (MegaSynthProcessor& p) { two (p, 3, 3, 24); setP (p, P_dnaMode, 1.0f); setP (p, P_dnaAmount, 1.0f / 7.0f); setP (p, P_dnaChar, 1.0f); }, b);
+                const double passed = rms (b);
+                run ([&] (MegaSynthProcessor& p) { two (p, 3, 3, 24); setP (p, P_dnaA, 1.0f); setP (p, P_dnaB, 0.0f); setP (p, P_dnaMode, 1.0f); setP (p, P_dnaAmount, 1.0f / 7.0f); setP (p, P_dnaChar, 1.0f); }, b);
+                std::cout << "  crossover 220|880 Hz passed " << passed << ", swapped " << rms (b) << std::endl;
+                CHECK (rms (b) < 0.35 * passed, "crossover separation");
+
+                // harmonic: every 2nd harmonic of a saw replaced by B's (a sine has none) -> odd harmonics only
+                run ([&] (MegaSynthProcessor& p) { two (p, 0, 3, 0); setP (p, P_dnaMode, 2.0f); setP (p, P_dnaAmount, 1.0f); setP (p, P_dnaChar, 0.0f); }, b);
+                {
+                    const auto sp = spectrum (b);
+                    std::cout << "  harmonic splice: 2nd " << near (sp, 440) << " vs 3rd " << near (sp, 660) << std::endl;
+                    CHECK (near (sp, 440) < 0.02f * near (sp, 660) && near (sp, 220) > near (sp, 660), "harmonic splice removes even harmonics");
+                }
+
+                // transient / body: A (220 Hz) for ~55 ms, then B (880 Hz)
+                run ([&] (MegaSynthProcessor& p) { two (p, 3, 3, 24); setP (p, P_dnaMode, 4.0f); setP (p, P_dnaAmount, 0.6f); setP (p, P_dnaChar, 0.0f); setP (p, P_ampA, 0.001f); }, b);
+                const double early = freqOf (b, 0.005, 0.045), late = freqOf (b, 0.3, 0.8);
+                std::cout << "  transient/body: " << early << " Hz then " << late << " Hz" << std::endl;
+                CHECK (std::abs (early - 220) < 40 && std::abs (late - 880) < 5, "transient / body");
+
+                // morph ends
+                run ([&] (MegaSynthProcessor& p) { two (p, 3, 3, 24); setP (p, P_dnaMode, 6.0f); setP (p, P_dnaAmount, 0.0f); setP (p, P_dnaChar, 0.0f); }, b);
+                const double m0 = freqOf (b, 0.2, 0.8);
+                run ([&] (MegaSynthProcessor& p) { two (p, 3, 3, 24); setP (p, P_dnaMode, 6.0f); setP (p, P_dnaAmount, 1.0f); setP (p, P_dnaChar, 0.0f); }, b);
+                const double m1 = freqOf (b, 0.2, 0.8);
+                CHECK (std::abs (m0 - 220) < 3 && std::abs (m1 - 880) < 5, "morph ends");
+
+                // every mode: finite, audible, and switching modes mid-note doesn't click
+                double worstJump = 0, normalJump = 0;
+                for (int mode = 0; mode < 7; ++mode)
+                {
+                    auto p = clean(); two (*p, 0, 1, 7); setP (*p, P_dnaMode, (float) mode); setP (*p, P_dnaAmount, 0.6f);
+                    juce::AudioBuffer<float> x1, x2;
+                    auto st = render (*p, 0.4, { { 0.0, juce::MidiMessage::noteOn (1, 57, 1.0f) } }, &x1);
+                    CHECK (st.finite && st.peak > 0.01f && st.peak < 4.0f, "DNA mode " + juce::String (mode) + " output");
+                    for (int i = (int) (0.2 * sr); i < x1.getNumSamples(); ++i) normalJump = std::max (normalJump, (double) std::abs (x1.getSample (0, i) - x1.getSample (0, i - 1)));
+                    setP (*p, P_dnaMode, (float) ((mode + 3) % 7));
+                    render (*p, 0.1, {}, &x2);
+                    for (int i = 1; i < x2.getNumSamples(); ++i) worstJump = std::max (worstJump, (double) std::abs (x2.getSample (0, i) - x2.getSample (0, i - 1)));
+                }
+                std::cout << "  mode switch: largest step " << worstJump << " (steady playing: " << normalJump << ")" << std::endl;
+                CHECK (worstJump < 1.5 * normalJump, "mode switch should crossfade");
+            }
+
             // everything at maximum stays finite and bounded
             {
                 auto p = make();
-                for (int i : { P_wmMix, P_wmDrive, P_wmFold, P_wmShape, P_wmBend, P_wmAsym, P_wmRect, P_arFm, P_arAm, P_arRing, P_arShiftMix }) setP (*p, i, 1.0f);
+                for (int i : { P_wmMix, P_wmDrive, P_wmFold, P_wmShape, P_wmBend, P_wmAsym, P_wmRect, P_arFm, P_arAm, P_arRing, P_arShiftMix, P_dnaMix, P_dnaAmount }) setP (*p, i, 1.0f);
+                setP (*p, P_dnaMode, 3.0f);
                 setP (*p, P_wmBits, 1.0f); setP (*p, P_wmDown, 32.0f); setP (*p, P_arShift, 1000.0f); setP (*p, P_arMod, 5.0f);
                 auto st = render (*p, 2.0, chord (0.0, 1.5, { 36, 48, 60, 72 }));
                 std::cout << "  everything at max: peak " << st.peak << std::endl;

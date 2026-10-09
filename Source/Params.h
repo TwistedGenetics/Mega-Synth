@@ -53,6 +53,10 @@ inline const char* const kArModKeys[]   = { "sine","osc1","osc2","osc3","sub","n
 inline const char* const kArModLabels[] = { "Sine (ratio)","Osc 1","Osc 2","Osc 3","Sub","Noise" };
 inline const char* const kArFmTKeys[]   = { "osc123sub","osc1","osc2","osc3","all" };
 inline const char* const kArFmTLabels[] = { "Osc 1-3 + Sub","Osc 1","Osc 2","Osc 3","Every oscillator" };
+inline const char* const kDnaModeKeys[]   = { "waveform","crossover","harmonic","spectral","transient","ampdna","morph" };
+inline const char* const kDnaModeLabels[] = { "Waveform Splice","Crossover","Harmonic","Spectral","Transient / Body","Amplitude DNA","Morph / Gene Shuffle" };
+inline const char* const kDnaSrcKeys[]   = { "osc1","osc2","osc3","sub","wt1","wt2","complex","supersaw" };
+inline const char* const kDnaSrcLabels[] = { "Osc 1","Osc 2","Osc 3","Sub","WT 1","WT 2","Complex","SuperSaw" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -163,6 +167,8 @@ inline const ChoiceList kListClock       = TG_LIST(kClock);
 inline const ChoiceList kListLfoSrc      = TG_LIST(kLfoSrc);
 inline const ChoiceList kListEnvSrc      = TG_LIST(kEnvSrc);
 inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT };
+inline const ChoiceList kListDnaMode     { kDnaModeKeys, kDnaModeLabels, 7 };
+inline const ChoiceList kListDnaSrc      { kDnaSrcKeys, kDnaSrcLabels, 8 };
 inline const ChoiceList kListArMod       { kArModKeys, kArModLabels, 6 };
 inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
 #undef TG_LIST
@@ -414,7 +420,13 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(arAm,       "Audio-Rate AM", 0, 1, 0, 0.01, 0) \
     F(arRing,     "Audio-Rate Ring", 0, 1, 0, 0.01, 0) \
     F(arShift,    "Frequency Shift", -1000, 1000, 0, 0.1, 0) \
-    F(arShiftMix, "Frequency Shift Mix", 0, 1, 0, 0.01, 0)
+    F(arShiftMix, "Frequency Shift Mix", 0, 1, 0, 0.01, 0) \
+    F(dnaMix,    "DNA Splice Mix", 0, 1, 0, 0.01, 0) \
+    C(dnaMode,   "DNA Splice Mode", kListDnaMode, 0) \
+    C(dnaA,      "DNA Source A", kListDnaSrc, 0) \
+    C(dnaB,      "DNA Source B", kListDnaSrc, 1) \
+    F(dnaAmount, "DNA Splice Amount", 0, 1, 0.5, 0.001, 0) \
+    F(dnaChar,   "DNA Splice Character", 0, 1, 0.5, 0.001, 0)
 
 enum ParamIndex
 {

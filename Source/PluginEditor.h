@@ -297,6 +297,8 @@ private:
     int matrixTab = -1;
     uint32_t lastRouteVersion = 0;
     tgui::XYPad* xyPad = nullptr;
+    juce::Label* dnaInfo = nullptr;
+    int lastDnaMode = -1;
     juce::Array<tgui::MacroCell*> macroCells;
     juce::TextButton sceneEditBtn[4], sceneStoreBtn[4];
     juce::Label sceneState[4];

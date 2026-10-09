@@ -1134,6 +1134,17 @@ void MegaSynthEditor::buildPages()
     // ---------------------------------------------------------------- Mutation
     {
         auto* page = addPage ("Mutation");
+        auto* dnS = sec (page, "DNA Splice  (builds a new wave from two of the note's own sources)", col::wavetable);
+        dnS->choice (P_dnaMode, "Splice Mode", 170);
+        dnS->choice (P_dnaA, "Source A", 110);
+        dnS->choice (P_dnaB, "Source B", 110);
+        dnS->knob (P_dnaMix, "Mix");
+        dnS->knob (P_dnaAmount, "Amount");
+        dnS->knob (P_dnaChar, "Character");
+        dnaInfo = page->own (new juce::Label());
+        dnaInfo->setColour (juce::Label::textColourId, col::text);
+        dnaInfo->setFont (juce::Font (juce::FontOptions (12.5f)));
+        dnaInfo->setJustificationType (juce::Justification::topLeft);
         auto* wmS = sec (page, "Wave Mutation  (after the oscillator mix, before the filter; each note on its own)", col::complex);
         wmS->knob (P_wmMix, "Mix");
         wmS->knob (P_wmDrive, "Drive");
@@ -1157,19 +1168,23 @@ void MegaSynthEditor::buildPages()
         auto* help = page->own (new juce::Label ({}, "Wave Mutation: Drive pushes the mix into the shaper; Bend curves it, Asymmetry adds even harmonics, "
             "Fold wraps peaks back over (wavefolding), Shape saturates, Rectify flips the negative half up. These run at twice the sample rate to "
             "keep aliasing down. Bit Depth and Rate Reduce come after, for deliberate digital grit. Mix 0 = bypassed.\n\n"
-            "Audio-Rate Transform: the Modulator is an internal sine at Ratio x the note (plus Offset in Hz, for clangorous inharmonic tones), "
+            "Order: DNA Splice -> Wave Mutation -> Audio-Rate Transform -> filter.\n\n"
+        "Audio-Rate Transform: the Modulator is an internal sine at Ratio x the note (plus Offset in Hz, for clangorous inharmonic tones), "
             "one of the note's own oscillators, or noise. FM bends the chosen oscillators' pitch with it every sample (through-zero), "
             "AM and Ring multiply the sound by it, and Shift moves every frequency up or down by a fixed number of Hz (not a pitch shift - "
             "harmonics stop being harmonic). Every knob here can be modulated from the Mod Matrix."));
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.5f)));
         help->setJustificationType (juce::Justification::topLeft);
-        page->onResize = [page, wmS, arS, help]
+        page->onResize = [this, page, dnS, wmS, arS, help]
         {
             const int g = 10, W = page->getWidth();
-            wmS->setBounds (g, g, W - 2 * g, 130);
-            arS->setBounds (g, 150, W - 2 * g, 130);
-            help->setBounds (g + 6, 296, W - 2 * g - 12, 160);
+            dnS->setBounds (g, g, W - 2 * g, 130);
+            dnaInfo->setBounds (g + 700, g + 34, W - 2 * g - 710, 90);
+            dnaInfo->toFront (false);
+            wmS->setBounds (g, 150, W - 2 * g, 130);
+            arS->setBounds (g, 290, W - 2 * g, 130);
+            help->setBounds (g + 6, 432, W - 2 * g - 12, 160);
         };
     }
 
@@ -1641,6 +1656,23 @@ void MegaSynthEditor::timerCallback()
     if (matrixTab >= 0 && tabs.getCurrentTabIndex() == matrixTab)
         for (auto* r : routeRows) r->updateLive();
     for (auto* k : allKnobs) if (k->isShowing()) k->updateMod();
+    if (dnaInfo != nullptr && dnaInfo->isShowing())
+    {
+        const int mode = (int) proc.param (P_dnaMode)->convertFrom0to1 (proc.param (P_dnaMode)->getValue());
+        if (mode != lastDnaMode)
+        {
+            lastDnaMode = mode;
+            static const char* info[] = {
+                "Waveform Splice: A plays the first part of every cycle, B the rest.\nAmount = where in the cycle B takes over. Character = how soft the joins are.",
+                "Crossover: A below a frequency, B above it.\nAmount = crossover point (from the note's fundamental up to its 128th harmonic). Character = slope, 12 to 24 dB/oct.",
+                "Harmonic: every Nth harmonic comes from B, the rest from A.\nAmount = how much of B's harmonics replace A's. Character = N, from every 2nd (even harmonics) to every 8th.",
+                "Spectral: B's sound shaped by A's spectrum (8-band cross-synthesis, like a vocoder).\nAmount = blend from plain B to the cross-synthesis. Character = how fast the bands follow A.",
+                "Transient / Body: A's attack, then B's sustain.\nAmount = how long A lasts (2 ms to 0.5 s). Character = crossfade length.",
+                "Amplitude DNA: B's waveform following A's loudness contour.\nAmount = blend. Character = how fast it follows A.",
+                "Morph / Gene Shuffle: Amount moves from A to B.\nCharacter turns the smooth morph into a cycle-by-cycle shuffle, each cycle taken from A or B (Amount = chance of B)." };
+            dnaInfo->setText (info[juce::jlimit (0, 6, mode)], juce::dontSendNotification);
+        }
+    }
     if (xyPad != nullptr && xyPad->isShowing())
     {
         xyPad->update();

@@ -35,8 +35,9 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 
 ## Mutation tab
 
-Two per-note modules sit between the oscillator mix and the filter. Each has its own mix, and at 0 it's switched out completely.
+Three per-note modules sit between the oscillator mix and the filter, in this order. Each has its own mix, and at 0 it's switched out completely.
 
+- **DNA Splice**: builds a new wave from two of the note's own sources (A and B: Osc 1-3, Sub, WT 1/2, Complex, SuperSaw) in one of seven ways: Waveform (A for part of each cycle, B for the rest), Crossover (A below a frequency, B above), Harmonic (every Nth harmonic from B), Spectral (B shaped by A's spectrum), Transient / Body (A's attack, B's sustain), Amplitude DNA (B following A's loudness) and Morph / Gene Shuffle. Changing mode or source mid-note crossfades.
 - **Wave Mutation**: Drive, Bend, Asymmetry, Fold (wavefolding), Shape (saturation) and Rectify, run at twice the sample rate to keep aliasing down, then Bit Depth and Rate Reduce for deliberate digital grit.
 - **Audio-Rate Transform**: a modulator (an internal sine at a ratio of the note plus an offset in Hz, one of the note's own oscillators, or noise) drives through-zero **FM** of the chosen oscillators, **AM**, **Ring** modulation and a **Frequency Shifter** (moves every partial by the same number of Hz, up or down).
 

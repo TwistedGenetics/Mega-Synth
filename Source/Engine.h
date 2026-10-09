@@ -7,6 +7,7 @@
 #include "ModMatrix.h"
 #include "Mut/WaveMutator.h"
 #include "Mut/AudioRate.h"
+#include "Mut/DnaSplice.h"
 
 namespace tg
 {
@@ -298,6 +299,10 @@ private:
     Snapshot modSnap;
 
     // ---- mutation modules (between the mixer and the filter)
+    DnaSplice dna;
+    DnaParams dnaCur, dnaPrev;   // the running splice, and the one it is fading from
+    int dnaFade = 0;             // samples left in a mode / source crossfade
+    bool dnaStarted = false;
     WaveMutator waveMut;
     AudioRateFx arFx;
     double arPh = 0.0;           // internal sine modulator phase            // the parameters with this voice's modulation applied

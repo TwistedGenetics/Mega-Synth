@@ -185,6 +185,7 @@ void Voice::prepare (double sampleRate)
 {
     sr = sampleRate;
     waveMut.prepare (sampleRate);
+    dna.prepare (sampleRate);
     active = false;
 }
 
@@ -236,6 +237,8 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     rstate.reset();
     lastDt = 0.0f;
     waveMut.reset();
+    dna.reset();
+    dnaStarted = false; dnaFade = 0;
     arFx.reset();
     arPh = 0.0;
     std::fill (std::begin (srcV), std::end (srcV), 0.0f);
@@ -669,8 +672,32 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             ringOn[k] = ringSlots[k].on && ringOut[k].v > 1.0e-6f;
             if (ringOn[k]) { usedAsSource[ringSlots[k].src] = true; if (ringSlots[k].dst < 6) usedAsSource[ringSlots[k].dst] = true; }
         }
-        const bool needComplex = lC.v > 1.0e-6f || lC.target > 0 || usedAsSource[4];
-        const bool needSS = lSS.v > 1.0e-6f || lSS.target > 0 || usedAsSource[5];
+        // ---- DNA Splice: A and B are any two of the voice's own sources
+        DnaParams dnp;
+        dnp.mix = ps.f (P_dnaMix); dnp.mode = clampv (ps.i (P_dnaMode), 0, DNA_COUNT - 1);
+        dnp.srcA = clampv (ps.i (P_dnaA), 0, 7); dnp.srcB = clampv (ps.i (P_dnaB), 0, 7);
+        dnp.amount = ps.f (P_dnaAmount); dnp.chr = ps.f (P_dnaChar);
+        const bool dnaOn = dnp.active();
+        if (dnaOn)
+        {
+            if (! dnaStarted) { dnaCur = dnp; dnaStarted = true; dnaFade = 0; }
+            else if (dnp.mode != dnaCur.mode || dnp.srcA != dnaCur.srcA || dnp.srcB != dnaCur.srcB)
+            {
+                // a new mode or source fades in over 10 ms instead of switching with a click
+                dnaPrev = dnaCur; dnaFade = std::max (1, (int) (0.01 * sr));
+            }
+            dnaCur = dnp;
+            dnaPrev.amount = dnp.amount; dnaPrev.chr = dnp.chr; dnaPrev.mix = dnp.mix;
+            const double noteHz = baseFreq * pow2 (ps.bendSemis / 12.0);
+            dna.configure (dnaCur.mode, dnaCur, noteHz);
+            if (dnaFade > 0 && dnaPrev.mode != dnaCur.mode) dna.configure (dnaPrev.mode, dnaPrev, noteHz);
+        }
+        else dnaStarted = false;
+        const int dnaFadeLen = std::max (1, (int) (0.01 * sr));
+        auto dnaUses = [&] (int k) { return dnaOn && (dnaCur.srcA == k || dnaCur.srcB == k || (dnaFade > 0 && (dnaPrev.srcA == k || dnaPrev.srcB == k))); };
+
+        const bool needComplex = lC.v > 1.0e-6f || lC.target > 0 || usedAsSource[4] || dnaUses (6);
+        const bool needSS = lSS.v > 1.0e-6f || lSS.target > 0 || usedAsSource[5] || dnaUses (7);
         const bool legacyRing = ringMix.v > 1.0e-6f || ringMix.target > 0;
 
         double ssFreq[9];
@@ -783,7 +810,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             srcVals[3] = o4m;
 
             // Osc 5: complex oscillator (B frequency-modulates A, blended, then wavefolded)
-            float cOut = 0;
+            float cOut = 0, cRaw = 0;
             if (needComplex)
             {
                 const double cb = ! ARType::value ? (double) cBase.v : cBase.v * pm (AD_PCx);
@@ -795,12 +822,13 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 const float oc = bank.sample (waveA, phCar, (float) std::abs (cf) * fisr);
                 phCar = wrap01 (phCar + cf * isr);
                 const float shapeK = ! ARType::value ? cShapeK : clampv (cShapeK + ad[AD_CxShape], 1.0f, 25.0f);
-                cOut = driveShape (oc * cMixS.v + om * (1.0f - cMixS.v), shapeK) * lvl (lC.v, AD_LCx);
+                cRaw = driveShape (oc * cMixS.v + om * (1.0f - cMixS.v), shapeK);
+                cOut = cRaw * lvl (lC.v, AD_LCx);
             }
             srcVals[4] = cOut;
 
             // Osc 6: SuperSaw
-            float ssMono = 0, ssL = 0, ssR = 0;
+            float ssMono = 0, ssL = 0, ssR = 0, ssRaw = 0;
             if (ssCount > 0)
             {
                 const float fmS6 = fmIn (5);
@@ -815,6 +843,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                     ssMono += sw; ssL += sw * ssPanL[u]; ssR += sw * ssPanR[u];
                 }
                 const float gss = lvl (lSS.v, AD_LSs);
+                ssRaw = ssMono;
                 ssMono *= gss; ssL *= gss; ssR *= gss;
             }
             srcVals[5] = ssMono;
@@ -831,8 +860,39 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             const float o4g = lvl (wt[0].level.v, AD_LWt1) * wt[0].comp;
             const float w2g = lvl (wt[1].level.v, AD_LWt2) * wt[1].comp;
             const float mono = o1 * g1 + o2 * g2 + o3 * g3 + osub * gs + cOut;
-            const float mL = mono + o4L * o4g + w2L * w2g + ssL;
-            const float mR = mono + o4R * o4g + w2R * w2g + ssR;
+            float mL = mono + o4L * o4g + w2L * w2g + ssL;
+            float mR = mono + o4R * o4g + w2R * w2g + ssR;
+            if (dnaOn)
+            {
+                // the splice of A and B, blended with the oscillator mix
+                const float srcs[8] = { o1, o2, o3, osub, o4m * wt[0].comp, 0.5f * (w2L + w2R) * wt[1].comp, cRaw, ssRaw };
+                float a = srcs[dnaCur.srcA], b = srcs[dnaCur.srcB];
+                const double tn = t + i * isr;
+                float sp;
+                if (dnaFade > 0 && dnaPrev.mode == dnaCur.mode)
+                {
+                    // same mode, new sources: crossfade the inputs (the mode keeps one filter state)
+                    const float f = (float) dnaFade / (float) dnaFadeLen;
+                    a += (srcs[dnaPrev.srcA] - a) * f; b += (srcs[dnaPrev.srcB] - b) * f;
+                    sp = dna.run (dnaCur.mode, a, b, tn);
+                    --dnaFade;
+                }
+                else
+                {
+                    sp = dna.run (dnaCur.mode, a, b, tn);
+                    if (dnaFade > 0)
+                    {
+                        // new mode: run the old one alongside and crossfade the outputs
+                        const float old = dna.run (dnaPrev.mode, srcs[dnaPrev.srcA], srcs[dnaPrev.srcB], tn);
+                        sp += (old - sp) * ((float) dnaFade / (float) dnaFadeLen);
+                        --dnaFade;
+                    }
+                }
+                dna.push (a, b);
+                dna.tick();
+                mL += (sp - mL) * dnp.mix;
+                mR += (sp - mR) * dnp.mix;
+            }
 
             // ring modulation
             float rL = 0, rR = 0;

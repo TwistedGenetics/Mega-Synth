@@ -203,6 +203,17 @@ int main()
             CHECK (s.finite && s.peak > 0.01f, juce::String ("sample osc silent in mode ") + kLoopLabels[mode]);
         }
 
+        // Wavetable 2 on its own
+        CHECK (p->loadSampleData (wavData, "sine2.wav", 1), "WT2 decode failed");
+        setP (*p, P_osc4Gain, 0.0f);
+        setP (*p, P_wt2Gain, 1.0f);
+        {
+            auto s2 = render (*p, 1.0, chord (0.05, 0.6, { 57 }));
+            std::cout << "  wavetable 2: peak " << s2.peak << std::endl;
+            CHECK (s2.finite && s2.peak > 0.01f, "WT2 silent");
+        }
+        setP (*p, P_osc4Gain, 1.0f);
+
         // state round trip keeps the sample and sequence
         p->steps.set (5, Step { 7, 1, TieSlide, true });
         juce::MemoryBlock state;
@@ -210,6 +221,7 @@ int main()
         auto q = make();
         q->setStateInformation (state.getData(), (int) state.getSize());
         CHECK (q->getSampleStatus().startsWith ("Loaded"), "sample not restored from state");
+        CHECK (q->getSampleStatus (1).contains ("sine2"), "WT2 sample not restored from state");
         const Step st = q->steps.get (5);
         CHECK (st.note == 7 && st.oct == 1 && st.tie == TieSlide && st.accent, "sequence not restored from state");
         CHECK (std::abs (q->param (P_osc4Gain)->getValue() - p->param (P_osc4Gain)->getValue()) < 1.0e-6f, "params not restored");
@@ -236,6 +248,7 @@ int main()
         CHECK (std::abs (q2->param (P_warmth)->getValue() - p->param (P_warmth)->getValue()) < 1.0e-4f, "warmth not saved in patch");
         CHECK (juce::roundToInt (q2->param (P_seqClock)->convertFrom0to1 (q2->param (P_seqClock)->getValue())) == 1, "seq clock not saved in patch");
         CHECK (q2->getSampleStatus().startsWith ("Loaded"), "sample not saved in patch file");
+        CHECK (q2->getSampleStatus (1).contains ("sine2"), "WT2 sample not saved in patch file");
         tmp.deleteFile();
     }
 
@@ -312,7 +325,7 @@ int main()
         std::cout << "Editor snapshots" << std::endl;
         auto p = make();
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
-        ed->setSize (1200, 800);
+        ed->setSize (1200, 860);
         std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
         {
             if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;

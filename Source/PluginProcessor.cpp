@@ -260,7 +260,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     hostTempo = bpm;
     fillSnapshot (n);
 
-    const WaveSample* wav = currentWave.load();
+    const WaveSample* wavs[2] = { currentWave[0].load(), currentWave[1].load() };
 
     // ---- sequencer transport
     const bool runParam = snap.i (P_seqRun) != 0;
@@ -312,7 +312,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         while (pos < next)
         {
             const int len = std::min (next - pos, maxBlock);
-            engine.render (L + pos, R + pos, len, snap, wav);
+            engine.render (L + pos, R + pos, len, snap, wavs);
             pos += len;
             if (seqRunning) seqSamplesToNext -= len;
             if (seqReleaseIn >= 0) seqReleaseIn -= len;
@@ -390,14 +390,14 @@ void MegaSynthProcessor::generateRandomPhrase()
 }
 
 //==============================================================================
-bool MegaSynthProcessor::loadSampleFile (const juce::File& f)
+bool MegaSynthProcessor::loadSampleFile (const juce::File& f, int slot)
 {
     juce::MemoryBlock mb;
     if (! f.loadFileAsData (mb)) return false;
-    return loadSampleData (mb, f.getFileName());
+    return loadSampleData (mb, f.getFileName(), slot);
 }
 
-bool MegaSynthProcessor::loadSampleData (const juce::MemoryBlock& data, const juce::String& name)
+bool MegaSynthProcessor::loadSampleData (const juce::MemoryBlock& data, const juce::String& name, int slot)
 {
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (std::make_unique<juce::MemoryInputStream> (data, true)));
     if (reader == nullptr || reader->lengthInSamples <= 1) return false;
@@ -419,29 +419,38 @@ bool MegaSynthProcessor::loadSampleData (const juce::MemoryBlock& data, const ju
     ws->peak = std::max (peak, 0.0001f);
 
     const juce::ScopedLock sl (waveLock);
-    waveData = data;
-    waveName = name;
-    currentWave.store (ws.get());
+    slot = juce::jlimit (0, 1, slot);
+    waveData[slot] = data;
+    waveName[slot] = name;
+    currentWave[slot].store (ws.get());
     waveKeep.push_back (std::move (ws));
-    // older samples can go once they are no longer the current or previous one
-    while (waveKeep.size() > 3) waveKeep.erase (waveKeep.begin());
+    // free old samples once they're well out of use (never the two current ones)
+    while (waveKeep.size() > 6)
+    {
+        auto it = std::find_if (waveKeep.begin(), waveKeep.end(), [this] (const auto& w)
+                                { return w.get() != currentWave[0].load() && w.get() != currentWave[1].load(); });
+        if (it == waveKeep.end()) break;
+        waveKeep.erase (it);
+    }
     return true;
 }
 
-void MegaSynthProcessor::clearSample()
+void MegaSynthProcessor::clearSample (int slot)
 {
     const juce::ScopedLock sl (waveLock);
-    currentWave.store (nullptr);
-    waveData.reset();
-    waveName.clear();
+    slot = juce::jlimit (0, 1, slot);
+    currentWave[slot].store (nullptr);
+    waveData[slot].reset();
+    waveName[slot].clear();
 }
 
-juce::String MegaSynthProcessor::getSampleStatus() const
+juce::String MegaSynthProcessor::getSampleStatus (int slot) const
 {
     const juce::ScopedLock sl (waveLock);
-    const auto* w = currentWave.load();
+    slot = juce::jlimit (0, 1, slot);
+    const auto* w = currentWave[slot].load();
     if (w == nullptr) return "No wavetable loaded";
-    return "Loaded: " + waveName + "  " + juce::String (w->duration(), 2) + "s  peak " + juce::String (w->peak, 2);
+    return "Loaded: " + waveName[slot] + "  " + juce::String (w->duration(), 2) + "s  peak " + juce::String (w->peak, 2);
 }
 
 //==============================================================================
@@ -452,8 +461,12 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("patchName", getPatchName(), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
-        state.setProperty ("waveName", waveName, nullptr);
-        state.setProperty ("waveData", waveData.getSize() > 0 ? juce::Base64::toBase64 (waveData.getData(), waveData.getSize()) : juce::String(), nullptr);
+        for (int k = 0; k < 2; ++k)
+        {
+            const juce::String suffix = k == 0 ? "" : "2";
+            state.setProperty ("waveName" + suffix, waveName[k], nullptr);
+            state.setProperty ("waveData" + suffix, waveData[k].getSize() > 0 ? juce::Base64::toBase64 (waveData[k].getData(), waveData[k].getSize()) : juce::String(), nullptr);
+        }
     }
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
@@ -470,14 +483,15 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
     if (stepStr.isNotEmpty()) steps.fromString (stepStr);
 
-    const juce::String wd = tree.getProperty ("waveData").toString();
-    if (wd.isNotEmpty())
+    for (int k = 0; k < 2; ++k)
     {
+        const juce::String suffix = k == 0 ? "" : "2";
+        const juce::String wd = tree.getProperty ("waveData" + suffix).toString();
         juce::MemoryOutputStream mo;
-        if (juce::Base64::convertFromBase64 (mo, wd))
-            loadSampleData (mo.getMemoryBlock(), tree.getProperty ("waveName").toString());
+        if (wd.isNotEmpty() && juce::Base64::convertFromBase64 (mo, wd))
+            loadSampleData (mo.getMemoryBlock(), tree.getProperty ("waveName" + suffix).toString(), k);
+        else clearSample (k);
     }
-    else clearSample();
 
     lastEuclid[0] = -1;   // don't re-flow the restored sequence
 }
@@ -542,16 +556,20 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
 
     {
         const juce::ScopedLock sl (waveLock);
-        if (waveData.getSize() > 0)
+        for (int k = 0; k < 2; ++k)
         {
-            auto* w = new juce::DynamicObject();
-            const bool isWav = waveName.endsWithIgnoreCase (".wav");
-            w->setProperty ("name", waveName);
-            w->setProperty ("data", juce::String (isWav ? "data:audio/wav;base64," : "data:application/octet-stream;base64,")
-                                        + juce::Base64::toBase64 (waveData.getData(), waveData.getSize()));
-            root->setProperty ("wavetable", juce::var (w));
+            const juce::Identifier key (k == 0 ? "wavetable" : "wavetable2");   // the browser only knows "wavetable"
+            if (waveData[k].getSize() > 0)
+            {
+                auto* w = new juce::DynamicObject();
+                const bool isWav = waveName[k].endsWithIgnoreCase (".wav");
+                w->setProperty ("name", waveName[k]);
+                w->setProperty ("data", juce::String (isWav ? "data:audio/wav;base64," : "data:application/octet-stream;base64,")
+                                            + juce::Base64::toBase64 (waveData[k].getData(), waveData[k].getSize()));
+                root->setProperty (key, juce::var (w));
+            }
+            else root->setProperty (key, juce::var());
         }
-        else root->setProperty ("wavetable", juce::var());
     }
     return juce::JSON::toString (juce::var (root), true);
 }
@@ -635,16 +653,20 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         }
     }
 
-    const juce::var wt = patch["wavetable"];
-    if (wt.isObject())
+    juce::String sampleError;
+    for (int k = 0; k < 2; ++k)
     {
-        const juce::String dataUrl = wt["data"].toString();
-        const juce::String b64 = dataUrl.fromFirstOccurrenceOf ("base64,", false, false);
-        juce::MemoryOutputStream mo;
-        if (b64.isEmpty() || ! juce::Base64::convertFromBase64 (mo, b64) || ! loadSampleData (mo.getMemoryBlock(), wt["name"].toString()))
-            return "Patch loaded, but its wavetable sample couldn't be decoded.";
+        const juce::var wt = patch[k == 0 ? "wavetable" : "wavetable2"];
+        if (wt.isObject())
+        {
+            const juce::String b64 = wt["data"].toString().fromFirstOccurrenceOf ("base64,", false, false);
+            juce::MemoryOutputStream mo;
+            if (b64.isEmpty() || ! juce::Base64::convertFromBase64 (mo, b64) || ! loadSampleData (mo.getMemoryBlock(), wt["name"].toString(), k))
+                sampleError = "Patch loaded, but a wavetable sample couldn't be decoded.";
+        }
+        else clearSample (k);
     }
-    else clearSample();
+    if (sampleError.isNotEmpty()) { lastEuclid[0] = -1; return sampleError; }
 
     lastEuclid[0] = -1;
     return {};
@@ -660,7 +682,8 @@ void MegaSynthProcessor::resetToDefaults()
     }
     tg::StepStore fresh;
     for (int i = 0; i < 32; ++i) steps.set (i, fresh.get (i));
-    clearSample();
+    clearSample (0);
+    clearSample (1);
     lastEuclid[0] = -1;
     setPatchName ("Init");
 }

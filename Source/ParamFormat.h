@@ -12,12 +12,13 @@ inline juce::String formatParam (int idx, float v)
     auto fixed = [] (double x, int d) { return juce::String (x, d); };
     static const char* noteNames[] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
 
-    if (id == "osc4Root")
+    if (id == "osc4Root" || id == "wt2Root")
     {
         const int n = juce::roundToInt (v);
         return juce::String (n) + " (" + noteNames[((n % 12) + 12) % 12] + juce::String (n / 12 - 1) + ")";
     }
     if (id == "osc4Position" || id == "osc4Window" || id == "osc4LoopStart" || id == "osc4LoopEnd"
+        || id == "wt2Position" || id == "wt2Window" || id == "wt2LoopStart" || id == "wt2LoopEnd"
         || id == "seqAccentAmt" || id == "velSens")
         return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id == "keyboardOctave" || id.endsWith ("Oct")) return juce::String (juce::roundToInt (v)) + " oct";

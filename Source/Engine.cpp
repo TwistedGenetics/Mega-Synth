@@ -220,8 +220,7 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     for (int k = 0; k < 5; ++k) { driftPh[k] = voiceRand01(); driftRate[k] = 0.08f + 0.35f * voiceRand01(); }
     for (auto& p : ssPh) p = voiceRand01();
     std::fill (std::begin (srcVals), std::end (srcVals), 0.0f);
-    wtPos = -1.0;          // set on the first control update once loop points are known
-    wtStopped = false;
+    for (auto& w : wt) { w.pos = -1.0; w.stopped = false; w.loaded = false; w.wav = nullptr; }   // start set on the first control update
 
     // Initialise every smoother at its target. Oscillators start at the glide-from pitch.
     baseFreq = glideFrom;
@@ -277,7 +276,56 @@ void Voice::computeMod (const Snapshot& s, ModState& mod) const
     }
 }
 
-void Voice::updateControl (const Snapshot& s, const WaveSample* wav, const ModState& mod, bool first)
+struct WtParamSet { int det, oct, root, pos, win, mode, ls, le, dir, norm, gain; int mGain, mDet, mPos, mWin, mLs, mLe; };
+static const WtParamSet kWtParams[2] = {
+    { P_osc4Detune, P_osc4Oct, P_osc4Root, P_osc4Position, P_osc4Window, P_osc4LoopMode, P_osc4LoopStart, P_osc4LoopEnd,
+      P_osc4Direction, P_osc4Normalize, P_osc4Gain, MT_osc4Gain, MT_osc4Detune, MT_osc4Position, MT_osc4Window, MT_osc4LoopStart, MT_osc4LoopEnd },
+    { P_wt2Detune, P_wt2Oct, P_wt2Root, P_wt2Position, P_wt2Window, P_wt2LoopMode, P_wt2LoopStart, P_wt2LoopEnd,
+      P_wt2Direction, P_wt2Normalize, P_wt2Gain, MT_wt2Gain, MT_wt2Detune, MT_wt2Position, MT_wt2Window, MT_wt2LoopStart, MT_wt2LoopEnd } };
+
+void Voice::updateWt (int slot, const Snapshot& s, const ModState& mod, double bendC, float cPort, float c10)
+{
+    WtPlayer& w = wt[slot];
+    const WtParamSet& P = kWtParams[slot];
+    w.level.target = w.loaded ? hardMuted (s.f (P.gain), mod[P.mGain], 2) : 0.0f;
+    w.level.step (c10);
+    w.comp = (w.loaded && s.i (P.norm) == 0) ? 1.0f / std::max (0.25f, w.wav->peak) : 1.0f;
+    if (! w.loaded) return;
+
+    const double det = clampv (s.f (P.det) + mod[P.mDet], -50.0f, 50.0f);
+    const double f = baseFreq * pow2 (std::round (s.f (P.oct))) * pow2 ((det + bendC) / 1200.0);
+    const double root = midiToFreq (std::round (s.f (P.root)));
+    w.rate.target = (float) clampv (f / std::max (10.0, root), 0.01, 16.0);
+    w.rate.step (cPort);
+
+    const double len = w.wav->length;
+    const int mode = s.i (P.mode);
+    const double scan = clampv (s.f (P.pos) + mod[P.mPos], 0.0f, 1.0f);
+    const double win  = clampv (s.f (P.win) + mod[P.mWin], 0.001f, 1.0f);
+    const double ms   = clampv (s.f (P.ls) + mod[P.mLs], 0.0f, 1.0f);
+    const double me   = clampv (s.f (P.le) + mod[P.mLe], 0.0f, 1.0f);
+    double startPos = 0;
+    if (mode == 3)      { w.loop = false; startPos = len * std::min (scan, 0.999); w.ls = 0; w.le = len; }
+    else if (mode == 0) { w.loop = true; startPos = 0; w.ls = 0; w.le = len; }
+    else if (mode == 2)
+    {
+        double a = std::min (ms, me), b = std::max (ms, me);
+        if (b - a < 0.001) b = std::min (1.0, a + 0.001);
+        w.loop = true; startPos = len * a; w.ls = len * a; w.le = len * b;
+    }
+    else
+    {
+        const double loopLen = len * win;
+        const double maxStart = std::max (0.0, len - loopLen);
+        startPos = clampv (scan * maxStart, 0.0, maxStart);
+        w.loop = true; w.ls = startPos; w.le = std::min (len, startPos + loopLen);
+    }
+    w.le = std::max (w.ls + 0.001 * w.wav->sampleRate, w.le);
+    w.reverse = s.i (P.dir) == 1;
+    if (w.pos < 0.0) { w.pos = startPos; w.stopped = false; }
+}
+
+void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, const ModState& mod, bool first)
 {
     const double dtc = kCtrl / sr;
     const float cPort = first ? 1.0f : smoothCoef (dtc, std::max (0.001, (double) s.f (P_porta)));
@@ -308,18 +356,24 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* wav, const ModSt
     waveA = kWaveChoiceToId[clampv (s.i (P_complexWaveA), 0, 9)];
     waveB = kWaveBChoiceToId[clampv (s.i (P_complexWaveB), 0, 9)];
 
-    wtLoaded = wav != nullptr && wav->length > 1;
+    for (int k = 0; k < 2; ++k)
+    {
+        const WaveSample* w = wavs != nullptr ? wavs[k] : nullptr;
+        if (w != wt[k].wav) { wt[k].wav = w; wt[k].pos = -1.0; wt[k].stopped = false; }
+        wt[k].loaded = w != nullptr && w->length > 1;
+    }
+    const bool wtLoaded = wt[0].loaded;
 
     // --- mixer levels
     l1.target   = hardMuted (s.f (P_osc1Gain), mod[MT_osc1Gain], 2);
     l2.target   = hardMuted (s.f (P_osc2Gain), mod[MT_osc2Gain], 2);
     l3.target   = hardMuted (s.f (P_osc3Gain), mod[MT_osc3Gain], 2);
     lSub.target = hardMuted (s.f (P_subGain), mod[MT_subGain], 2);
-    l4.target   = wtLoaded ? hardMuted (s.f (P_osc4Gain), mod[MT_osc4Gain], 2) : 0.0f;
     lC.target   = hardMuted (s.f (P_complexGain), mod[MT_complexGain], 2);
     lSS.target  = hardMuted (s.f (P_supersawGain), mod[MT_supersawGain], 2);
-    wtComp = (wtLoaded && s.i (P_osc4Normalize) == 0) ? 1.0f / std::max (0.25f, wav->peak) : 1.0f;
-    for (S* x : { &l1, &l2, &l3, &lSub, &l4, &lC, &lSS }) x->step (c10);
+    for (S* x : { &l1, &l2, &l3, &lSub, &lC, &lSS }) x->step (c10);
+    updateWt (0, s, mod, bendC, cPort, c10);
+    updateWt (1, s, mod, bendC, cPort, c10);
 
     legacyFm.target = clampv (s.f (P_fmAmount) + mod[MT_fmAmount], 0.0f, 4000.0f);
     const float rm = hardMuted (s.f (P_ringMix), mod[MT_ringMix], 1);
@@ -330,7 +384,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* wav, const ModSt
     legacyFm.step (c10); ringMix.step (c10); dry.step (c10); ringGainS.step (c10);
 
     // --- "source mute": silence the voice when every source is at zero
-    const float audible = l1.target + l2.target + l3.target + lSub.target + l4.target + lC.target + lSS.target
+    const float audible = l1.target + l2.target + l3.target + lSub.target + wt[0].level.target + wt[1].level.target + lC.target + lSS.target
                         + rm * std::max (0.0f, s.f (P_ringGain));
     const float mute = audible > 0.0001f ? 1.0f : 0.0f;
     srcMute.target = mute;
@@ -411,44 +465,10 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* wav, const ModSt
         ssPanR[i] = std::sin (x * (float) kPi * 0.5f);
     }
 
-    // --- Osc 4: sample / wavetable
-    if (wtLoaded)
-    {
-        const double det = clampv (s.f (P_osc4Detune) + mod[MT_osc4Detune], -50.0f, 50.0f);
-        const double f4 = oscF (P_osc4Oct, det + bendC);
-        const double root = midiToFreq (std::round (s.f (P_osc4Root)));
-        wtRate.target = (float) clampv (f4 / std::max (10.0, root), 0.01, 16.0);
-        wtRate.step (cPort);
-
-        const double len = wav->length;
-        const int mode = s.i (P_osc4LoopMode);
-        const double scan = clampv (s.f (P_osc4Position) + mod[MT_osc4Position], 0.0f, 1.0f);
-        const double win  = clampv (s.f (P_osc4Window) + mod[MT_osc4Window], 0.001f, 1.0f);
-        const double ms   = clampv (s.f (P_osc4LoopStart) + mod[MT_osc4LoopStart], 0.0f, 1.0f);
-        const double me   = clampv (s.f (P_osc4LoopEnd) + mod[MT_osc4LoopEnd], 0.0f, 1.0f);
-        double startPos = 0;
-        if (mode == 3)      { wtLoop = false; startPos = len * std::min (scan, 0.999); wtLoopStart = 0; wtLoopEnd = len; }
-        else if (mode == 0) { wtLoop = true; startPos = 0; wtLoopStart = 0; wtLoopEnd = len; }
-        else if (mode == 2)
-        {
-            double a = std::min (ms, me), b = std::max (ms, me);
-            if (b - a < 0.001) b = std::min (1.0, a + 0.001);
-            wtLoop = true; startPos = len * a; wtLoopStart = len * a; wtLoopEnd = len * b;
-        }
-        else
-        {
-            const double loopLen = len * win;
-            const double maxStart = std::max (0.0, len - loopLen);
-            startPos = clampv (scan * maxStart, 0.0, maxStart);
-            wtLoop = true; wtLoopStart = startPos; wtLoopEnd = std::min (len, startPos + loopLen);
-        }
-        wtLoopEnd = std::max (wtLoopStart + 0.001 * wav->sampleRate, wtLoopEnd);
-        wtReverse = s.i (P_osc4Direction) == 1;
-        if (wtPos < 0.0) { wtPos = startPos; wtStopped = false; }
-    }
-
     // stereo processing is only needed for the SuperSaw spread or a stereo sample
-    if (! stereo && ((lSS.target > 0 && width > 0.001f) || (wtLoaded && wav->numChannels > 1 && l4.target > 0)))
+    bool stereoWt = false;
+    for (auto& w : wt) if (w.loaded && w.wav->numChannels > 1 && w.level.target > 0) stereoWt = true;
+    if (! stereo && ((lSS.target > 0 && width > 0.001f) || stereoWt))
     {
         stereo = true;
         filter.copyChannel (0, 1);
@@ -456,7 +476,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* wav, const ModSt
     }
 }
 
-void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const WaveSample* wav, ModState& modOut)
+void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const WaveSample* const* wavs, ModState& modOut)
 {
     const WaveBank& bank = WaveBank::get();
     const double isr = 1.0 / sr;
@@ -468,7 +488,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         const int n = std::min (kCtrl, numSamples - done);
         ModState mod;
         computeMod (s, mod);
-        updateControl (s, wav, mod, false);
+        updateControl (s, wavs, mod, false);
         modOut = mod;
 
         // gather FM routes per destination
@@ -499,17 +519,12 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         }
         const bool needComplex = lC.v > 1.0e-6f || lC.target > 0 || usedAsSource[4];
         const bool needSS = lSS.v > 1.0e-6f || lSS.target > 0 || usedAsSource[5];
-        const bool needWt = wtLoaded && ! wtStopped;
         const bool legacyRing = ringMix.v > 1.0e-6f || ringMix.target > 0;
 
         double ssFreq[9];
         for (int i = 0; i < 9; ++i) ssFreq[i] = ssBase.v * pow2 (ssCents[i].v / 1200.0);
         const int ssCount = needSS ? 9 : 0;
 
-        const float* wl = wtLoaded ? wav->ch[0].data() : nullptr;
-        const float* wr = wtLoaded ? wav->ch[wav->numChannels > 1 ? 1 : 0].data() : nullptr;
-        const int wlen = wtLoaded ? wav->length : 0;
-        const double wtStep = wtLoaded ? wav->sampleRate * isr : 0.0;
 
         for (int i = 0; i < n; ++i)
         {
@@ -525,28 +540,10 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             const float osub = bank.sample (waveSub, phSub, fSub.v * fisr);
             phSub = wrap01 (phSub + fSub.v * isr);
 
-            // Osc 4: sample playback
-            float o4L = 0, o4R = 0;
-            if (needWt && ! wtStopped)
-            {
-                const double p = wtPos;
-                int i0 = (int) std::floor (p);
-                const float fr4 = (float) (p - i0);
-                int i1 = i0 + 1;
-                i0 = clampv (i0, 0, wlen - 1); i1 = clampv (i1, 0, wlen - 1);
-                if (wtReverse) { i0 = wlen - 1 - i0; i1 = wlen - 1 - i1; }
-                o4L = wl[i0] + (wl[i1] - wl[i0]) * fr4;
-                o4R = wr[i0] + (wr[i1] - wr[i0]) * fr4;
-                const double inc = ((double) wtRate.v + fmIn (3)) * wtStep;
-                wtPos += inc;
-                if (wtLoop)
-                {
-                    const double span = std::max (1.0e-6, wtLoopEnd - wtLoopStart);
-                    if (wtPos >= wtLoopEnd) wtPos = wtLoopStart + std::fmod (wtPos - wtLoopStart, span);
-                    else if (wtPos < wtLoopStart && inc < 0) wtPos = wtLoopEnd - std::fmod (wtLoopStart - wtPos, span);
-                }
-                else if (wtPos >= wlen || wtPos < 0) wtStopped = true;
-            }
+            // Osc 4 (WT 1) and WT 2: sample playback
+            float o4L, o4R, w2L, w2R;
+            wt[0].tick (fmIn (3), isr, o4L, o4R);
+            wt[1].tick (0.0, isr, w2L, w2R);
             const float o4m = 0.5f * (o4L + o4R);
             srcVals[3] = o4m;
 
@@ -588,10 +585,11 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             ph1 = wrap01 (ph1 + fr * isr); srcVals[0] = o1;
 
             // mixer
-            const float o4g = l4.v * wtComp;
+            const float o4g = wt[0].level.v * wt[0].comp;
+            const float w2g = wt[1].level.v * wt[1].comp;
             const float mono = o1 * l1.v + o2 * l2.v + o3 * l3.v + osub * lSub.v + cOut;
-            const float mL = mono + o4L * o4g + ssL;
-            const float mR = mono + o4R * o4g + ssR;
+            const float mL = mono + o4L * o4g + w2L * w2g + ssL;
+            const float mR = mono + o4R * o4g + w2R * w2g + ssR;
 
             // ring modulation
             float rL = 0, rR = 0;
@@ -891,7 +889,7 @@ void Engine::allNotesOff()
     for (auto& v : voices) if (v.active) v.release();
 }
 
-void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, const WaveSample* wav)
+void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, const WaveSample* const* wavs)
 {
     Voice* newest = nullptr;
     for (auto& v : voices) if (v.active && (! newest || v.order > newest->order)) newest = &v;
@@ -899,7 +897,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, cons
     ModState scratch;
     for (auto& v : voices)
         if (v.active)
-            v.render (L, R, numSamples, s, wav, &v == newest ? globalMod : scratch);
+            v.render (L, R, numSamples, s, wavs, &v == newest ? globalMod : scratch);
 
     fxBus.process (L, R, numSamples, s, globalMod);
 }

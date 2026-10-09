@@ -100,7 +100,13 @@ inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
     X(chorusRate,    "Chorus Rate",       3,     0.25) \
     X(chorusDepth,   "Chorus Depth",      0.015, 0.002) \
     X(reverseTime,   "Reverse Time",      1.5,   0.12) \
-    X(reversePitch,  "Reverse Pitch",     0.03,  0.004)
+    X(reversePitch,  "Reverse Pitch",     0.03,  0.004) \
+    X(wt2Gain,       "WT2 Level",         1,     0.2) \
+    X(wt2Detune,     "WT2 Detune",        50,    12) \
+    X(wt2Position,   "WT2 Scan Position", 1,     0.15) \
+    X(wt2Window,     "WT2 Scan Window",   1,     0.15) \
+    X(wt2LoopStart,  "WT2 Loop Start",    1,     0.15) \
+    X(wt2LoopEnd,    "WT2 Loop End",      1,     0.15)
 
 enum ModTarget
 {
@@ -191,6 +197,17 @@ inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT 
     F(osc4LoopEnd,  "WT Loop End", 0, 1, 1, 0.001, 0) \
     C(osc4Direction,"WT Direction", kListDir, 0) \
     C(osc4Normalize,"WT Normalize", kListOnOff, 0) \
+    F(wt2Detune,   "WT2 Detune", -50, 50, 0, 1, 0) \
+    F(wt2Oct,      "WT2 Octave", -2, 2, 0, 1, 0) \
+    F(wt2Root,     "WT2 Root Note", 24, 84, 69, 1, 0) \
+    F(wt2Position, "WT2 Scan Position", 0, 1, 0, 0.001, 0) \
+    F(wt2Window,   "WT2 Scan Window", 0.001, 1, 1, 0.001, 0) \
+    C(wt2LoopMode, "WT2 Loop Mode", kListLoop, 1) \
+    F(wt2LoopStart,"WT2 Loop Start", 0, 1, 0, 0.001, 0) \
+    F(wt2LoopEnd,  "WT2 Loop End", 0, 1, 1, 0.001, 0) \
+    C(wt2Direction,"WT2 Direction", kListDir, 0) \
+    C(wt2Normalize,"WT2 Normalize", kListOnOff, 0) \
+    F(wt2Gain,     "WT2 Level", 0, 1, 0.4, 0.01, 0) \
     C(complexWaveA, "Complex Wave A", kListWave, 0) \
     C(complexWaveB, "Complex Wave B", kListWaveB, 0) \
     F(complexDetune,"Complex Detune", -50, 50, 0, 1, 0) \

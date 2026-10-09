@@ -125,6 +125,30 @@ private:
     juce::ToggleButton accent { "Accent" };
 };
 
+// Load / Clear buttons and status for a sample oscillator
+class SampleBar : public juce::Component
+{
+public:
+    SampleBar()
+    {
+        for (auto* b : { &load, &clear }) addAndMakeVisible (*b);
+        status.setColour (juce::Label::textColourId, col::wavetable);
+        status.setFont (juce::Font (juce::FontOptions (12.0f)));
+        addAndMakeVisible (status);
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        load.setBounds (r.removeFromLeft (110).reduced (0, 1));
+        r.removeFromLeft (6);
+        clear.setBounds (r.removeFromLeft (70).reduced (0, 1));
+        r.removeFromLeft (8);
+        status.setBounds (r);
+    }
+    juce::TextButton load { "Load Sample" }, clear { "Clear" };
+    juce::Label status;
+};
+
 class Page : public juce::Component
 {
 public:
@@ -161,8 +185,9 @@ private:
     tgui::Look look;
 
     juce::Component content;   // fixed 1200x800 design, scaled to the window
-    juce::Label title, subtitle, sampleStatus, status;
-    juce::TextButton loadBtn { "Load Sample" }, clearBtn { "Clear Sample" }, copyBtn { "Copy Patch" },
+    juce::Label title, subtitle, status;
+    tgui::SampleBar* sampleBars[2] { nullptr, nullptr };   // owned by the Oscillators page
+    juce::TextButton copyBtn { "Copy Patch" },
                      pasteBtn { "Paste Patch" }, initBtn { "Init" }, octDown { "Oct -" }, octUp { "Oct +" };
     juce::OwnedArray<tgui::Knob> headerKnobs;
     juce::ComboBox patchBox;

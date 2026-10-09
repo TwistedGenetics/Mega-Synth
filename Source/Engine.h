@@ -156,7 +156,7 @@ public:
     void kill() { active = false; }
 
     // Adds this voice's output into L/R. Writes its modulation values to modOut.
-    void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* wav, ModState& modOut);
+    void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* const* wavs, ModState& modOut);
 
     bool active = false;
     bool released = false;
@@ -171,7 +171,7 @@ public:
 
 private:
     void computeMod (const Snapshot&, ModState&) const;
-    void updateControl (const Snapshot&, const WaveSample* wav, const ModState&, bool first);
+    void updateControl (const Snapshot&, const WaveSample* const* wavs, const ModState&, bool first);
 
     double sr = 48000.0;
     double t = 0.0;            // seconds since note-on
@@ -180,8 +180,47 @@ private:
 
     // smoothed values (Web Audio setTargetAtTime emulation)
     struct S { float v = 0, target = 0; inline void step (float c) { v += (target - v) * c; } };
-    S f1, f2, f3, fSub, cBase, cRatio, ssBase, wtRate;
-    S l1, l2, l3, lSub, l4, lC, lSS;
+    S f1, f2, f3, fSub, cBase, cRatio, ssBase;
+    S l1, l2, l3, lSub, lC, lSS;
+
+    // Sample / wavetable oscillators (Osc 4 = WT 1, and WT 2)
+    struct WtPlayer
+    {
+        const WaveSample* wav = nullptr;
+        bool loaded = false;
+        S rate, level;
+        double pos = -1.0;
+        bool stopped = false, loop = true, reverse = false;
+        double ls = 0, le = 0;
+        float comp = 1.0f;
+
+        inline void tick (double fmRate, double isr, float& outL, float& outR)
+        {
+            outL = outR = 0.0f;
+            if (! loaded || stopped) return;
+            const int wlen = wav->length;
+            const float* wl = wav->ch[0].data();
+            const float* wr = wav->ch[wav->numChannels > 1 ? 1 : 0].data();
+            int i0 = (int) std::floor (pos);
+            const float fr = (float) (pos - i0);
+            int i1 = i0 + 1;
+            i0 = clampv (i0, 0, wlen - 1); i1 = clampv (i1, 0, wlen - 1);
+            if (reverse) { i0 = wlen - 1 - i0; i1 = wlen - 1 - i1; }
+            outL = wl[i0] + (wl[i1] - wl[i0]) * fr;
+            outR = wr[i0] + (wr[i1] - wr[i0]) * fr;
+            const double inc = ((double) rate.v + fmRate) * wav->sampleRate * isr;
+            pos += inc;
+            if (loop)
+            {
+                const double span = std::max (1.0e-6, le - ls);
+                if (pos >= le) pos = ls + std::fmod (pos - ls, span);
+                else if (pos < ls && inc < 0) pos = le - std::fmod (ls - pos, span);
+            }
+            else if (pos >= wlen || pos < 0) stopped = true;
+        }
+    };
+    WtPlayer wt[2];
+    void updateWt (int slot, const Snapshot&, const ModState&, double bendC, float cPort, float c10);
     S legacyFm, ringMix, dry, ringGainS, srcMute, vGain;
     S cFm, cMixS;
     S cutoff, res;
@@ -195,8 +234,6 @@ private:
     double ph1 = 0, ph2 = 0, ph3 = 0, phSub = 0, phCar = 0, phMod = 0;
     double ssPh[9] {};
     double driftPh[5] {}; float driftRate[5] {}; float driftCents[5] {};   // Analog Drift (osc1-3, sub, complex)
-    double wtPos = 0.0;
-    bool wtStopped = false;
     int wave1 = 0, wave2 = 0, wave3 = 0, waveSub = 0, waveA = 0, waveB = 0;
 
     // routing (resolved per control block)
@@ -204,11 +241,6 @@ private:
     FmSlot fmSlots[4] {};
     struct RingSlot { int src, dst; bool on; float shapeK; Biquad hp, lp; };
     RingSlot ringSlots[2];
-    bool wtLoaded = false;
-    bool wtLoop = true;
-    double wtLoopStart = 0, wtLoopEnd = 0;
-    bool wtReverse = false;
-    float wtComp = 1.0f;
 
     float srcVals[6] {};    // latest raw/FM-source outputs: osc1, osc2, osc3, osc4(mono), complex, supersaw
     FilterChain filter;
@@ -274,7 +306,7 @@ public:
     Voice* findActive (int key);    // held (not released) voice for key
     void rekey (Voice* v, int newKey) { if (v) v->key = newKey; }
 
-    void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* wav);
+    void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* const* wavs);
 
     FxBus& fx() { return fxBus; }
     int activeVoiceCount() const;

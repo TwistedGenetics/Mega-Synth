@@ -5,7 +5,7 @@ using namespace tg;
 using namespace tgui;
 
 static constexpr int kDesignW = 1200;
-static constexpr int kDesignH = 800;
+static constexpr int kDesignH = 860;
 
 //==============================================================================
 Look::Look()
@@ -370,9 +370,7 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     subtitle.setText ("Twisted Genetics  -  6 oscillators, FM + ring matrix, 17 filters, sequencer", juce::dontSendNotification);
     subtitle.setColour (juce::Label::textColourId, col::muted);
     subtitle.setFont (juce::Font (juce::FontOptions (12.0f)));
-    for (auto* l : { &title, &subtitle, &sampleStatus, &status, &octLabel }) content.addAndMakeVisible (*l);
-    sampleStatus.setColour (juce::Label::textColourId, col::wavetable);
-    sampleStatus.setFont (juce::Font (juce::FontOptions (12.0f)));
+    for (auto* l : { &title, &subtitle, &status, &octLabel }) content.addAndMakeVisible (*l);
     status.setColour (juce::Label::textColourId, col::accent);
     status.setFont (juce::Font (juce::FontOptions (12.0f)));
     status.setJustificationType (juce::Justification::centredRight);
@@ -387,7 +385,7 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
         content.addAndMakeVisible (k);
     }
 
-    for (auto* b : { &loadBtn, &clearBtn, &copyBtn, &pasteBtn, &initBtn, &octDown, &octUp }) content.addAndMakeVisible (*b);
+    for (auto* b : { &copyBtn, &pasteBtn, &initBtn, &octDown, &octUp }) content.addAndMakeVisible (*b);
     subtitle.setVisible (false);
 
     // ---- patch browser
@@ -431,18 +429,6 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     };
     refreshPatchList();
 
-    loadBtn.onClick = [this]
-    {
-        chooser = std::make_unique<juce::FileChooser> ("Load a sample for Oscillator 4", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
-        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                              [this] (const juce::FileChooser& fc)
-                              {
-                                  const auto f = fc.getResult();
-                                  if (f == juce::File()) return;
-                                  setStatus (proc.loadSampleFile (f) ? "Sample loaded" : "Couldn't read that audio file");
-                              });
-    };
-    clearBtn.onClick = [this] { proc.clearSample(); setStatus ("Sample cleared"); };
     copyBtn.onClick = [this]
     {
         juce::SystemClipboard::copyTextToClipboard (proc.exportBrowserPatch());
@@ -475,7 +461,7 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     setResizable (true, true);
     setResizeLimits (kDesignW * 2 / 3, kDesignH * 2 / 3, kDesignW * 2, kDesignH * 2);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) kDesignW / kDesignH);
-    setSize (kDesignW, kDesignH);
+    setSize (kDesignW * 9 / 10, kDesignH * 9 / 10);   // starts at 90% so it fits laptop screens; drag the corner to resize
     // Inside a DAW, never take the computer keyboard: clicking a control would
     // otherwise steal keys from the host's own QWERTY keyboard (e.g. Live's
     // Computer MIDI Keyboard). The standalone app keeps QWERTY note entry.
@@ -524,10 +510,47 @@ void MegaSynthEditor::buildPages()
             o[i]->knob (P_osc1Gain + i, "Level");
         }
         auto* sub = sec (page, "Sub Oscillator", col::osc);
-        sub->choice (P_subWave, "Waveform", 170);
+        sub->choice (P_subWave, "Waveform", 254);
         sub->newRow();
         sub->knob (P_subOct, "Octave");
         sub->knob (P_subGain, "Level");
+
+        // the two sample / wavetable oscillators
+        struct WtIds { int mode, dir, norm, det, oct, root, pos, win, ls, le, gain; };
+        const WtIds ids[2] = {
+            { P_osc4LoopMode, P_osc4Direction, P_osc4Normalize, P_osc4Detune, P_osc4Oct, P_osc4Root, P_osc4Position, P_osc4Window, P_osc4LoopStart, P_osc4LoopEnd, P_osc4Gain },
+            { P_wt2LoopMode, P_wt2Direction, P_wt2Normalize, P_wt2Detune, P_wt2Oct, P_wt2Root, P_wt2Position, P_wt2Window, P_wt2LoopStart, P_wt2LoopEnd, P_wt2Gain } };
+        Section* wtS[2];
+        for (int k = 0; k < 2; ++k)
+        {
+            wtS[k] = sec (page, k == 0 ? "Wavetable 1  (Osc 4)" : "Wavetable 2", col::wavetable);
+            auto* bar = new SampleBar();
+            sampleBars[k] = bar;
+            wtS[k]->add (bar, 545, 28);
+            bar->load.onClick = [this, k]
+            {
+                chooser = std::make_unique<juce::FileChooser> ("Load a sample for Wavetable " + juce::String (k + 1), juce::File(),
+                                                               "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                      [this, k] (const juce::FileChooser& fc)
+                                      {
+                                          const auto f = fc.getResult();
+                                          if (f == juce::File()) return;
+                                          setStatus (proc.loadSampleFile (f, k) ? "Sample loaded into Wavetable " + juce::String (k + 1)
+                                                                               : "Couldn't read that audio file");
+                                      });
+            };
+            bar->clear.onClick = [this, k] { proc.clearSample (k); setStatus ("Wavetable " + juce::String (k + 1) + " cleared"); };
+            wtS[k]->newRow();
+            wtS[k]->choice (ids[k].mode, "Loop Mode", 180);
+            wtS[k]->choice (ids[k].dir, "Direction", 110);
+            wtS[k]->choice (ids[k].norm, "Normalize", 110);
+            wtS[k]->newRow();
+            for (auto [idx, n] : { std::pair<int, const char*> { ids[k].det, "Detune" }, { ids[k].oct, "Octave" }, { ids[k].root, "Root Note" },
+                                   { ids[k].pos, "Scan Pos" }, { ids[k].win, "Window" }, { ids[k].ls, "Loop Start" },
+                                   { ids[k].le, "Loop End" }, { ids[k].gain, "Level" } })
+                wtS[k]->knob (idx, n, 62);
+        }
 
         auto* cx = sec (page, "Oscillator 5 / Complex", col::complex);
         cx->choice (P_complexWaveA, "Primary Wave A", 170);
@@ -542,38 +565,17 @@ void MegaSynthEditor::buildPages()
                                { P_supersawSpread, "Spread" }, { P_supersawStereo, "Stereo" }, { P_supersawDrift, "Drift" }, { P_supersawGain, "Level" } })
             ss->knob (idx, n);
 
-        page->onResize = [page, o, sub, cx, ss]
+        page->onResize = [page, o, sub, wtS, cx, ss]
         {
             const int W = page->getWidth(), g = 10;
-            const int w4 = (W - g * 5) / 4;
-            for (int i = 0; i < 3; ++i) o[i]->setBounds (g + i * (w4 + g), g, w4, 200);
-            sub->setBounds (g + 3 * (w4 + g), g, w4, 200);
-            const int w2 = (W - g * 3) / 2;
-            cx->setBounds (g, 220, w2, 230);
-            ss->setBounds (g * 2 + w2, 220, w2, 230);
+            const int w4 = (W - g * 5) / 4, w2 = (W - g * 3) / 2;
+            for (int i = 0; i < 3; ++i) o[i]->setBounds (g + i * (w4 + g), g, w4, 170);
+            sub->setBounds (g + 3 * (w4 + g), g, w4, 170);
+            wtS[0]->setBounds (g, 190, w2, 208);
+            wtS[1]->setBounds (g * 2 + w2, 190, w2, 208);
+            cx->setBounds (g, 408, w2, 180);
+            ss->setBounds (g * 2 + w2, 408, w2, 180);
         };
-    }
-
-    // ---------------------------------------------------------------- Osc 4
-    {
-        auto* page = addPage ("Osc 4 Sample");
-        auto* s = sec (page, "Oscillator 4 / Wavetable (sample playback)", col::wavetable);
-        auto* info = new juce::Label ({}, "Load a WAV with the Load Sample button at the top. Oscillator 4 plays it back pitched from the Root Note, "
-                                          "looping the scan window (or the whole file, a manual loop, or once). The sample is saved with your project.");
-        info->setColour (juce::Label::textColourId, col::muted);
-        info->setFont (juce::Font (juce::FontOptions (12.5f)));
-        info->setJustificationType (juce::Justification::topLeft);
-        s->add (info, 1100, 40);
-        s->newRow();
-        s->choice (P_osc4LoopMode, "Loop Mode", 200);
-        s->choice (P_osc4Direction, "Direction", 140);
-        s->choice (P_osc4Normalize, "Normalize Loaded WAV", 160);
-        s->newRow();
-        for (auto [idx, n] : { std::pair<int, const char*> { P_osc4Detune, "Detune" }, { P_osc4Oct, "Octave" }, { P_osc4Root, "Root Note" },
-                               { P_osc4Position, "Scan Position" }, { P_osc4Window, "Scan Window" }, { P_osc4LoopStart, "Loop Start" },
-                               { P_osc4LoopEnd, "Loop End" }, { P_osc4Gain, "Level" } })
-            s->knob (idx, n);
-        page->onResize = [page, s] { s->setBounds (page->getLocalBounds().reduced (10).withHeight (260)); };
     }
 
     // ---------------------------------------------------------------- Mixer & FM
@@ -581,8 +583,8 @@ void MegaSynthEditor::buildPages()
         auto* page = addPage ("Mixer & Routing");
         auto* lv = sec (page, "Oscillator Levels", col::mixer);
         for (auto [idx, n] : { std::pair<int, const char*> { P_osc1Gain, "Osc 1" }, { P_osc2Gain, "Osc 2" }, { P_osc3Gain, "Osc 3" }, { P_subGain, "Sub" },
-                               { P_osc4Gain, "Osc 4 WT" }, { P_complexGain, "Osc 5 Cplx" }, { P_supersawGain, "Osc 6 Saw" }, { P_masterVolume, "Master" } })
-            lv->knob (idx, n, 62);
+                               { P_osc4Gain, "WT 1" }, { P_wt2Gain, "WT 2" }, { P_complexGain, "Complex" }, { P_supersawGain, "SuperSaw" }, { P_masterVolume, "Master" } })
+            lv->knob (idx, n, 56);
         auto* rt = sec (page, "FM / Ring / FX Return Levels", col::mixer);
         for (auto [idx, n] : { std::pair<int, const char*> { P_fmAmount, "FM 2>1" }, { P_ringMix, "Ring Mix" }, { P_ringGain, "Ring Out" },
                                { P_delayMix, "Delay" }, { P_reverbMix, "Reverb" }, { P_shimmerMix, "Shimmer" }, { P_chorusMix, "Chorus" }, { P_reverseMix, "Reverse" } })
@@ -786,20 +788,17 @@ void MegaSynthEditor::resized()
     patchBox.setBounds (44, 42, 250, 24);
     patchNext.setBounds (298, 42, 26, 24);
     saveBtn.setBounds (330, 42, 100, 24);
-    sampleStatus.setBounds (14, 68, 420, 16);
     int x = 440;
     for (auto* k : headerKnobs) { k->setBounds (x, 4, 72, 80); x += 74; }
-    loadBtn.setBounds (812, 10, 120, 28);
-    clearBtn.setBounds (812, 44, 120, 28);
-    copyBtn.setBounds (940, 10, 120, 28);
-    pasteBtn.setBounds (940, 44, 120, 28);
-    initBtn.setBounds (1068, 10, 118, 28);
+    copyBtn.setBounds (820, 10, 120, 28);
+    pasteBtn.setBounds (820, 44, 120, 28);
+    initBtn.setBounds (948, 10, 120, 28);
     status.setBounds (812, 74, 374, 14);
-    tabs.setBounds (0, 88, kDesignW, 540);
-    octDown.setBounds (10, 640, 70, 28);
-    octUp.setBounds (10, 674, 70, 28);
-    octLabel.setBounds (6, 708, 80, 40);
-    keyboard.setBounds (90, 634, kDesignW - 100, 158);
+    tabs.setBounds (0, 88, kDesignW, 640);
+    octDown.setBounds (10, 738, 70, 28);
+    octUp.setBounds (10, 772, 70, 28);
+    octLabel.setBounds (6, 806, 80, 40);
+    keyboard.setBounds (90, 734, kDesignW - 100, 120);
     keyboard.setKeyWidth ((float) keyboard.getWidth() / 36.0f);
 }
 
@@ -875,7 +874,8 @@ void MegaSynthEditor::timerCallback()
         octLabel.setText ("Keys: C" + juce::String (4 + kbOct) + "\nZ / X shift", juce::dontSendNotification);
     }
 
-    sampleStatus.setText (proc.getSampleStatus(), juce::dontSendNotification);
+    for (int k = 0; k < 2; ++k)
+        if (sampleBars[k] != nullptr) sampleBars[k]->status.setText (proc.getSampleStatus (k), juce::dontSendNotification);
     if (proc.getPatchName() != lastShownName) refreshPatchList();
 
     const auto v = proc.steps.getVersion();

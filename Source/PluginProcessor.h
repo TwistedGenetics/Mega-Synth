@@ -41,10 +41,11 @@ public:
     tg::StepStore steps;
     std::atomic<int> currentStep { -1 };
 
-    bool loadSampleFile (const juce::File&);
-    bool loadSampleData (const juce::MemoryBlock&, const juce::String& name);
-    void clearSample();
-    juce::String getSampleStatus() const;
+    // Sample slots: 0 = Osc 4 / WT 1, 1 = WT 2
+    bool loadSampleFile (const juce::File&, int slot = 0);
+    bool loadSampleData (const juce::MemoryBlock&, const juce::String& name, int slot = 0);
+    void clearSample (int slot = 0);
+    juce::String getSampleStatus (int slot = 0) const;
 
     juce::String exportBrowserPatch() const;
     juce::String importBrowserPatch (const juce::String& json);   // returns an error message, or empty on success
@@ -90,10 +91,10 @@ private:
     bool hostWasPlaying = false;
 
     // sample for Osc 4
-    std::atomic<tg::WaveSample*> currentWave { nullptr };
+    std::atomic<tg::WaveSample*> currentWave[2] { { nullptr }, { nullptr } };
     std::vector<std::unique_ptr<tg::WaveSample>> waveKeep;
-    juce::MemoryBlock waveData;
-    juce::String waveName;
+    juce::MemoryBlock waveData[2];
+    juce::String waveName[2];
     mutable juce::CriticalSection waveLock;
     juce::AudioFormatManager formats;
 

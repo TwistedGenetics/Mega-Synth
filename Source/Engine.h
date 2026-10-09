@@ -14,6 +14,7 @@
 #include "Mut/FeedbackMatrix.h"
 #include "Mut/Instability.h"
 #include "Mut/Mutator.h"
+#include "Seq/DnaSequencer.h"
 
 namespace tg
 {
@@ -170,6 +171,7 @@ struct ModContext
     bool morph = false;      // scene morph on: routes onto Scene X/Y re-morph this voice's parameters
     const MutationTable* mut = nullptr;   // set when routes move the Mutate amount: each voice mutates itself
     uint32_t lockMask = 0;
+    float dnaSeq = 0.0f;                   // the DNA Sequencer's current value (a Mod Matrix source)
     bool any() const { return routes != nullptr && routes->n > 0; }
 };
 
@@ -392,6 +394,10 @@ public:
 
     FxBus& fx() { return fxBus; }
     const Granular& granular() const { return gran; }
+    // DNA Sequencer: the step store, and its position (in steps) at the start of the next render call
+    void setDnaSequencer (const DnaSeqStore* st) { dnaStore = st; }
+    void setDnaSeqClock (double posAtStart, double stepsPerSample) { dsPos = posAtStart; dsInc = stepsPerSample; }
+    std::atomic<int> dnaSeqStep { -1 };
     void loadGranular (const float* l, const float* r, int n) { gran.load (l, r, n); }
     // the bus signal just before the effects, for Capture ("before effects")
     bool keepPreFx = false;
@@ -416,7 +422,10 @@ private:
     const SceneStore* scenes = nullptr;
     RouteSet routeSet;
     RouteState globalRouteState;
-    Snapshot fxSnap, mutSnap, noteSnap;
+    Snapshot fxSnap, mutSnap, noteSnap, dsSnap;
+    const DnaSeqStore* dnaStore = nullptr;
+    double dsPos = 0.0, dsInc = 0.0;
+    float dsValue = 0.0f;
     MutationTable mutTab;
     uint32_t mutLockMask (const Snapshot& s) const
     {

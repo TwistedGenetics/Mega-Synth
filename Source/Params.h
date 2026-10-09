@@ -65,6 +65,8 @@ inline const char* const kBusOrderKeys[]   = { "grain_spectral","spectral_grain"
 inline const char* const kBusOrderLabels[] = { "Granular > Spectral","Spectral > Granular" };
 inline const char* const kCapPointKeys[]   = { "prefx","postfx" };
 inline const char* const kCapPointLabels[] = { "Before effects","After effects (what you hear)" };
+inline const char* const kDsRateKeys[]   = { "1/32","1/16t","1/16","1/8t","1/8","1/4","1/2","1bar","free" };
+inline const char* const kDsRateLabels[] = { "1/32","1/16 Triplet","1/16","1/8 Triplet","1/8","1/4","1/2","1 Bar","Free (Hz)" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -181,6 +183,7 @@ inline const ChoiceList kListResTune     { kResTuneKeys, kResTuneLabels, 6 };
 inline const ChoiceList kListSpSize      { kSpSizeKeys, kSpSizeLabels, 4 };
 inline const ChoiceList kListBusOrder    { kBusOrderKeys, kBusOrderLabels, 2 };
 inline const ChoiceList kListCapPoint    { kCapPointKeys, kCapPointLabels, 2 };
+inline const ChoiceList kListDsRate      { kDsRateKeys, kDsRateLabels, 9 };
 inline const ChoiceList kListArMod       { kArModKeys, kArModLabels, 6 };
 inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
 #undef TG_LIST
@@ -513,7 +516,13 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(mutLock10, "Mutate Lock 10", false) \
     B(mutLock11, "Mutate Lock 11", false) \
     B(mutLock12, "Mutate Lock 12", false) \
-    B(mutLock13, "Mutate Lock 13", false)
+    B(mutLock13, "Mutate Lock 13", false) \
+    B(dsOn,        "DNA Sequencer On", false) \
+    F(dsSteps,     "DNA Sequencer Steps", 1, 32, 16, 1, 0) \
+    C(dsRate,      "DNA Sequencer Rate", kListDsRate, 2) \
+    F(dsFreeHz,    "DNA Sequencer Free Rate", 0.1, 20, 4, 0.01, 2) \
+    F(dsGlide,     "DNA Sequencer Glide", 0, 1, 0.2, 0.01, 0) \
+    F(dsDepth,     "DNA Sequencer Depth", 0, 1, 1, 0.01, 0)
 
 enum ParamIndex
 {

@@ -15,7 +15,7 @@
 namespace tg
 {
 
-enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_AUDIO, K_MACRO };
+enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_AUDIO, K_MACRO, K_SEQ };
 
 // key (stable, saved in patches), display name, kind, bipolar
 #define TG_MOD_SOURCES(X) \
@@ -56,6 +56,7 @@ enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_
     X(Chaos,       "Chaos",             K_RAND,   true)  \
     X(Drift,       "Drift",             K_RAND,   true)  \
     X(CellNoise,   "Cell Instability",  K_RAND,   true)  \
+    X(DnaSeq,      "DNA Sequencer",     K_SEQ,    false) \
     X(Gate,        "Note Gate",         K_NOTE,   false) \
     X(NoteOn,      "Note On",           K_NOTE,   false) \
     X(NoteOff,     "Note Off",          K_NOTE,   false) \

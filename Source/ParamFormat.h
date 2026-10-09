@@ -22,6 +22,9 @@ inline juce::String formatParam (int idx, float v)
         || id == "seqAccentAmt" || id == "velSens")
         return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id.startsWith ("mod") && id.endsWith ("Amt")) { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
+    if (id == "dsSteps") { const int n = juce::roundToInt (v); return juce::String (n) + (n == 1 ? " step" : " steps"); }
+    if (id == "dsFreeHz") return fixed (v, 2) + " Hz";
+    if (id == "dsGlide" || id == "dsDepth") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id == "mutSeed") return "#" + juce::String (juce::roundToInt (v));
     if (id == "ciRate") return fixed (v, 2) + " Hz";
     if (id == "fbTime") return fixed (v, v < 100 ? 1 : 0) + " ms";

@@ -658,6 +658,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         if (routed)
         {
             computeSources (s, mc.in, lastDt);
+            srcV[MS_DnaSeq] = mc.dnaSeq;
             modSnap = s;
             if (mc.morph && mc.scenes != nullptr && mc.routes->anySceneXY)
             {
@@ -1324,8 +1325,25 @@ void Engine::allNotesOff()
     for (auto& v : voices) if (v.active) v.release();
 }
 
-void Engine::render (float* L, float* R, int numSamples, const Snapshot& sIn, const WaveSample* const* wavs)
+void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, const WaveSample* const* wavs)
 {
+    // ---- DNA Sequencer: the running step's transform moves its destinations (before Mutate)
+    const Snapshot* seqBase = &sDry;
+    dsValue = 0.0f;
+    if (dnaStore != nullptr && sDry.v[P_dsOn] > 0.5f)
+    {
+        const int steps = clampv ((int) std::lround (sDry.v[P_dsSteps]), 1, 32);
+        const double mid = dsPos + dsInc * numSamples * 0.5;
+        float w[DT_COUNT];
+        dsValue = dnaSeqWeights (*dnaStore, mid, steps, sDry.v[P_dsGlide], w);
+        dsSnap = sDry;
+        applyDnaSeq (w, sDry.v[P_dsDepth], dsSnap.v);
+        seqBase = &dsSnap;
+        dnaSeqStep.store ((int) (((int64_t) std::floor (mid) % steps + steps) % steps), std::memory_order_relaxed);
+    }
+    else dnaSeqStep.store (-1, std::memory_order_relaxed);
+    const Snapshot& sIn = *seqBase;
+
     // ---- Master Mutate: seeded offsets on top of the patch (the knobs are never changed)
     const uint32_t seed = (uint32_t) std::lround (sIn.v[P_mutSeed]);
     if (seed != mutTab.seed) mutTab.build (seed);
@@ -1349,6 +1367,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sIn, co
         routeSet.build (*routeStore);
         mc.routes = &routeSet; mc.in = modIn; mc.scenes = scenes; mc.morph = s.v[P_sceneMorph] > 0.5f;
         if (mutRouted) { mc.mut = &mutTab; mc.lockMask = lockMask; }
+        mc.dnaSeq = dsValue;
     }
     std::fill (std::begin (liveScratch), std::end (liveScratch), 0.0f);
 
@@ -1370,6 +1389,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sIn, co
             globalSrc[MS_Aftertouch] = modIn->aftertouch; globalSrc[MS_CcA] = modIn->ccA; globalSrc[MS_CcB] = modIn->ccB;
         }
         for (int k = 0; k < 8; ++k) globalSrc[MS_Macro1 + k] = s.v[P_macro1 + k];
+        globalSrc[MS_DnaSeq] = dsValue;
     }
     float* srcW = newest != nullptr ? newest->srcV : globalSrc;
     if (mc.any() && (routeSet.anyGlobal || (mc.morph && scenes != nullptr && routeSet.anySceneXY)))

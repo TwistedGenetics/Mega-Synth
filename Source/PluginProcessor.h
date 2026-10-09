@@ -43,7 +43,9 @@ public:
     juce::MidiKeyboardState keyboardState;
     tg::StepStore steps;
     std::atomic<int> currentStep { -1 };
-    tg::RouteStore routes;                    // modulation matrix routes (amounts are the mod1Amt.. parameters)
+    tg::RouteStore routes;
+    tg::DnaSeqStore dnaSteps;                 // Sonic DNA Sequencer steps
+    int getDnaSeqStep() const { return engine.dnaSeqStep.load(); }                    // modulation matrix routes (amounts are the mod1Amt.. parameters)
     const tg::Engine& getEngine() const { return engine; }
     // Adds a route from src to dest in the first free slot with the given depth; returns the slot or -1.
     int addRoute (int src, int destParam, float depth);
@@ -139,7 +141,7 @@ private:
     struct Snapshot
     {
         juce::ValueTree params;
-        juce::String steps, patchName, label, routes, scenes, macroNames;
+        juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps;
         int sceneEdit = 0;
         std::shared_ptr<const juce::MemoryBlock> wave[2];
         juce::String waveName[2];
@@ -156,7 +158,9 @@ private:
     bool restoring = false;
     std::atomic<bool> snapshotPending { false };
     int snapshotDelay = 0;
-    uint32_t lastStepsVersion = 0, lastRoutesVersion = 0;
+    uint32_t lastStepsVersion = 0, lastRoutesVersion = 0, lastDnaVersion = 0;
+    double dsRunPos = 0.0;          // DNA Sequencer position (steps) when free-running
+    bool dsWasOn = false;
     tg::GlobalModInputs modInputs;
     juce::AudioBuffer<float> capBuf;            // audio thread writes while recording
     std::atomic<bool> capRecording { false }, capStopReq { false }, capReady { false };

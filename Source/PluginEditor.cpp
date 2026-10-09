@@ -421,7 +421,7 @@ void AssignSlot::resized()
 static void addSourceItems (juce::ComboBox& box, bool includeAudio, const juce::String& noneText)
 {
     box.addItem (noneText, MS_None + 1);
-    const char* headings[] = { "", "LFOs", "Envelopes", "MIDI / Performance", "MPE", "Random", "Note", "Followers", "Audio rate (pitch, level, filter, FM)", "Macros" };
+    const char* headings[] = { "", "LFOs", "Envelopes", "MIDI / Performance", "MPE", "Random", "Note", "Followers", "Audio rate (pitch, level, filter, FM)", "Macros", "Sequencer" };
     SrcKind last = K_NONE;
     for (int s = 1; s < MS_COUNT; ++s)
     {
@@ -898,6 +898,54 @@ void MacroCell::paint (juce::Graphics& g)
 {
     g.setColour (col::panel2);
     g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 8.0f);
+}
+
+//==============================================================================
+DnaStepCell::DnaStepCell (MegaSynthProcessor& p, int i) : proc (p), index (i)
+{
+    for (int t = 0; t < DT_COUNT; ++t) type.addItem (kDnaTransformNames[t], t + 1);
+    type.setTooltip ("Transform for this step");
+    type.onChange = [this] { proc.dnaSteps.set (index, type.getSelectedId() - 1, (float) amount.getValue()); };
+    amount.setSliderStyle (juce::Slider::LinearBarVertical);
+    amount.setRange (0.0, 1.0, 0.01);
+    amount.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    amount.setColour (juce::Slider::trackColourId, col::wavetable.withAlpha (0.7f));
+    amount.setColour (juce::Slider::backgroundColourId, col::panel3);
+    amount.setTooltip ("Amount");
+    amount.setPopupDisplayEnabled (true, true, nullptr);
+    amount.onValueChange = [this] { proc.dnaSteps.set (index, type.getSelectedId() - 1, (float) amount.getValue()); };
+    addAndMakeVisible (type);
+    addAndMakeVisible (amount);
+    refresh();
+}
+
+void DnaStepCell::refresh()
+{
+    type.setSelectedId (proc.dnaSteps.getType (index) + 1, juce::dontSendNotification);
+    if (! amount.isMouseButtonDown()) amount.setValue (proc.dnaSteps.getAmount (index), juce::dontSendNotification);
+}
+
+void DnaStepCell::setPlaying (bool p) { if (p != playing) { playing = p; repaint(); } }
+
+void DnaStepCell::resized()
+{
+    auto r = getLocalBounds().reduced (3);
+    r.removeFromTop (16);
+    type.setBounds (r.removeFromTop (24));
+    r.removeFromTop (4);
+    amount.setBounds (r.withSizeKeepingCentre (std::min (r.getWidth(), 30), r.getHeight()));
+}
+
+void DnaStepCell::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (playing ? col::wavetable.withAlpha (0.35f) : col::panel2);
+    g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (playing ? col::wavetable : col::border);
+    g.drawRoundedRectangle (r, 6.0f, 1.0f);
+    g.setColour (col::muted);
+    g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+    g.drawText (juce::String (index + 1), 0, 2, getWidth(), 14, juce::Justification::centred);
 }
 
 //==============================================================================
@@ -1907,6 +1955,38 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Sonic DNA Sequencer
+    {
+        auto* page = addPage ("DNA Seq");
+        auto* c = sec (page, "Sonic DNA Sequencer  (each step transforms the sound; also a Mod Matrix source)", col::wavetable);
+        auto* on = new juce::ToggleButton ("On");
+        on->setColour (juce::ToggleButton::tickColourId, col::wavetable);
+        c->add (on, 60, 30);
+        dsOnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_dsOn], *on);
+        c->choice (P_dsRate, "Rate", 130);
+        c->knob (P_dsSteps, "Steps");
+        c->knob (P_dsFreeHz, "Free Rate");
+        c->knob (P_dsGlide, "Glide");
+        c->knob (P_dsDepth, "Depth");
+        for (int i = 0; i < 32; ++i) dnaCells.add (page->own (new DnaStepCell (proc, i)));
+        auto* help = page->own (new juce::Label ({}, "Fold, Crush and Decimate use Wave Mutation; Shift, Ring and FM the Audio-Rate Transform; Splice, Resonate, Grain "
+            "and Blur bring in DNA Splice, the Resonator, Granular and Spectral (Spectral must be switched On); Filter closes the filter; Mutate "
+            "turns up Master Mutate; Octave lifts every oscillator 12 semitones. Synced rates follow the DAW's beat position while it plays, "
+            "and the internal tempo otherwise. Glide crossfades into the next step."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.0f)));
+        help->setJustificationType (juce::Justification::topLeft);
+        juce::Array<DnaStepCell*> cells (dnaCells);
+        page->onResize = [page, c, cells, help]
+        {
+            const int g = 10, W = page->getWidth();
+            c->setBounds (g, g, W - 2 * g, 130);
+            const int cw = (W - 2 * g) / 16;
+            for (int i = 0; i < 32; ++i) cells[i]->setBounds (g + (i % 16) * cw, 148 + (i / 16) * 196, cw - 3, 190);
+            help->setBounds (g + 4, 540, W - 2 * g, 56);
+        };
+    }
+
     // ---------------------------------------------------------------- Sequencer
     {
         auto* page = addPage ("Sequencer");
@@ -2200,6 +2280,15 @@ void MegaSynthEditor::timerCallback()
         }
     }
     if (labLine.isShowing()) updateLab();
+    if (! dnaCells.isEmpty() && dnaCells[0]->isShowing())
+    {
+        const auto dv = proc.dnaSteps.getVersion();
+        if (dv != lastDnaVersion) { lastDnaVersion = dv; for (auto* c : dnaCells) c->refresh(); }
+        const int st = proc.getDnaSeqStep();
+        if (st != lastDnaStep) { lastDnaStep = st; for (int i = 0; i < dnaCells.size(); ++i) dnaCells[i]->setPlaying (i == st); }
+        const int len = juce::roundToInt (proc.param (P_dsSteps)->convertFrom0to1 (proc.param (P_dsSteps)->getValue()));
+        if (len != lastDnaLen) { lastDnaLen = len; for (int i = 0; i < dnaCells.size(); ++i) dnaCells[i]->setAlpha (i < len ? 1.0f : 0.35f); }
+    }
     if (mutSeedLabel.isShowing())
     {
         const int seed = juce::roundToInt (proc.param (P_mutSeed)->convertFrom0to1 (proc.param (P_mutSeed)->getValue()));

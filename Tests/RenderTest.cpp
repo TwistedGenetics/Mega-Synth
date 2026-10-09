@@ -1272,6 +1272,104 @@ int main()
                        && q->lab.find (g2->id)->values[P_filterCutoff] == g2->values[P_filterCutoff], "lab state round trip");
             }
 
+            // ---- Stage 15: Sonic DNA Sequencer
+            {
+                std::cout << "DNA Sequencer" << std::endl;
+                // a host at 120 BPM, playing from bar 1
+                struct HostHead : juce::AudioPlayHead
+                {
+                    double bpm = 120.0, ppq = 0.0; bool playing = true;
+                    juce::Optional<PositionInfo> getPosition() const override
+                    {
+                        PositionInfo pi; pi.setBpm (bpm); pi.setPpqPosition (ppq); pi.setIsPlaying (playing);
+                        pi.setTimeSignature (TimeSignature { 4, 4 });
+                        return pi;
+                    }
+                } head;
+                auto p = clean(); setP (*p, P_ampR, 0.05f);   // a sine, so the crush steps' new harmonics stand out
+                p->setPlayHead (&head);
+                for (int i = 0; i < 16; ++i) p->dnaSteps.set (i, i % 2 == 0 ? DT_Crush : DT_Off, 1.0f);
+                p->dnaSteps.set (5, DT_Octave, 1.0f);
+                setP (*p, P_dsOn, 1.0f); setP (*p, P_dsSteps, 16.0f); setP (*p, P_dsRate, 2.0f); setP (*p, P_dsGlide, 0.0f);
+                // run it like a host: 512-sample blocks, the play position advancing with them
+                const int block = 512; const double secs = 4.0;
+                juce::AudioBuffer<float> buf (2, block), out (2, (int) (secs * sr));
+                int wrongStep = 0, blocks = 0;
+                std::vector<int> stepAt;
+                for (int pos = 0; pos < out.getNumSamples(); pos += block)
+                {
+                    head.ppq = pos / sr * (head.bpm / 60.0);
+                    juce::MidiBuffer midi;
+                    if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 57, 1.0f), 0);
+                    buf.clear();
+                    p->processBlock (buf, midi);
+                    out.copyFrom (0, pos, buf, 0, 0, std::min (block, out.getNumSamples() - pos));
+                    const double midPpq = head.ppq + 0.5 * block / sr * (head.bpm / 60.0);
+                    const int expect = (int) std::floor (midPpq / 0.25) % 16;
+                    wrongStep += p->getDnaSeqStep() != expect;
+                    stepAt.push_back (p->getDnaSeqStep());
+                    ++blocks;
+                }
+                std::cout << "  120 BPM, 1/16 steps: " << blocks - wrongStep << "/" << blocks << " blocks on the step the host's beat position says" << std::endl;
+                CHECK (wrongStep == 0, "DNA sequencer step timing vs host tempo");
+                // audible per step: crush steps are brighter than clean ones; the octave step is an octave up
+                auto stepCentroid = [&] (int stepIndex, int bar)
+                {
+                    const double t0 = (bar * 16 + stepIndex) * 0.125 + 0.03, t1 = t0 + 0.08;   // 125 ms steps
+                    const int a0 = (int) (t0 * sr), n = (int) ((t1 - t0) * sr);
+                    juce::dsp::FFT fft (12); std::vector<float> d (8192, 0.0f);
+                    for (int i = 0; i < 4096; ++i) d[(size_t) i] = i < n ? out.getSample (0, a0 + i) * (0.5f - 0.5f * std::cos (6.2831853f * i / n)) : 0.0f;
+                    fft.performFrequencyOnlyForwardTransform (d.data());
+                    double num = 0, den = 0; for (int k = 1; k < 2048; ++k) { num += d[(size_t) k] * k * sr / 4096; den += d[(size_t) k]; }
+                    return num / den;
+                };
+                const double cCrush = stepCentroid (2, 1), cClean = stepCentroid (3, 1), cOct = stepCentroid (5, 1);
+                std::cout << "  centroid: crush step " << cCrush << " Hz, clean step " << cClean << " Hz, octave step " << cOct << " Hz" << std::endl;
+                CHECK (cCrush > 1.5 * cClean, "crush step audible");
+                {
+                    // pitch of the octave step from zero crossings
+                    int zc = 0; const int a0 = (int) ((16 + 5) * 0.125 * sr + 0.02 * sr), a1 = a0 + (int) (0.09 * sr);
+                    for (int i = a0 + 1; i < a1; ++i) if (out.getSample (0, i - 1) < 0 && out.getSample (0, i) >= 0) ++zc;
+                    const double f = zc / ((a1 - a0) / sr);
+                    std::cout << "  octave step pitch " << f << " Hz (expected ~440)" << std::endl;
+                    CHECK (std::abs (f - 440.0) < 25.0, "octave step");
+                }
+                // every transform moves its own destinations
+                {
+                    int moved = 0;
+                    for (int t = 1; t < DT_COUNT; ++t)
+                    {
+                        float v[P_COUNT]; for (int i = 0; i < P_COUNT; ++i) v[i] = meta (i).def;
+                        float w[DT_COUNT] = {}; w[t] = 1.0f;
+                        float before[P_COUNT]; std::copy (v, v + P_COUNT, before);
+                        applyDnaSeq (w, 1.0f, v);
+                        bool all = true;
+                        for (auto& d : dnaTransformTargets (t)) all = all && v[d.param] != before[d.param];
+                        moved += all;
+                    }
+                    CHECK (moved == DT_COUNT - 1, "every transform moves its destinations");
+                }
+                // as a Mod Matrix source, free-running: route it to Osc 1 pitch and hear steps
+                {
+                    auto q = clean(); setP (*q, P_ampR, 0.05f);
+                    for (int i = 0; i < 4; ++i) q->dnaSteps.set (i, DT_Off, i % 2 == 0 ? 0.0f : 1.0f);
+                    for (int i = 0; i < 4; ++i) q->dnaSteps.set (i, DT_Ring, i % 2 == 0 ? 0.0f : 1.0f);
+                    setP (*q, P_dsOn, 1.0f); setP (*q, P_dsSteps, 4.0f); setP (*q, P_dsRate, 8.0f); setP (*q, P_dsFreeHz, 4.0f); setP (*q, P_dsDepth, 0.0f);
+                    route (*q, 0, MS_DnaSeq, P_osc1Semi, 0.5f);
+                    juce::AudioBuffer<float> x;
+                    render (*q, 2.0, { { 0.0, juce::MidiMessage::noteOn (1, 57, 1.0f) } }, &x);
+                    auto fAt = [&] (double t0) { int zc = 0; const int a0 = (int) (t0 * sr), a1 = a0 + (int) (0.15 * sr);
+                                                  for (int i = a0 + 1; i < a1; ++i) if (x.getSample (0, i - 1) < 0 && x.getSample (0, i) >= 0) ++zc; return zc / 0.15; };
+                    const double f0 = fAt (1.02), f1 = fAt (1.27);
+                    std::cout << "  as a source (free 4 Hz): " << f0 << " Hz then " << f1 << " Hz" << std::endl;
+                    CHECK (std::abs (f0 - 220.0) < 10.0 && std::abs (f1 - 440.0) < 15.0, "DNA sequencer as a modulation source");
+                }
+                // steps survive save / load
+                juce::MemoryBlock st; p->getStateInformation (st);
+                auto r = make(); r->setStateInformation (st.getData(), (int) st.getSize());
+                CHECK (r->dnaSteps.getType (5) == DT_Octave && r->dnaSteps.getType (2) == DT_Crush, "DNA sequencer state");
+            }
+
             // everything at maximum stays finite and bounded
             {
                 auto p = make();

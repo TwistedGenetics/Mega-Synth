@@ -68,6 +68,10 @@ Each note gets its own smooth wandering noise on a set of targets, so no two not
 
 Make two sounds the parents (**Current sound > A**, then build or load another and **Current sound > B**) and press **Breed**: you get eight children. Each child takes every one of the 13 groups (the same groups as the Mutate locks) whole from parent A or parent B, so a child might have A's oscillators and envelopes with B's filter, effects and Mod Matrix routes; **Variation** adds a light mutation on top (0 = pure combinations). Click a child to hear it, make a good one a parent (**Child > Parent A/B**) and breed again. **<** / **>** step back and forward through the generations, the family tree is shown for the sound you're playing and saved with the project, and a patch saved from the lab records its lineage. Breeding mixes the sound parameters and routes; samples, the sequence, scenes and captures stay as they are.
 
+## Sonic DNA Sequencer (DNA Seq tab)
+
+Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (Wave Mutation), Shift, Ring, FM (Audio-Rate Transform), Splice (DNA Splice), Resonate (Resonator), Filter (closes the filter), Grain (Granular), Blur (Spectral, which must be On), Mutate (Master Mutate) and Octave (+12 semitones). The running step pushes its transform's destinations, **Glide** crossfades into the next step and **Depth** scales everything. **Rate** is a note value (1/32 to 1 bar, locked to the DAW's beat position while it plays, the internal tempo otherwise) or **Free** in Hz. The sequencer's output (the blended step amount) is also a Mod Matrix source, "DNA Sequencer". Steps are saved with the project and in patches.
+
 ## Modulation matrix (Mod Matrix tab)
 
 Any source can drive any sound parameter: 32 routes, each with its own depth.

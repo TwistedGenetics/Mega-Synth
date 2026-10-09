@@ -49,6 +49,10 @@ inline const char* const kClockKeys[]   = { "internal","host" };
 inline const char* const kClockLabels[] = { "Internal Tempo","Host Transport" };
 inline const char* const kLfoSrcKeys[]   = { "lfo1","lfo2","lfo3" };
 inline const char* const kLfoSrcLabels[] = { "LFO1","LFO2","LFO3" };
+inline const char* const kArModKeys[]   = { "sine","osc1","osc2","osc3","sub","noise" };
+inline const char* const kArModLabels[] = { "Sine (ratio)","Osc 1","Osc 2","Osc 3","Sub","Noise" };
+inline const char* const kArFmTKeys[]   = { "osc123sub","osc1","osc2","osc3","all" };
+inline const char* const kArFmTLabels[] = { "Osc 1-3 + Sub","Osc 1","Osc 2","Osc 3","Every oscillator" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -159,6 +163,8 @@ inline const ChoiceList kListClock       = TG_LIST(kClock);
 inline const ChoiceList kListLfoSrc      = TG_LIST(kLfoSrc);
 inline const ChoiceList kListEnvSrc      = TG_LIST(kEnvSrc);
 inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT };
+inline const ChoiceList kListArMod       { kArModKeys, kArModLabels, 6 };
+inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
 #undef TG_LIST
 
 // ---------------------------------------------------------------- parameters
@@ -390,7 +396,25 @@ inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT 
     F(macro8, "Macro 8", 0, 1, 0, 0.001, 0) \
     F(sceneX, "Scene X", 0, 1, 0, 0.001, 0) \
     F(sceneY, "Scene Y", 0, 1, 0, 0.001, 0) \
-    B(sceneMorph, "Scene Morph", false)
+    B(sceneMorph, "Scene Morph", false) \
+    F(wmMix,   "Wave Mutation Mix", 0, 1, 0, 0.01, 0) \
+    F(wmDrive, "Wave Mutation Drive", 0, 1, 0.3, 0.01, 0) \
+    F(wmFold,  "Wave Fold", 0, 1, 0.4, 0.01, 0) \
+    F(wmShape, "Wave Shape", 0, 1, 0, 0.01, 0) \
+    F(wmBend,  "Wave Bend", -1, 1, 0, 0.01, 0) \
+    F(wmAsym,  "Wave Asymmetry", -1, 1, 0, 0.01, 0) \
+    F(wmRect,  "Wave Rectify", 0, 1, 0, 0.01, 0) \
+    F(wmBits,  "Bit Depth", 1, 16, 16, 0.01, 0) \
+    F(wmDown,  "Sample Rate Reduce", 1, 32, 1, 0.01, 4) \
+    C(arMod,      "Audio-Rate Modulator", kListArMod, 0) \
+    F(arRatio,    "Modulator Ratio", 0.125, 16, 1, 0.001, 2) \
+    F(arOffset,   "Modulator Offset", -500, 500, 0, 0.1, 0) \
+    F(arFm,       "Audio-Rate FM", 0, 1, 0, 0.001, 0) \
+    C(arFmTarget, "FM Target", kListArFmT, 0) \
+    F(arAm,       "Audio-Rate AM", 0, 1, 0, 0.01, 0) \
+    F(arRing,     "Audio-Rate Ring", 0, 1, 0, 0.01, 0) \
+    F(arShift,    "Frequency Shift", -1000, 1000, 0, 0.1, 0) \
+    F(arShiftMix, "Frequency Shift Mix", 0, 1, 0, 0.01, 0)
 
 enum ParamIndex
 {

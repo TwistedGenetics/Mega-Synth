@@ -1131,6 +1131,48 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Mutation
+    {
+        auto* page = addPage ("Mutation");
+        auto* wmS = sec (page, "Wave Mutation  (after the oscillator mix, before the filter; each note on its own)", col::complex);
+        wmS->knob (P_wmMix, "Mix");
+        wmS->knob (P_wmDrive, "Drive");
+        wmS->knob (P_wmFold, "Fold");
+        wmS->knob (P_wmShape, "Shape");
+        wmS->knob (P_wmBend, "Bend");
+        wmS->knob (P_wmAsym, "Asymmetry");
+        wmS->knob (P_wmRect, "Rectify");
+        wmS->knob (P_wmBits, "Bit Depth");
+        wmS->knob (P_wmDown, "Rate Reduce");
+        auto* arS = sec (page, "Audio-Rate Transform  (FM, AM, ring modulation and frequency shift)", col::fm);
+        arS->choice (P_arMod, "Modulator", 130);
+        arS->knob (P_arRatio, "Ratio");
+        arS->knob (P_arOffset, "Offset");
+        arS->knob (P_arFm, "FM");
+        arS->choice (P_arFmTarget, "FM Target", 140);
+        arS->knob (P_arAm, "AM");
+        arS->knob (P_arRing, "Ring");
+        arS->knob (P_arShift, "Shift");
+        arS->knob (P_arShiftMix, "Shift Mix");
+        auto* help = page->own (new juce::Label ({}, "Wave Mutation: Drive pushes the mix into the shaper; Bend curves it, Asymmetry adds even harmonics, "
+            "Fold wraps peaks back over (wavefolding), Shape saturates, Rectify flips the negative half up. These run at twice the sample rate to "
+            "keep aliasing down. Bit Depth and Rate Reduce come after, for deliberate digital grit. Mix 0 = bypassed.\n\n"
+            "Audio-Rate Transform: the Modulator is an internal sine at Ratio x the note (plus Offset in Hz, for clangorous inharmonic tones), "
+            "one of the note's own oscillators, or noise. FM bends the chosen oscillators' pitch with it every sample (through-zero), "
+            "AM and Ring multiply the sound by it, and Shift moves every frequency up or down by a fixed number of Hz (not a pitch shift - "
+            "harmonics stop being harmonic). Every knob here can be modulated from the Mod Matrix."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.5f)));
+        help->setJustificationType (juce::Justification::topLeft);
+        page->onResize = [page, wmS, arS, help]
+        {
+            const int g = 10, W = page->getWidth();
+            wmS->setBounds (g, g, W - 2 * g, 130);
+            arS->setBounds (g, 150, W - 2 * g, 130);
+            help->setBounds (g + 6, 296, W - 2 * g - 12, 160);
+        };
+    }
+
     // ---------------------------------------------------------------- Filter & Envelopes
     {
         auto* page = addPage ("Filter & Env");

@@ -184,6 +184,7 @@ void FilterChain::update (float c, float res, double sr)
 void Voice::prepare (double sampleRate)
 {
     sr = sampleRate;
+    waveMut.prepare (sampleRate);
     active = false;
 }
 
@@ -234,6 +235,9 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     for (int i = 0; i < 4; ++i) { lfoPh[i] = 0.0; lfoDepthNow[i] = s.f (P_lfo1Depth + 3 * i); }
     rstate.reset();
     lastDt = 0.0f;
+    waveMut.reset();
+    arFx.reset();
+    arPh = 0.0;
     std::fill (std::begin (srcV), std::end (srcV), 0.0f);
 
     // Envelope times are read once, at note-on: routes onto them use the note-on source values
@@ -678,6 +682,28 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         const float tfA = 1.0f - std::exp (-1.0f / (0.001f * (float) sr)), tfR = 1.0f - std::exp (-1.0f / (0.03f * (float) sr));
         const float tsA = 1.0f - std::exp (-1.0f / (0.03f * (float) sr)), tsR = 1.0f - std::exp (-1.0f / (0.25f * (float) sr));
 
+        // ---- mutation modules for this block
+        WaveMutatorParams wmp;
+        wmp.mix = ps.f (P_wmMix); wmp.drive = ps.f (P_wmDrive); wmp.fold = ps.f (P_wmFold); wmp.shape = ps.f (P_wmShape);
+        wmp.bend = ps.f (P_wmBend); wmp.asym = ps.f (P_wmAsym); wmp.rect = ps.f (P_wmRect); wmp.bits = ps.f (P_wmBits); wmp.down = ps.f (P_wmDown);
+        AudioRateParams arp;
+        arp.mod = clampv (ps.i (P_arMod), 0, 5); arp.ratio = ps.f (P_arRatio); arp.offsetHz = ps.f (P_arOffset);
+        arp.fm = ps.f (P_arFm); arp.fmTarget = clampv (ps.i (P_arFmTarget), 0, 4); arp.am = ps.f (P_arAm); arp.ring = ps.f (P_arRing);
+        arp.shiftHz = ps.f (P_arShift); arp.shiftMix = ps.f (P_arShiftMix);
+        const bool arFmOn = arp.fmActive(), arFxOn = arp.fxActive(), needMod = arFmOn || arFxOn;
+        const double modHz = baseFreq * pow2 (ps.bendSemis / 12.0) * arp.ratio + arp.offsetHz;
+        const float fmIndex = arp.fm * 8.0f;
+        bool fmT[AD_COUNT] = {};
+        if (arFmOn)
+        {
+            const int sets[5][8] = { { AD_P1, AD_P2, AD_P3, AD_PSub, -1 }, { AD_P1, -1 }, { AD_P2, -1 }, { AD_P3, -1 },
+                                     { AD_P1, AD_P2, AD_P3, AD_PSub, AD_PWt1, AD_PWt2, AD_PCx, AD_PSs } };
+            for (int k = 0; k < 8 && sets[arp.fmTarget][k] >= 0; ++k) fmT[sets[arp.fmTarget][k]] = true;
+        }
+        const double rotInc = 2.0 * kPi * arp.shiftHz / sr;
+        const double rotCos = std::cos (rotInc), rotSin = std::sin (rotInc);
+        float xb[2][kCtrl], mb[kCtrl], cutB[kCtrl], resB[kCtrl];
+
         auto sampleLoop = [&] (auto arTag)
         {
         using ARType = decltype (arTag);   // a type, not a constexpr local, so nested lambdas see it on every compiler
@@ -698,6 +724,18 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         };
         for (int i = 0; i < n; ++i)
         {
+            // the audio-rate transform's modulator (from the previous sample of the oscillators)
+            float m = 0.0f;
+            if (needMod)
+            {
+                switch (arp.mod)
+                {
+                    case 0:  m = (float) std::sin (2.0 * kPi * arPh); arPh = wrap01 (arPh + modHz * isr); break;
+                    case 5:  m = nextRand(); break;
+                    default: m = aPrev[arp.mod - 1]; break;
+                }
+            }
+            mb[i] = m;
             if constexpr (ARType::value)
             {
                 std::fill (ad, ad + AD_COUNT, 0.0f);
@@ -708,9 +746,13 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                     ad[ar[k].ad] += ar[k].k * applyCurve (ar[k].curve, x);
                 }
                 if (arCut)
-                    filter.update (clampv (cutoff.v * (float) pow2 (ad[AD_Cut]), 20.0f, 18000.0f), clampv (res.v + ad[AD_Res], 0.1f, 30.0f), sr);
+                {
+                    cutB[i] = clampv (cutoff.v * (float) pow2 (ad[AD_Cut]), 20.0f, 18000.0f);
+                    resB[i] = clampv (res.v + ad[AD_Res], 0.1f, 30.0f);
+                }
             }
-            auto pm = [&] (int a) { return ! ARType::value ? 1.0 : pow2 (ad[a]); };
+            const double fmMul = 1.0 + (double) fmIndex * m;   // through-zero linear FM
+            auto pm = [&] (int a) { return ! ARType::value ? 1.0 : pow2 (ad[a]) * (fmT[a] ? fmMul : 1.0); };
 
             // Osc 2 and 3 first so Osc 1's legacy FM uses this sample's Osc 2 (as in Web Audio)
             double fr = ! ARType::value ? (double) (f2.v + fmIn (1)) : f2.v * pm (AD_P2) + fmIn (1);
@@ -825,8 +867,21 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             }
 
             const float rmix = ! ARType::value ? ringMix.v : clampv (ringMix.v + ad[AD_Ring], 0.0f, 1.0f);
-            const float xL = mL * dry.v + rL * rmix;
-            const float xR = mR * dry.v + rR * rmix;
+            xb[0][i] = mL * dry.v + rL * rmix;
+            xb[1][i] = mR * dry.v + rR * rmix;
+        }
+        };
+        if (nar > 0 || arFmOn) sampleLoop (std::true_type {}); else sampleLoop (std::false_type {});
+
+        // ---- Wave Mutation and the audio-rate transform, then the filter and amp
+        waveMut.process (xb[0], xb[1], n, stereo, wmp, sr);
+        if (arFxOn)
+            for (int i = 0; i < n; ++i) arFx.process (xb[0][i], xb[1][i], mb[i], stereo, arp, rotCos, rotSin);
+
+        for (int i = 0; i < n; ++i)
+        {
+            if (arCut) filter.update (cutB[i], resB[i], sr);
+            const float xL = xb[0][i], xR = xb[1][i];
             const float yL = filter.process (xL, 0, drive);
             const float yR = stereo ? filter.process (xR, 1, drive) : yL;
 
@@ -844,8 +899,6 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 trSlow += (a - trSlow) * (a > trSlow ? tsA : tsR);
             }
         }
-        };
-        if (nar > 0) sampleLoop (std::true_type {}); else sampleLoop (std::false_type {});
         done += n;
         advanceLfos (ps, n);
 

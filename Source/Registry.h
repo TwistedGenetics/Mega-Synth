@@ -14,7 +14,7 @@
 namespace tg
 {
 
-enum class Category { Performance, Osc, Wavetable, Mixer, Filter, Env, Lfo, Fx, Mod, Seq, Analog };
+enum class Category { Performance, Osc, Wavetable, Mixer, Filter, Env, Lfo, Fx, Mod, Seq, Analog, Mutation };
 enum class Scale    { Linear, Log, Integer, Choice, Toggle };
 enum class MutGroup { None, Pitch, Oscillators, Wavetable, Envelopes, Filter, Modulation, Fx, Rhythm };
 

@@ -561,6 +561,102 @@ int main()
             CHECK (p->scenes.stored[1].load(), "undo restores scenes");
         }
 
+        // ---- Stage 5: wave mutation and the audio-rate transform
+        {
+            std::cout << "Wave mutation / audio-rate transform" << std::endl;
+            // magnitude spectrum of 0.2 .. 0.88 s, as (frequency of the peak, energy near f, centroid)
+            struct Spec { std::vector<float> mag; double binHz = 0; };
+            auto spectrum = [&] (const juce::AudioBuffer<float>& b)
+            {
+                const int order = 15, N = 1 << order;
+                juce::dsp::FFT fft (order);
+                std::vector<float> d ((size_t) N * 2, 0.0f);
+                const int start = (int) (0.2 * sr);
+                for (int i = 0; i < N && start + i < b.getNumSamples(); ++i)
+                    d[(size_t) i] = b.getSample (0, start + i) * (0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * i / (N - 1)));
+                fft.performFrequencyOnlyForwardTransform (d.data());
+                Spec sp; sp.mag.assign (d.begin(), d.begin() + N / 2); sp.binHz = sr / N;
+                return sp;
+            };
+            auto peakHz = [] (const Spec& sp) { size_t k = 1; for (size_t i = 2; i < sp.mag.size(); ++i) if (sp.mag[i] > sp.mag[k]) k = i; return k * sp.binHz; };
+            auto near = [] (const Spec& sp, double f) { const int k = (int) std::lround (f / sp.binHz); float e = 0; for (int i = k - 3; i <= k + 3; ++i) e += sp.mag[(size_t) i] * sp.mag[(size_t) i]; return e; };
+            auto centroid = [] (const Spec& sp) { double a = 0, w = 0; for (size_t i = 1; i < sp.mag.size(); ++i) { a += sp.mag[i] * i * sp.binHz; w += sp.mag[i]; } return a / std::max (1e-9, w); };
+            auto run = [&] (std::function<void (MegaSynthProcessor&)> setup, juce::AudioBuffer<float>& out)
+            {
+                auto p = clean(); setP (*p, P_ampR, 0.05f); setup (*p);
+                return render (*p, 1.0, note (57, 1.0f), &out);
+            };
+            juce::AudioBuffer<float> base, b;
+            run ([] (MegaSynthProcessor&) {}, base);
+            const auto sBase = spectrum (base);
+            CHECK (std::abs (peakHz (sBase) - 220.0) < 3.0, "spectrum helper");
+
+            // mix at zero = untouched, whatever the other settings
+            run ([] (MegaSynthProcessor& p) { setP (p, P_wmFold, 1.0f); setP (p, P_wmBits, 3.0f); setP (p, P_arShift, 300.0f); setP (p, P_arRing, 0.0f); }, b);
+            float md = 0; for (int i = 0; i < b.getNumSamples(); ++i) md = std::max (md, std::abs (b.getSample (0, i) - base.getSample (0, i)));
+            CHECK (md == 0.0f, "modules at zero mix must be bit-exact");
+
+            // frequency shifter: 220 Hz moves to 320 Hz / 120 Hz
+            run ([] (MegaSynthProcessor& p) { setP (p, P_arShift, 100.0f); setP (p, P_arShiftMix, 1.0f); }, b);
+            const double up = peakHz (spectrum (b));
+            run ([] (MegaSynthProcessor& p) { setP (p, P_arShift, -100.0f); setP (p, P_arShiftMix, 1.0f); }, b);
+            const double down = peakHz (spectrum (b));
+            std::cout << "  frequency shift +100 Hz: " << up << " Hz, -100 Hz: " << down << " Hz" << std::endl;
+            CHECK (std::abs (up - 320.0) < 3.0 && std::abs (down - 120.0) < 3.0, "frequency shifter");
+            {
+                const auto sp = spectrum (b);
+                CHECK (near (sp, 220.0) < 0.01f * near (sp, 120.0), "frequency shifter leaves the original behind");
+            }
+
+            // ring modulation by the internal sine at 1.5x: 110 + 550 Hz, no 220
+            run ([] (MegaSynthProcessor& p) { setP (p, P_arRing, 1.0f); setP (p, P_arRatio, 1.5f); }, b);
+            {
+                const auto sp = spectrum (b);
+                std::cout << "  ring: 110 Hz " << near (sp, 110) << ", 220 Hz " << near (sp, 220) << ", 550 Hz " << near (sp, 550) << std::endl;
+                CHECK (near (sp, 110) > 50 * near (sp, 220) && near (sp, 550) > 50 * near (sp, 220), "ring modulation sidebands");
+            }
+            // AM: carrier kept, sidebands added
+            run ([] (MegaSynthProcessor& p) { setP (p, P_arAm, 1.0f); setP (p, P_arRatio, 0.25f); }, b);
+            {
+                const auto sp = spectrum (b);
+                CHECK (near (sp, 220) > near (sp, 165) && near (sp, 165) > 0.05f * near (sp, 220) && near (sp, 275) > 0.05f * near (sp, 220), "AM sidebands");
+            }
+            // FM: Osc 1 frequency-modulated by the sine adds sidebands
+            run ([] (MegaSynthProcessor& p) { setP (p, P_arFm, 0.3f); setP (p, P_arRatio, 2.0f); }, b);
+            const double cFm = centroid (spectrum (b)), c0 = centroid (sBase);
+            std::cout << "  FM centroid " << cFm << " Hz vs " << c0 << " Hz" << std::endl;
+            CHECK (cFm > 1.5 * c0, "audio-rate FM");
+            // FM by Osc 2 at audio rate, only Osc 1 targeted
+            run ([] (MegaSynthProcessor& p) { setP (p, P_arFm, 0.2f); setP (p, P_arMod, 2.0f); setP (p, P_arFmTarget, 1.0f); setP (p, P_osc2Semi, 7.0f); }, b);
+            CHECK (centroid (spectrum (b)) > 1.3 * c0, "FM from Osc 2");
+
+            // wave folding adds harmonics; bit crushing too
+            run ([] (MegaSynthProcessor& p) { setP (p, P_wmMix, 1.0f); setP (p, P_wmDrive, 0.5f); setP (p, P_wmFold, 0.8f); }, b);
+            const double cFold = centroid (spectrum (b));
+            run ([] (MegaSynthProcessor& p) { setP (p, P_wmMix, 1.0f); setP (p, P_wmFold, 0.0f); setP (p, P_wmDrive, 0.0f); setP (p, P_wmBits, 3.0f); }, b);
+            const double cBits = centroid (spectrum (b));
+            std::cout << "  centroid: clean " << c0 << ", folded " << cFold << ", 3-bit " << cBits << std::endl;
+            CHECK (cFold > 2.0 * c0 && cBits > 2.0 * c0, "wave mutation adds harmonics");
+
+            // a neutral shaper at 50% mix doesn't comb-filter (the dry path is latency-matched)
+            run ([] (MegaSynthProcessor& p) { setP (p, P_wmMix, 0.5f); setP (p, P_wmFold, 0.0f); setP (p, P_wmDrive, 0.0f); }, b);
+            {
+                double e0 = 0, e1 = 0;
+                for (int i = (int) (0.2 * sr); i < (int) (0.8 * sr); ++i) { e0 += base.getSample (0, i) * base.getSample (0, i); e1 += b.getSample (0, i) * b.getSample (0, i); }
+                std::cout << "  neutral 50% mix level " << std::sqrt (e1 / e0) << " of dry" << std::endl;
+                CHECK (std::abs (std::sqrt (e1 / e0) - 1.0) < 0.05, "dry/wet latency match");
+            }
+            // everything at maximum stays finite and bounded
+            {
+                auto p = make();
+                for (int i : { P_wmMix, P_wmDrive, P_wmFold, P_wmShape, P_wmBend, P_wmAsym, P_wmRect, P_arFm, P_arAm, P_arRing, P_arShiftMix }) setP (*p, i, 1.0f);
+                setP (*p, P_wmBits, 1.0f); setP (*p, P_wmDown, 32.0f); setP (*p, P_arShift, 1000.0f); setP (*p, P_arMod, 5.0f);
+                auto st = render (*p, 2.0, chord (0.0, 1.5, { 36, 48, 60, 72 }));
+                std::cout << "  everything at max: peak " << st.peak << std::endl;
+                CHECK (st.finite && st.peak < 6.0f, "extreme mutation settings");
+            }
+        }
+
         // stress: every slot in use with random sources, destinations and curves
         {
             auto p = make();

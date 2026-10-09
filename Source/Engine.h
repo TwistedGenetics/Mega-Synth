@@ -5,6 +5,8 @@
 #include "Params.h"
 #include "DSP.h"
 #include "ModMatrix.h"
+#include "Mut/WaveMutator.h"
+#include "Mut/AudioRate.h"
 
 namespace tg
 {
@@ -293,7 +295,12 @@ private:
     float lastDt = 0.0f;
     float aPrev[4] {};           // previous sample of Osc 1, 2, 3 and Sub, for audio-rate routes
     RouteState rstate;
-    Snapshot modSnap;            // the parameters with this voice's modulation applied
+    Snapshot modSnap;
+
+    // ---- mutation modules (between the mixer and the filter)
+    WaveMutator waveMut;
+    AudioRateFx arFx;
+    double arPh = 0.0;           // internal sine modulator phase            // the parameters with this voice's modulation applied
     float nextRand() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng & 0xFFFFFF) / 8388608.0f - 1.0f; }
 };
 

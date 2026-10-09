@@ -33,6 +33,13 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 - Every control is automatable. Double-click a knob to reset it.
 - **Undo / Redo / Original** (header): every knob move, step edit, route change, patch load and sample load can be undone. *Original* goes back to the patch as it was loaded.
 
+## Mutation tab
+
+Two per-note modules sit between the oscillator mix and the filter. Each has its own mix, and at 0 it's switched out completely.
+
+- **Wave Mutation**: Drive, Bend, Asymmetry, Fold (wavefolding), Shape (saturation) and Rectify, run at twice the sample rate to keep aliasing down, then Bit Depth and Rate Reduce for deliberate digital grit.
+- **Audio-Rate Transform**: a modulator (an internal sine at a ratio of the note plus an offset in Hz, one of the note's own oscillators, or noise) drives through-zero **FM** of the chosen oscillators, **AM**, **Ring** modulation and a **Frequency Shifter** (moves every partial by the same number of Hz, up or down).
+
 ## Modulation matrix (Mod Matrix tab)
 
 Any source can drive any sound parameter: 32 routes, each with its own depth.

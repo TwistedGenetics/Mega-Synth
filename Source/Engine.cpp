@@ -672,11 +672,11 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
 
         auto sampleLoop = [&] (auto arTag)
         {
-        constexpr bool AR = decltype (arTag)::value;
+        using ARType = decltype (arTag);   // a type, not a constexpr local, so nested lambdas see it on every compiler
         auto fmIn = [&] (int d)
         {
             float a = 0.0f;
-            if constexpr (! AR)
+            if constexpr (! ARType::value)
                 for (int k = 0; k < fmN[d]; ++k) a += fmA[d][k] * srcVals[fmS[d][k]];
             else
                 for (int k = 0; k < fmN[d]; ++k)
@@ -685,12 +685,12 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         };
         auto lvl = [&] (float v, int a)
         {
-            if constexpr (! AR) { juce::ignoreUnused (a); return v; }
+            if constexpr (! ARType::value) { juce::ignoreUnused (a); return v; }
             else return v > 0.0f ? clampv (v + ad[a], 0.0f, 2.0f) : 0.0f;
         };
         for (int i = 0; i < n; ++i)
         {
-            if constexpr (AR)
+            if constexpr (ARType::value)
             {
                 std::fill (ad, ad + AD_COUNT, 0.0f);
                 for (int k = 0; k < nar; ++k)
@@ -702,24 +702,24 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 if (arCut)
                     filter.update (clampv (cutoff.v * (float) pow2 (ad[AD_Cut]), 20.0f, 18000.0f), clampv (res.v + ad[AD_Res], 0.1f, 30.0f), sr);
             }
-            auto pm = [&] (int a) { return ! AR ? 1.0 : pow2 (ad[a]); };
+            auto pm = [&] (int a) { return ! ARType::value ? 1.0 : pow2 (ad[a]); };
 
             // Osc 2 and 3 first so Osc 1's legacy FM uses this sample's Osc 2 (as in Web Audio)
-            double fr = ! AR ? (double) (f2.v + fmIn (1)) : f2.v * pm (AD_P2) + fmIn (1);
+            double fr = ! ARType::value ? (double) (f2.v + fmIn (1)) : f2.v * pm (AD_P2) + fmIn (1);
             const float o2 = bank.sample (wave2, ph2, (float) std::abs (fr) * fisr);
             ph2 = wrap01 (ph2 + fr * isr); srcVals[1] = o2;
 
-            fr = ! AR ? (double) (f3.v + fmIn (2)) : f3.v * pm (AD_P3) + fmIn (2);
+            fr = ! ARType::value ? (double) (f3.v + fmIn (2)) : f3.v * pm (AD_P3) + fmIn (2);
             const float o3 = bank.sample (wave3, ph3, (float) std::abs (fr) * fisr);
             ph3 = wrap01 (ph3 + fr * isr); srcVals[2] = o3;
 
-            const double fsub = ! AR ? (double) fSub.v : fSub.v * pm (AD_PSub);
+            const double fsub = ! ARType::value ? (double) fSub.v : fSub.v * pm (AD_PSub);
             const float osub = bank.sample (waveSub, phSub, (float) fsub * fisr);
             phSub = wrap01 (phSub + fsub * isr);
 
             // Osc 4 (WT 1) and WT 2: sample playback
             float o4L, o4R, w2L, w2R;
-            if (! AR)
+            if (! ARType::value)
             {
                 wt[0].tick (fmIn (3), isr, o4L, o4R);
                 wt[1].tick (0.0, isr, w2L, w2R);
@@ -736,15 +736,15 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             float cOut = 0;
             if (needComplex)
             {
-                const double cb = ! AR ? (double) cBase.v : cBase.v * pm (AD_PCx);
+                const double cb = ! ARType::value ? (double) cBase.v : cBase.v * pm (AD_PCx);
                 const double mf = cb * cRatio.v;
                 const float om = bank.sample (waveB, phMod, (float) std::abs (mf) * fisr);
                 phMod = wrap01 (phMod + mf * isr);
-                const double cf = ! AR ? (double) (cBase.v + cFm.v * om + fmIn (4))
+                const double cf = ! ARType::value ? (double) (cBase.v + cFm.v * om + fmIn (4))
                                             : cb + std::max (0.0f, cFm.v + ad[AD_CxFm]) * om + fmIn (4);
                 const float oc = bank.sample (waveA, phCar, (float) std::abs (cf) * fisr);
                 phCar = wrap01 (phCar + cf * isr);
-                const float shapeK = ! AR ? cShapeK : clampv (cShapeK + ad[AD_CxShape], 1.0f, 25.0f);
+                const float shapeK = ! ARType::value ? cShapeK : clampv (cShapeK + ad[AD_CxShape], 1.0f, 25.0f);
                 cOut = driveShape (oc * cMixS.v + om * (1.0f - cMixS.v), shapeK) * lvl (lC.v, AD_LCx);
             }
             srcVals[4] = cOut;
@@ -759,7 +759,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 {
                     const float g = ssGain[u].v;
                     if (g <= 1.0e-7f) continue;
-                    const double f = (! AR ? ssFreq[u] : ssFreq[u] * ssm) + fmS6;
+                    const double f = (! ARType::value ? ssFreq[u] : ssFreq[u] * ssm) + fmS6;
                     const float sw = bank.sample (W_SAW, ssPh[u], (float) std::abs (f) * fisr) * g;
                     ssPh[u] = wrap01 (ssPh[u] + f * isr);
                     ssMono += sw; ssL += sw * ssPanL[u]; ssR += sw * ssPanR[u];
@@ -770,7 +770,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             srcVals[5] = ssMono;
 
             // Osc 1 (with the legacy Osc2 -> Osc1 FM)
-            fr = ! AR ? (double) (f1.v + legacyFm.v * o2 + fmIn (0))
+            fr = ! ARType::value ? (double) (f1.v + legacyFm.v * o2 + fmIn (0))
                           : f1.v * pm (AD_P1) + std::max (0.0f, legacyFm.v + ad[AD_LegFm]) * o2 + fmIn (0);
             const float o1 = bank.sample (wave1, ph1, (float) std::abs (fr) * fisr);
             ph1 = wrap01 (ph1 + fr * isr); srcVals[0] = o1;
@@ -816,7 +816,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 else rR += yl;
             }
 
-            const float rmix = ! AR ? ringMix.v : clampv (ringMix.v + ad[AD_Ring], 0.0f, 1.0f);
+            const float rmix = ! ARType::value ? ringMix.v : clampv (ringMix.v + ad[AD_Ring], 0.0f, 1.0f);
             const float xL = mL * dry.v + rL * rmix;
             const float xR = mR * dry.v + rR * rmix;
             const float yL = filter.process (xL, 0, drive);

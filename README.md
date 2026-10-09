@@ -8,7 +8,7 @@ The DSP follows the browser version closely: same oscillator shapes, the same We
 
 Every push builds the plugin on GitHub's Mac machines.
 
-- **Releases** (tagged versions): the **Releases** section on the right of the repo page. Download `MegaSynth-macOS.zip`.
+- **Releases**: every successful build on `main` is published to the **Releases** section on the right of the repo page. Download `MegaSynth-macOS.zip` from the newest one.
 - **Latest build**: **Actions** tab → newest "Build plugin" run → `MegaSynth-macOS` under *Artifacts* (you need to be signed in to GitHub).
 
 The Mac build is a universal binary (Apple Silicon and Intel) with VST3, AU and a standalone app. Installation steps are in [INSTALL-mac.txt](INSTALL-mac.txt) and inside the zip. The short version:

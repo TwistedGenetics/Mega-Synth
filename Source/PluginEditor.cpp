@@ -1750,7 +1750,7 @@ void MegaSynthEditor::buildPages()
 
     // ---------------------------------------------------------------- Master Mutate
     {
-        auto* page = addPage ("Mutate");
+        auto* page = addPage ("Mutate / Lab");
         auto* ms = sec (page, "Master Mutate  (seeded variations on top of your patch; the knobs don't move until you Commit)", col::complex);
         auto* big = page->own (new Knob (proc, P_mutAmount, "Mutate", col::complex));
         mutSeedLabel.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
@@ -1794,8 +1794,104 @@ void MegaSynthEditor::buildPages()
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.5f)));
         help->setJustificationType (juce::Justification::topLeft);
-        page->onResize = [this, page, ms, big, lockTitle, help]
+        // ---- Genetic Lab
+        auto* lb = sec (page, "Genetic Lab  (two parents, eight children; each child takes whole groups from one parent or the other)", col::wavetable);
+        for (int k = 0; k < 2; ++k)
         {
+            labParent[k].setColour (juce::Label::textColourId, col::text);
+            labParent[k].setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+            labUse[k].setButtonText (k == 0 ? "Current sound > A" : "Current sound > B");
+            labUse[k].setTooltip ("Make the sound you're hearing now parent " + juce::String (k == 0 ? "A" : "B"));
+            labUse[k].onClick = [this, k] { proc.labSetParent (k); updateLab(); };
+        }
+        labBreedBtn.onClick = [this]
+        {
+            const int b = proc.labBreed();
+            if (b < 0) { setStatus ("Choose parent A and parent B first"); return; }
+            labGen = b;
+            setStatus ("Bred generation " + juce::String (proc.lab.find (proc.lab.broods[(size_t) b].children[0])->generation) + " - click a child to hear it");
+            updateLab();
+        };
+        labVar.setSliderStyle (juce::Slider::LinearBar);
+        labVar.setRange (0.0, 0.5, 0.01);
+        labVar.setColour (juce::Slider::trackColourId, col::wavetable.withAlpha (0.45f));
+        labVar.setColour (juce::Slider::backgroundColourId, col::panel3);
+        labVar.setColour (juce::Slider::textBoxTextColourId, col::text);
+        labVar.textFromValueFunction = [] (double v) { return "Variation " + juce::String (juce::roundToInt (v * 100)) + "%"; };
+        labVar.setValue (proc.labVariation, juce::dontSendNotification);
+        labVar.onValueChange = [this] { proc.labVariation = (float) labVar.getValue(); };
+        labVar.setTooltip ("A light mutation on top of each child (0 = pure combinations of the parents)");
+        labGenPrev.onClick = [this] { if (labGen > 0) { --labGen; updateLab(); } };
+        labGenNext.onClick = [this] { if (labGen + 1 < (int) proc.lab.broods.size()) { ++labGen; updateLab(); } };
+        for (int k = 0; k < 8; ++k)
+        {
+            labChild[k].setButtonText ("Child " + juce::String (k + 1));
+            labChild[k].onClick = [this, k]
+            {
+                if (labGen < 0 || labGen >= (int) proc.lab.broods.size()) return;
+                proc.labAudition (proc.lab.broods[(size_t) labGen].children[(size_t) k]);
+                updateLab();
+            };
+        }
+        auto toParent = [this] (int which)
+        {
+            if (proc.lab.find (proc.lab.current) == nullptr) { setStatus ("Click a child first"); return; }
+            proc.labSetParentFromId (which, proc.lab.current);
+            updateLab();
+        };
+        labToA.onClick = [toParent] { toParent (0); };
+        labToB.onClick = [toParent] { toParent (1); };
+        labSave.onClick = [this]
+        {
+            const auto* c = proc.lab.find (proc.lab.current);
+            const juce::String name = c != nullptr ? c->name.replace ("/", "-") : proc.getPatchName();
+            chooser = std::make_unique<juce::FileChooser> ("Save child", MegaSynthProcessor::getPatchFolder().getChildFile (juce::File::createLegalFileName (name) + ".megasynth"), "*.megasynth");
+            chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+                                  [this] (const juce::FileChooser& fc)
+                                  {
+                                      auto f = fc.getResult();
+                                      if (f == juce::File()) return;
+                                      setStatus (proc.savePatchToFile (f.withFileExtension (".megasynth")) ? "Saved " + f.getFileNameWithoutExtension() : "Couldn't save there");
+                                      refreshPatchList();
+                                  });
+        };
+        labGenLabel.setColour (juce::Label::textColourId, col::text);
+        labGenLabel.setJustificationType (juce::Justification::centred);
+        labLine.setColour (juce::Label::textColourId, col::muted);
+        labLine.setFont (juce::Font (juce::FontOptions (12.0f)));
+        labLine.setJustificationType (juce::Justification::topLeft);
+        labLine.setMinimumHorizontalScale (1.0f);
+        for (juce::Component* c : { (juce::Component*) &labParent[0], (juce::Component*) &labParent[1], (juce::Component*) &labUse[0], (juce::Component*) &labUse[1],
+                                    (juce::Component*) &labBreedBtn, (juce::Component*) &labVar, (juce::Component*) &labGenPrev, (juce::Component*) &labGenNext,
+                                    (juce::Component*) &labGenLabel, (juce::Component*) &labToA, (juce::Component*) &labToB, (juce::Component*) &labSave,
+                                    (juce::Component*) &labLine })
+            page->addAndMakeVisible (c);
+        for (auto& b : labChild) page->addAndMakeVisible (b);
+        labGen = (int) proc.lab.broods.size() - 1;
+        updateLab();
+
+        page->onResize = [this, page, ms, big, lockTitle, help, lb]
+        {
+            {
+                const int g = 10, W = page->getWidth();
+                lb->setBounds (g, 300, W - 2 * g, 296);
+                for (int k = 0; k < 2; ++k)
+                {
+                    labUse[k].setBounds (g + 14 + k * 580, 334, 160, 28);
+                    labParent[k].setBounds (g + 184 + k * 580, 334, 390, 28);
+                }
+                labBreedBtn.setBounds (g + 14, 374, 160, 32);
+                labVar.setBounds (g + 184, 378, 180, 24);
+                labGenPrev.setBounds (g + 400, 376, 36, 28);
+                labGenLabel.setBounds (g + 440, 376, 300, 28);
+                labGenNext.setBounds (g + 744, 376, 36, 28);
+                const int cw = (W - 2 * g - 28 - 7 * 8) / 8;
+                for (int k = 0; k < 8; ++k) labChild[k].setBounds (g + 14 + k * (cw + 8), 418, cw, 40);
+                labToA.setBounds (g + 14, 470, 150, 28);
+                labToB.setBounds (g + 172, 470, 150, 28);
+                labSave.setBounds (g + 330, 470, 180, 28);
+                labLine.setBounds (g + 14, 508, W - 2 * g - 28, 80);
+            }
             const int g = 10, W = page->getWidth();
             ms->setBounds (g, g, W - 2 * g, 280);
             big->setBounds (g + 20, 44, 140, 150);
@@ -1952,6 +2048,55 @@ void MegaSynthEditor::updateCaptureInfo()
     capInfo.setText (t, juce::dontSendNotification);
 }
 
+void MegaSynthEditor::updateLab()
+{
+    auto& lab = proc.lab;
+    if (labGen >= (int) lab.broods.size()) labGen = (int) lab.broods.size() - 1;
+    if (labGen < 0 && ! lab.broods.empty()) labGen = (int) lab.broods.size() - 1;
+    // only touch the components when something changed
+    juce::String key = lab.parentA + lab.parentB + lab.current + juce::String (labGen) + juce::String ((int) lab.broods.size()) + juce::String ((int) lab.archive.size());
+    if (key == labShownState) return;
+    labShownState = key;
+    for (int k = 0; k < 2; ++k)
+    {
+        const auto* p = lab.find (k == 0 ? lab.parentA : lab.parentB);
+        labParent[k].setText (juce::String (k == 0 ? "A: " : "B: ") + (p != nullptr ? p->name : juce::String ("(not set)")), juce::dontSendNotification);
+    }
+    const bool hasGen = labGen >= 0 && labGen < (int) lab.broods.size();
+    if (hasGen)
+    {
+        const auto& b = lab.broods[(size_t) labGen];
+        const auto* c0 = lab.find (b.children.empty() ? juce::String() : b.children[0]);
+        const auto* pa = lab.find (b.parentA); const auto* pb = lab.find (b.parentB);
+        labGenLabel.setText ("Generation " + juce::String (c0 != nullptr ? c0->generation : 0) + ":  " + (pa ? pa->name : juce::String ("?")) + "  x  " + (pb ? pb->name : juce::String ("?")),
+                             juce::dontSendNotification);
+    }
+    else labGenLabel.setText ("No children yet", juce::dontSendNotification);
+    for (int k = 0; k < 8; ++k)
+    {
+        const bool ok = hasGen && k < (int) lab.broods[(size_t) labGen].children.size();
+        labChild[k].setEnabled (ok);
+        const bool isCur = ok && lab.broods[(size_t) labGen].children[(size_t) k] == lab.current;
+        labChild[k].setColour (juce::TextButton::buttonColourId, isCur ? col::wavetable.withAlpha (0.55f) : col::panel3);
+        if (ok)
+        {
+            const auto* c = lab.find (lab.broods[(size_t) labGen].children[(size_t) k]);
+            juce::String tip = "From B: ";
+            juce::StringArray fromB;
+            for (int g = 0; g < ML_COUNT; ++g) if (c != nullptr && ((c->fromB >> g) & 1u)) fromB.add (kMutLockNames[g]);
+            labChild[k].setTooltip (c != nullptr ? c->name + "\n" + tip + fromB.joinIntoString (", ") + "\nEverything else from A" : juce::String());
+        }
+    }
+    labGenPrev.setEnabled (labGen > 0);
+    labGenNext.setEnabled (labGen + 1 < (int) lab.broods.size());
+    labLine.setText (lab.find (lab.current) != nullptr ? "Now playing: " + lab.lineage (lab.current, 4)
+                                                      : juce::String ("Make two sounds the parents (load or build a patch, then 'Current sound > A', then the other > B), "
+                                                                      "press Breed and click the children. A child you like can become a parent; "
+                                                                      "< and > step back and forward through the generations. The family tree is saved with the project, "
+                                                                      "and a patch saved from the lab records its lineage."),
+                     juce::dontSendNotification);
+}
+
 void MegaSynthEditor::updateSceneButtons()
 {
     const bool morph = proc.param (P_sceneMorph)->getValue() > 0.5f;
@@ -2054,6 +2199,7 @@ void MegaSynthEditor::timerCallback()
             dnaInfo->setText (info[juce::jlimit (0, 6, mode)], juce::dontSendNotification);
         }
     }
+    if (labLine.isShowing()) updateLab();
     if (mutSeedLabel.isShowing())
     {
         const int seed = juce::roundToInt (proc.param (P_mutSeed)->convertFrom0to1 (proc.param (P_mutSeed)->getValue()));

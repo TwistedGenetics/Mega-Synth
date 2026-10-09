@@ -331,6 +331,15 @@ private:
     juce::OwnedArray<juce::ToggleButton> mutLocks;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> mutLockAtts;
     int lastSeedShown = -1, lastHistCount = -1;
+    // Genetic Lab
+    juce::Label labParent[2], labGenLabel, labLine;
+    juce::TextButton labUse[2], labBreedBtn { "Breed 8 children" }, labGenPrev { "<" }, labGenNext { ">" },
+                     labToA { "Child > Parent A" }, labToB { "Child > Parent B" }, labSave { "Save child as patch..." };
+    juce::TextButton labChild[8];
+    juce::Slider labVar;
+    int labGen = -1;
+    juce::String labShownState;
+    void updateLab();
     tgui::CaptureView* capView = nullptr;
     juce::TextButton capRecord { "Record" }, capSave { "Save WAV..." };
     juce::OwnedArray<juce::TextButton> capSends;

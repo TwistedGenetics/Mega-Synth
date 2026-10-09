@@ -1,5 +1,6 @@
 // Offline test: renders the synth without a host and checks the output is sane.
 #include <JuceHeader.h>
+#include <set>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "ParamFormat.h"
@@ -1198,6 +1199,77 @@ int main()
                     render (*p, 0.8, note (57, 1.0f), &hard);
                     CHECK (maxDiff (soft, hard) > 0.01f, "velocity-modulated mutation");
                 }
+            }
+
+            // ---- Stage 14: Genetic Lab
+            {
+                std::cout << "Genetic Lab" << std::endl;
+                auto p = clean();
+                p->setPatchName ("Parent A");
+                p->labSetParent (0);
+                // a very different parent B: every group changed
+                setP (*p, P_osc1Wave, 1.0f); setP (*p, P_osc1Detune, 12.0f); setP (*p, P_osc2Gain, 0.6f); setP (*p, P_filterMode, 12.0f);
+                setP (*p, P_filterCutoff, 700.0f); setP (*p, P_ampA, 0.3f); setP (*p, P_lfo1Rate, 9.0f); setP (*p, P_delayMix, 0.4f);
+                setP (*p, P_osc1Semi, 7.0f); setP (*p, P_osc4Position, 0.5f); setP (*p, P_dnaMix, 0.5f); setP (*p, P_wmMix, 0.6f);
+                setP (*p, P_resMix, 0.3f); setP (*p, P_grMix, 0.2f); setP (*p, P_fbGrSp, 0.3f);
+                route (*p, 0, MS_Lfo2, P_filterCutoff, 0.4f);
+                p->setPatchName ("Parent B");
+                p->labSetParent (1);
+                const auto* A = p->lab.find (p->lab.parentA);
+                const auto* B = p->lab.find (p->lab.parentB);
+                CHECK (A != nullptr && B != nullptr && A->routes != B->routes, "parents stored");
+                p->labVariation = 0.0f;
+                const int brood = p->labBreed();
+                CHECK (brood == 0 && (int) p->lab.broods[0].children.size() == 8, "breed 8 children");
+                // every child takes each whole group from one parent (and everything outside the groups from A)
+                int wholeGroups = 0, violations = 0, fromBoth = 0;
+                std::set<uint32_t> masks;
+                for (auto& id : p->lab.broods[0].children)
+                {
+                    const auto* c = p->lab.find (id);
+                    A = p->lab.find (p->lab.parentA); B = p->lab.find (p->lab.parentB);
+                    bool usesA = false, usesB = false;
+                    for (int g = 0; g < ML_COUNT; ++g)
+                    {
+                        const bool b = (c->fromB >> g) & 1u;
+                        for (int i = 0; i < P_COUNT; ++i)
+                        {
+                            if (geneGroupOf (i) != g) continue;
+                            if (c->values[(size_t) i] != (b ? B : A)->values[(size_t) i]) ++violations;
+                        }
+                        (b ? usesB : usesA) = true;
+                        ++wholeGroups;
+                    }
+                    for (int i = 0; i < P_COUNT; ++i) if (geneGroupOf (i) < 0 && c->values[(size_t) i] != A->values[(size_t) i]) ++violations;
+                    if (c->routes != (((c->fromB >> ML_Mod) & 1u) ? B : A)->routes) ++violations;
+                    fromBoth += usesA && usesB;
+                    masks.insert (c->fromB);
+                }
+                std::cout << "  8 children x 13 groups: " << violations << " values not from that group's parent, " << fromBoth << "/8 mix both parents, "
+                          << masks.size() << " different combinations" << std::endl;
+                CHECK (violations == 0 && fromBoth == 8 && masks.size() >= 6, "children take whole groups from a parent");
+
+                // audition a child, make it a parent, breed again: generation 2, and the tree leads back
+                const auto child = p->lab.broods[0].children[3];
+                p->labAudition (child);
+                CHECK (std::abs (p->param (P_filterCutoff)->convertFrom0to1 (p->param (P_filterCutoff)->getValue()) - p->lab.find (child)->values[P_filterCutoff]) < 1.0f, "audition loads the child");
+                juce::AudioBuffer<float> x;
+                CHECK (render (*p, 1.0, chord (0.0, 0.8, { 48, 55, 60 }), &x).finite, "child plays");
+                p->labSetParent (0);
+                CHECK (p->lab.parentA == child, "the auditioned child becomes parent A (same id)");
+                p->labVariation = 0.1f;
+                const int brood2 = p->labBreed();
+                const auto* g2 = p->lab.find (p->lab.broods[(size_t) brood2].children[0]);
+                const auto line = p->lab.lineage (g2->id, 3);
+                std::cout << "  generation " << g2->generation << " lineage: " << line << std::endl;
+                CHECK (g2->generation == 2 && line.contains ("Gen 1 / 4") && line.contains ("Parent A") && line.contains ("Parent B"), "ancestry");
+                const auto* par = p->lab.find (g2->parentA);
+                CHECK (par != nullptr && p->lab.find (par->parentA) != nullptr && p->lab.find (par->parentA)->name == "Parent A", "walk back through generations");
+                // the lab survives saving and reloading
+                juce::MemoryBlock st; p->getStateInformation (st);
+                auto q = make(); q->setStateInformation (st.getData(), (int) st.getSize());
+                CHECK (q->lab.archive.size() == p->lab.archive.size() && q->lab.broods.size() == 2 && q->lab.find (g2->id) != nullptr
+                       && q->lab.find (g2->id)->values[P_filterCutoff] == g2->values[P_filterCutoff], "lab state round trip");
             }
 
             // everything at maximum stays finite and bounded

@@ -555,6 +555,8 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("macroNames", macroNamesJoined(), nullptr);
     state.setProperty ("capture", juce::JSON::toString (captureToVar(), true), nullptr);
     state.setProperty ("mutHistory", getMutationHistory().joinIntoString ("|"), nullptr);
+    state.setProperty ("lab", juce::JSON::toString (lab.toVar(), true), nullptr);
+    state.setProperty ("labVariation", labVariation, nullptr);
     state.setProperty ("patchName", getPatchName(), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
@@ -588,6 +590,12 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     sceneEditIndex = juce::jlimit (0, 3, (int) tree.getProperty ("sceneEdit", 0));
     setMacroNamesJoined (tree.getProperty ("macroNames").toString());
     captureFromVar (juce::JSON::parse (tree.getProperty ("capture").toString()));
+    {
+        std::vector<float> defs ((size_t) P_COUNT);
+        for (int i = 0; i < P_COUNT; ++i) defs[(size_t) i] = tg::meta (i).def;
+        lab.fromVar (juce::JSON::parse (tree.getProperty ("lab").toString()), defs);
+        labVariation = (float) (double) tree.getProperty ("labVariation", 0.1);
+    }
     { const juce::ScopedLock sl (nameLock); mutHistory.clear(); mutHistory.addTokens (tree.getProperty ("mutHistory").toString(), "|", {}); mutHistory.removeEmptyStrings(); }
     lastMorph = raw[P_sceneMorph]->load() > 0.5f;
 
@@ -646,6 +654,7 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
     root->setProperty ("scenes", scenes.toVar());
     root->setProperty ("sceneEdit", getEditScene());
     root->setProperty ("capture", captureToVar());
+    if (lab.find (lab.current) != nullptr) root->setProperty ("lineage", lab.lineage (lab.current, 6));   // the patch's family tree, for reference
     {
         juce::Array<juce::var> mh;
         for (auto& h : getMutationHistory()) mh.add (h);
@@ -1069,6 +1078,61 @@ void MegaSynthProcessor::syncSceneEdits()
         const float plain = raw[(size_t) i]->load();
         if (std::abs (normFast (nt, i, plain) - scenes.v[k][i].load()) > 1.0e-6f) scenes.storeOne (k, i, plain);
     }
+}
+
+//==============================================================================
+tg::LabPatch MegaSynthProcessor::currentAsLabPatch (const juce::String& name)
+{
+    tg::LabPatch p;
+    p.name = name;
+    p.values.resize (P_COUNT);
+    for (int i = 0; i < P_COUNT; ++i) p.values[(size_t) i] = raw[(size_t) i]->load();
+    p.routes = routes.toVar();
+    return p;
+}
+
+void MegaSynthProcessor::labSetParent (int which)
+{
+    // if the panel is showing a lab patch, that one becomes the parent (keeping its family tree)
+    juce::String id;
+    if (const auto* cur = lab.find (lab.current))
+    {
+        bool same = true;
+        for (int i = 0; i < P_COUNT && same; ++i)
+            if (tg::geneGroupOf (i) >= 0 && std::abs (cur->values[(size_t) i] - raw[(size_t) i]->load()) > 1.0e-4f * std::max (1.0f, std::abs (cur->values[(size_t) i]))) same = false;
+        if (same) id = cur->id;
+    }
+    if (id.isEmpty()) id = lab.add (currentAsLabPatch (getPatchName().isNotEmpty() ? getPatchName() : juce::String ("Patch")));
+    (which == 0 ? lab.parentA : lab.parentB) = id;
+}
+
+void MegaSynthProcessor::labSetParentFromId (int which, const juce::String& id)
+{
+    if (lab.find (id) != nullptr) (which == 0 ? lab.parentA : lab.parentB) = id;
+}
+
+int MegaSynthProcessor::labBreed()
+{
+    if (lab.find (lab.parentA) == nullptr || lab.find (lab.parentB) == nullptr) return -1;
+    return lab.breed (lab.parentA, lab.parentB, labVariation, (uint32_t) rng.nextInt());
+}
+
+void MegaSynthProcessor::labAudition (const juce::String& id)
+{
+    const auto* p = lab.find (id);
+    if (p == nullptr) return;
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        if (tg::geneGroupOf (i) < 0 || i >= (int) p->values.size()) continue;
+        auto* prm = params[(size_t) i];
+        const float nv = prm->convertTo0to1 (p->values[(size_t) i]);
+        if (std::abs (nv - prm->getValue()) < 1.0e-7f) continue;
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (nv); prm->endChangeGesture();
+    }
+    routes.fromVar (p->routes);
+    lab.current = id;
+    setPatchName (p->name);
+    pushHistory ("Lab: " + p->name);
 }
 
 //==============================================================================

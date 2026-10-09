@@ -4,6 +4,7 @@
 #include "Engine.h"
 #include "Sequencer.h"
 #include "Mut/Capture.h"
+#include "Lab/Breeder.h"
 
 class MegaSynthProcessor : public juce::AudioProcessor,
                            private juce::Timer,
@@ -80,6 +81,14 @@ public:
     void mutateStepSeed (int delta);         // previous / next seed
     void commitMutation();                   // bake the current mutation into the knobs; Mutate goes back to 0
     juce::StringArray getMutationHistory() const { const juce::ScopedLock sl (nameLock); return mutHistory; }
+    // ---- Genetic Lab (message thread)
+    tg::GeneticLab lab;
+    float labVariation = 0.1f;
+    void labSetParent (int which);                 // 0 = A, 1 = B: the current sound becomes that parent
+    void labSetParentFromId (int which, const juce::String& id);
+    int labBreed();                                // returns the brood index, or -1 (parents missing)
+    void labAudition (const juce::String& id);     // load a lab patch onto the panel
+    tg::LabPatch currentAsLabPatch (const juce::String& name);
     juce::String getMacroName (int k) const;
     void setMacroName (int k, const juce::String&);
 

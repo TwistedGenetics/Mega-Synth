@@ -19,6 +19,7 @@ inline const char* const kMutLockNames[ML_COUNT] = { "Pitch", "Oscillators", "Wa
 struct MutInfo
 {
     int lock = ML_None;       // ML_None = never mutated
+    int gene = ML_None;       // the group this parameter belongs to for breeding (any type, not only mutable ones)
     float depth = 0.35f;      // normalised offset at 100%
     enum Shape { Plain, Attack, Stable, Ratio, Semitone, Choice } shape = Plain;
     uint32_t hash = 0;        // from the parameter id, so adding parameters never changes existing mutations
@@ -26,6 +27,7 @@ struct MutInfo
 
 const MutInfo& mutInfo (int param);
 int mutLockOf (int param);
+int geneGroupOf (int param);   // ML_None: not inherited (sequencer, performance, macros, scenes, Mutate controls)
 
 // Per-seed directions, computed when the seed changes (cheap; safe on the audio thread).
 struct MutationTable

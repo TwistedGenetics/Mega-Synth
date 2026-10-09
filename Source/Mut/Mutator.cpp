@@ -33,9 +33,10 @@ namespace
             const bool mutable_ = (m.modulatable && m.scale != Scale::Choice && m.scale != Scale::Toggle) || waveChoice;
             const bool excluded = m.id.startsWith ("mut") || m.id.startsWith ("macro") || m.id == "sceneX" || m.id == "sceneY"
                                   || m.id == "masterVolume" || m.group == MutGroup::Rhythm || m.group == MutGroup::None;
-            if (! mutable_ || excluded) { out[(size_t) i] = inf; continue; }
+            juce::ignoreUnused (mutable_);
+            if (excluded || m.id == "sceneMorph" || m.id == "capPoint") { out[(size_t) i] = inf; continue; }
 
-            // lock group
+            // group
             if (m.module == "Feedback Matrix") inf.lock = ML_Feedback;
             else if (m.module == "Granular" || m.module == "Spectral") inf.lock = ML_Bus;
             else if (m.module == "Resonator") inf.lock = ML_Reso;
@@ -53,6 +54,8 @@ namespace
                 case MutGroup::Fx:          inf.lock = ML_Fx; break;
                 default:                    inf.lock = ML_None; break;
             }
+            inf.gene = inf.lock;
+            if (! mutable_) inf.lock = ML_None;   // in a group for breeding, but not mutated (switches, choices other than waveforms)
 
             // shape and depth
             if (waveChoice) inf.shape = MutInfo::Choice;
@@ -76,6 +79,7 @@ const MutInfo& mutInfo (int p)
 }
 
 int mutLockOf (int p) { return mutInfo (p).lock; }
+int geneGroupOf (int p) { return mutInfo (p).gene; }
 
 void MutationTable::build (uint32_t newSeed)
 {

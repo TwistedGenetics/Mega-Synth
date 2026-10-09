@@ -1,16 +1,24 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "ParamFormat.h"
+#include "Registry.h"
 
 using namespace tg;
 
 namespace
 {
     // Parameters that only exist in the plugin (not in the browser patch format's "params" block)
+    // Parameters added with the modulation matrix (v0.2): stored in the patch's "plugin" block
+    // and reset to their defaults when a patch without them is loaded.
+    bool isNewPluginParam (const juce::String& id)
+    {
+        return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"));
+    }
+
     bool isBrowserParam (const juce::String& id)
     {
         return ! (id == "velSens" || id == "bendRange" || id == "warmth" || id == "bassKeep" || id == "analogDrift" || id == "seqRun" || id == "seqClock"
-                  || id.startsWith ("lfoAssign") || id.startsWith ("envAssign"));
+                  || id.startsWith ("lfoAssign") || id.startsWith ("envAssign") || isNewPluginParam (id));
     }
 
     int findKey (const ChoiceList& list, const juce::String& v)
@@ -107,8 +115,10 @@ MegaSynthProcessor::MegaSynthProcessor()
     }
     formats.registerBasicFormats();
     WaveBank::get();   // build the oscillator tables up front
+    engine.setModulation (&routes, &modInputs);
     addListener (this);
     lastStepsVersion = steps.getVersion();
+    lastRoutesVersion = routes.getVersion();
     pushHistory ("Init");
     markOriginal();
     startTimerHz (20);
@@ -158,10 +168,14 @@ void MegaSynthProcessor::setParamFromAudio (int index, float plain)
 
 void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
 {
+    const int ch = juce::jlimit (1, 16, m.getChannel());
     if (m.isNoteOn())
     {
         Voice::StartOptions o;
         o.velocity = m.getFloatVelocity();
+        o.channel = ch;
+        o.note = m.getNoteNumber();
+        modInputs.polyAT[m.getNoteNumber() & 127] = 0.0f;
         engine.noteOn (m.getNoteNumber(), midiToFreq (m.getNoteNumber()), o, snap);
     }
     else if (m.isNoteOff())
@@ -172,12 +186,29 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
     {
         const int cc = m.getControllerNumber();
         const float v = m.getControllerValue() / 127.0f;
+        if (cc == juce::roundToInt (snap.f (P_ccANum))) modInputs.ccA = v;
+        if (cc == juce::roundToInt (snap.f (P_ccBNum))) modInputs.ccB = v;
+        if (cc == 74) modInputs.mpeSlide[ch - 1] = v;              // MPE slide (Y)
+        if (cc == 1) modInputs.wheel = v;
         if (cc == 1) setParamFromAudio (P_lfo1Depth, v);           // mod wheel -> LFO1 depth (as in the browser)
         else if (cc == 7) setParamFromAudio (P_masterVolume, v);   // volume -> master volume
         else if (cc == 120 || cc == 123) engine.allNotesOff();
     }
+    else if (m.isChannelPressure())
+    {
+        const float v = m.getChannelPressureValue() / 127.0f;
+        modInputs.aftertouch = v;
+        modInputs.mpePressure[ch - 1] = v;
+    }
+    else if (m.isAftertouch())
+    {
+        modInputs.polyAT[m.getNoteNumber() & 127] = m.getAfterTouchValue() / 127.0f;
+    }
     else if (m.isPitchWheel())
     {
+        const float b = (float) ((m.getPitchWheelValue() - 8192) / 8192.0);
+        modInputs.bend = b;
+        modInputs.mpeGlide[ch - 1] = b;
         bendSemis = (float) ((m.getPitchWheelValue() - 8192) / 8192.0) * snap.f (P_bendRange);
         snap.bendSemis = bendSemis;
     }
@@ -372,6 +403,8 @@ void MegaSynthProcessor::timerCallback()
     {
         const auto v = steps.getVersion();
         if (v != lastStepsVersion) { lastStepsVersion = v; snapshotPending = true; snapshotDelay = 0; }
+        const auto rv = routes.getVersion();
+        if (rv != lastRoutesVersion) { lastRoutesVersion = rv; snapshotPending = true; snapshotDelay = 0; }
         if (snapshotPending && ++snapshotDelay >= 6)
         {
             snapshotDelay = 0;
@@ -479,6 +512,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     auto state = apvts.copyState();
     state.setProperty ("stateVersion", kStateVersion, nullptr);
     state.setProperty ("seqSteps", steps.toString(), nullptr);
+    state.setProperty ("modRoutes", juce::JSON::toString (routes.toVar(), true), nullptr);
     state.setProperty ("patchName", getPatchName(), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
@@ -507,6 +541,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
     if (stepStr.isNotEmpty()) steps.fromString (stepStr);
+    routes.fromVar (juce::JSON::parse (tree.getProperty ("modRoutes").toString()));   // none in v1 state
 
     for (int k = 0; k < 2; ++k)
     {
@@ -555,8 +590,11 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
         auto* extra = new juce::DynamicObject();
         for (int i : { P_velSens, P_bendRange, P_warmth, P_bassKeep, P_analogDrift, P_seqClock })
             extra->setProperty (kParamIds[i], raw[(size_t) i]->load());
+        for (int i = 0; i < P_COUNT; ++i)
+            if (isNewPluginParam (kParamIds[i])) extra->setProperty (kParamIds[i], raw[(size_t) i]->load());
         root->setProperty ("plugin", juce::var (extra));
     }
+    root->setProperty ("modMatrix", routes.toVar());
 
     static const char* ties[] = { "normal", "tie", "slide", "rest" };
     juce::Array<juce::var> seq;
@@ -650,6 +688,17 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
             if (extra->hasProperty (kParamIds[i]))
                 setPlain (i, (float) (double) extra->getProperty (kParamIds[i]));
     }
+    // matrix settings: patches from before the matrix get it empty, so they sound as they did
+    {
+        auto* extra = patch["plugin"].getDynamicObject();
+        for (int i = 0; i < P_COUNT; ++i)
+        {
+            if (! isNewPluginParam (kParamIds[i])) continue;
+            if (extra != nullptr && extra->hasProperty (kParamIds[i])) setPlain (i, (float) (double) extra->getProperty (kParamIds[i]));
+            else setPlain (i, meta (i).def);
+        }
+        routes.fromVar (patch["modMatrix"]);
+    }
     {
         const juce::String n = patch["name"].toString();
         setPatchName (n.isNotEmpty() ? n : juce::String ("Imported patch"));
@@ -721,6 +770,7 @@ void MegaSynthProcessor::resetToDefaults()
     }
     tg::StepStore fresh;
     for (int i = 0; i < 32; ++i) steps.set (i, fresh.get (i));
+    routes.clearAll();
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
@@ -750,6 +800,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
     Snapshot s;
     s.params = apvts.copyState();
     s.steps = steps.toString();
+    s.routes = juce::JSON::toString (routes.toVar(), true);
     s.patchName = getPatchName();
     s.label = label;
     const juce::ScopedLock sl (waveLock);
@@ -759,7 +810,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
 
 bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
 {
-    return a.steps == b.steps && a.patchName == b.patchName
+    return a.steps == b.steps && a.routes == b.routes && a.patchName == b.patchName
         && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1]
         && a.params.isEquivalentTo (b.params);
 }
@@ -769,6 +820,8 @@ void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
     restoring = true;
     apvts.replaceState (s.params.createCopy());
     steps.fromString (s.steps);
+    routes.fromVar (juce::JSON::parse (s.routes));
+    lastRoutesVersion = routes.getVersion();
     setPatchName (s.patchName);
     for (int k = 0; k < 2; ++k)
     {
@@ -844,6 +897,30 @@ juce::String MegaSynthProcessor::loadPatchFromFile (const juce::File& f)
     pushHistory ("Load " + f.getFileNameWithoutExtension());
     markOriginal();
     return err;
+}
+
+int MegaSynthProcessor::addRoute (int src, int destParam, float depth)
+{
+    const int slot = routes.firstFree();
+    if (slot < 0) return -1;
+    RouteConfig c;
+    c.on = true; c.src = src; c.dst = destParam;
+    routes.set (slot, c);
+    auto* p = params[(size_t) (P_mod1Amt + slot)];
+    p->beginChangeGesture();
+    p->setValueNotifyingHost (p->convertTo0to1 (juce::jlimit (-1.0f, 1.0f, depth)));
+    p->endChangeGesture();
+    return slot;
+}
+
+void MegaSynthProcessor::clearRoute (int slot)
+{
+    if (slot < 0 || slot >= kNumRoutes) return;
+    routes.clear (slot);
+    auto* p = params[(size_t) (P_mod1Amt + slot)];
+    p->beginChangeGesture();
+    p->setValueNotifyingHost (p->convertTo0to1 (0.0f));
+    p->endChangeGesture();
 }
 
 juce::AudioProcessorEditor* MegaSynthProcessor::createEditor()

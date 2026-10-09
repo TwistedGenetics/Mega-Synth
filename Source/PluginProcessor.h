@@ -41,6 +41,11 @@ public:
     juce::MidiKeyboardState keyboardState;
     tg::StepStore steps;
     std::atomic<int> currentStep { -1 };
+    tg::RouteStore routes;                    // modulation matrix routes (amounts are the mod1Amt.. parameters)
+    const tg::Engine& getEngine() const { return engine; }
+    // Adds a route from src to dest in the first free slot with the given depth; returns the slot or -1.
+    int addRoute (int src, int destParam, float depth);
+    void clearRoute (int slot);
 
     // Sample slots: 0 = Osc 4 / WT 1, 1 = WT 2
     bool loadSampleFile (const juce::File&, int slot = 0);
@@ -86,7 +91,7 @@ private:
     struct Snapshot
     {
         juce::ValueTree params;
-        juce::String steps, patchName, label;
+        juce::String steps, patchName, label, routes;
         std::shared_ptr<const juce::MemoryBlock> wave[2];
         juce::String waveName[2];
     };
@@ -102,7 +107,8 @@ private:
     bool restoring = false;
     std::atomic<bool> snapshotPending { false };
     int snapshotDelay = 0;
-    uint32_t lastStepsVersion = 0;
+    uint32_t lastStepsVersion = 0, lastRoutesVersion = 0;
+    tg::GlobalModInputs modInputs;
     juce::CriticalSection historyLock;
 
     std::array<juce::RangedAudioParameter*, tg::P_COUNT> params {};

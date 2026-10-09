@@ -194,7 +194,18 @@ static float voiceRand01()
     return (voiceRandState & 0xFFFFFF) / 16777216.0f;
 }
 
-void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, const Snapshot& s, uint64_t ord)
+static inline float lfoShape (int wave, double cycle)
+{
+    switch (wave)
+    {
+        case 1:  return (float) (1.0 - 4.0 * std::abs (cycle - 0.5));   // triangle
+        case 2:  return (float) (cycle * 2.0 - 1.0);                    // sawtooth
+        case 3:  return cycle < 0.5 ? 1.0f : -1.0f;                     // square
+        default: return (float) std::sin (cycle * 2.0 * kPi);           // sine
+    }
+}
+
+void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, const Snapshot& s, uint64_t ord, const ModContext& mc)
 {
     key = k;
     order = ord;
@@ -207,10 +218,43 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     const float vs = s.f (P_velSens);
     velGain = 1.0f - vs + vs * clampv (o.velocity, 0.0f, 1.0f);
 
-    ampEnv.init (s.f (P_ampA), s.f (P_ampD), s.f (P_ampS), s.f (P_ampR));
-    filtEnv.init (s.f (P_fEnvA), s.f (P_fEnvD), s.f (P_fEnvS), s.f (P_fEnvR));
+    // ---- modulation sources: per-note state (seeded from the note, not from the shared
+    // random generator, so adding the matrix leaves the oscillators' random phases as they were)
+    velocity = clampv (o.velocity, 0.0f, 1.0f);
+    channel = clampv (o.channel, 1, 16);
+    midiNote = o.note >= 0 ? o.note : clampv ((int) std::lround (69.0 + 12.0 * std::log2 (std::max (1.0, freq) / 440.0)), 0, 127);
+    rng = (uint32_t) (ord * 2654435761u) ^ (uint32_t) (k * 40503u) ^ 0x5bd1e995u;
+    if (rng == 0) rng = 1;
+    randNote = nextRand();
+    rndA = nextRand(); rndB = nextRand(); drA = nextRand(); drB = nextRand();
+    shVal = 0.0f; chaosX = 0.3f + 0.4f * (0.5f + 0.5f * nextRand());
+    rndPh = driftPh2 = 0.0;
+    envF = audF = trFast = trSlow = 0.0f;
+    for (auto& a : aPrev) a = 0.0f;
+    for (int i = 0; i < 4; ++i) { lfoPh[i] = 0.0; lfoDepthNow[i] = s.f (P_lfo1Depth + 3 * i); }
+    rstate.reset();
+    lastDt = 0.0f;
+    std::fill (std::begin (srcV), std::end (srcV), 0.0f);
+
+    // Envelope times are read once, at note-on: routes onto them use the note-on source values
+    // (velocity, note, random per note, wheel...), so "velocity -> attack" works as expected.
+    const float* envV = s.v;
+    if (mc.any() && mc.routes->anyEnvTime)
+    {
+        t = 0.0; released = false;
+        ampEnv.init (s.f (P_ampA), s.f (P_ampD), s.f (P_ampS), s.f (P_ampR));
+        filtEnv = ampEnv;
+        for (auto& e : modEnv) e = ampEnv;
+        computeSources (s, mc.in, 0.0f);
+        modSnap = s;
+        RouteState tmp;
+        applyRoutes (*mc.routes, s.v, modSnap.v, srcV, tmp, 0.0f, RF_EnvTime);
+        envV = modSnap.v;
+    }
+    ampEnv.init (envV[P_ampA], envV[P_ampD], envV[P_ampS], envV[P_ampR]);
+    filtEnv.init (envV[P_fEnvA], envV[P_fEnvD], envV[P_fEnvS], envV[P_fEnvR]);
     for (int e = 0; e < 3; ++e)
-        modEnv[e].init (s.f (P_mEnv1A + 4 * e), s.f (P_mEnv1D + 4 * e), s.f (P_mEnv1S + 4 * e), s.f (P_mEnv1R + 4 * e));
+        modEnv[e].init (envV[P_mEnv1A + 4 * e], envV[P_mEnv1D + 4 * e], envV[P_mEnv1S + 4 * e], envV[P_mEnv1R + 4 * e]);
 
     filter.configure (s.i (P_filterMode));
     for (auto& r : ringSlots) { r.hp.reset(); r.lp.reset(); }
@@ -255,17 +299,8 @@ void Voice::computeMod (const Snapshot& s, ModState& mod) const
         if (tgt <= MT_none || tgt >= MT_COUNT) continue;
         const int src = clampv (s.i (P_lfoAssignSource0 + 3 * k), 0, 2);
         const int wave = s.i (P_lfo1Wave + 3 * src);
-        const double rate = s.f (P_lfo1Rate + 3 * src);
         const float depth = s.f (P_lfo1Depth + 3 * src);
-        const double cycle = wrap01 (t * rate);
-        float raw;
-        switch (wave)
-        {
-            case 1:  raw = (float) (1.0 - 4.0 * std::abs (cycle - 0.5)); break;   // triangle
-            case 2:  raw = (float) (cycle * 2.0 - 1.0); break;                    // sawtooth
-            case 3:  raw = cycle < 0.5 ? 1.0f : -1.0f; break;                     // square
-            default: raw = (float) std::sin (cycle * 2.0 * kPi); break;           // sine
-        }
+        const float raw = lfoShape (wave, lfoPh[src]);   // phase advances at the (possibly modulated) rate
         mod.m[tgt] += raw * depth * s.f (P_lfoAssignAmt0 + 3 * k) * kTargetRange[tgt];
     }
     for (int k = 0; k < 3; ++k)
@@ -275,6 +310,69 @@ void Voice::computeMod (const Snapshot& s, ModState& mod) const
         const int src = clampv (s.i (P_envAssignSource0 + 3 * k), 0, 2);
         const float level = (float) modEnv[src].eval (t);
         mod.m[tgt] += level * s.f (P_envAssignAmt0 + 3 * k) * kTargetRange[tgt];
+    }
+}
+
+void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float dt)
+{
+    float* v = srcV;
+    for (int k = 0; k < 4; ++k)
+        v[MS_Lfo1 + k] = lfoShape (clampv (s.i (P_lfo1Wave + 3 * k), 0, 3), lfoPh[k]) * lfoDepthNow[k];
+    v[MS_AmpEnv]    = (float) ampEnv.eval (t);
+    v[MS_FilterEnv] = (float) filtEnv.eval (t);
+    for (int e = 0; e < 3; ++e) v[MS_ModEnv1 + e] = (float) modEnv[e].eval (t);
+    v[MS_Velocity] = velocity;
+    v[MS_Note]     = clampv ((midiNote - 60) / 60.0f, -1.0f, 1.0f);
+    v[MS_KeyTrack] = midiNote / 127.0f;
+    if (in != nullptr)
+    {
+        const int ch = channel - 1;
+        v[MS_Aftertouch]  = in->aftertouch;
+        v[MS_PolyAT]      = in->polyAT[midiNote & 127];
+        v[MS_ModWheel]    = in->wheel;
+        v[MS_PitchBend]   = in->bend;
+        v[MS_CcA]         = in->ccA;
+        v[MS_CcB]         = in->ccB;
+        v[MS_MpePressure] = in->mpePressure[ch];
+        v[MS_MpeSlide]    = in->mpeSlide[ch];
+        v[MS_MpeGlide]    = in->mpeGlide[ch];
+    }
+    v[MS_RandNote] = randNote;
+
+    // random clock (Random Rate): smooth random, stepped random, sample & hold of LFO 1, chaos
+    rndPh += (double) clampv (s.f (P_randRate), 0.01f, 50.0f) * dt;
+    while (rndPh >= 1.0)
+    {
+        rndPh -= 1.0;
+        rndA = rndB; rndB = nextRand();
+        shVal = v[MS_Lfo1];
+        chaosX = 3.91f * chaosX * (1.0f - chaosX);
+        if (! (chaosX > 0.001f && chaosX < 0.999f)) chaosX = 0.37f;
+    }
+    v[MS_RandSmooth] = rndA + (rndB - rndA) * (float) (0.5 - 0.5 * std::cos (kPi * rndPh));
+    v[MS_RandStep]   = rndB;
+    v[MS_SampleHold] = shVal;
+    v[MS_Chaos]      = 2.0f * chaosX - 1.0f;
+    // slow analog-style wander, about one new point every 6 seconds
+    driftPh2 += 0.16 * dt;
+    while (driftPh2 >= 1.0) { driftPh2 -= 1.0; drA = drB; drB = nextRand(); }
+    v[MS_Drift] = drA + (drB - drA) * (float) (0.5 - 0.5 * std::cos (kPi * driftPh2));
+
+    v[MS_Gate]    = released ? 0.0f : 1.0f;
+    v[MS_NoteOn]  = (float) std::exp (-t / 0.08);
+    v[MS_NoteOff] = released && ampEnv.releaseTime >= 0.0 ? (float) std::exp (-(t - ampEnv.releaseTime) / 0.08) : 0.0f;
+    v[MS_EnvFollow]   = clampv (envF * 2.0f, 0.0f, 1.0f);
+    v[MS_AudioFollow] = clampv (audF * 2.0f, 0.0f, 1.0f);
+    v[MS_TransFollow] = clampv ((trFast - trSlow) * 6.0f, 0.0f, 1.0f);
+}
+
+void Voice::advanceLfos (const Snapshot& s, int n)
+{
+    const double secs = n / sr;
+    for (int k = 0; k < 4; ++k)
+    {
+        lfoPh[k] = wrap01 (lfoPh[k] + s.f (P_lfo1Rate + 3 * k) * secs);
+        lfoDepthNow[k] = s.f (P_lfo1Depth + 3 * k);
     }
 }
 
@@ -295,7 +393,7 @@ void Voice::updateWt (int slot, const Snapshot& s, const ModState& mod, double b
     if (! w.loaded) return;
 
     const double det = clampv (s.f (P.det) + mod[P.mDet], -50.0f, 50.0f);
-    const double f = baseFreq * pow2 (std::round (s.f (P.oct))) * pow2 ((100.0 * std::round (s.f (P.semi)) + det + bendC) / 1200.0);
+    const double f = baseFreq * pow2 (std::round (s.f (P.oct))) * pow2 ((100.0 * s.f (P.semi) + det + bendC) / 1200.0);
     const double root = midiToFreq (std::round (s.f (P.root)));
     w.rate.target = (float) clampv (f / std::max (10.0, root), 0.01, 16.0);
     w.rate.step (cPort);
@@ -345,7 +443,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
         driftPh[k] = wrap01 (driftPh[k] + driftRate[k] * dtc);
         driftCents[k] = driftAmt * 6.0f * (float) (0.65 * std::sin (2.0 * kPi * driftPh[k]) + 0.35 * std::sin (2.0 * kPi * (2.37 * driftPh[k] + 0.3 * k)));
     }
-    auto semi = [&] (int p) { return 100.0 * std::round (s.f (p)); };
+    auto semi = [&] (int p) { return 100.0 * s.f (p); };   // whole semitones unless the matrix sweeps them
     f1.target = (float) oscF (P_osc1Oct, semi (P_osc1Semi) + s.f (P_osc1Detune) + pitch + driftCents[0]);
     f2.target = (float) oscF (P_osc2Oct, semi (P_osc2Semi) + s.f (P_osc2Detune) + pitch + driftCents[1]);
     f3.target = (float) oscF (P_osc3Oct, semi (P_osc3Semi) + s.f (P_osc3Detune) + pitch + driftCents[2]);
@@ -479,38 +577,77 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     }
 }
 
-void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const WaveSample* const* wavs, ModState& modOut)
+void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const WaveSample* const* wavs, ModState& modOut,
+                    const ModContext& mc, float* liveOut)
 {
     const WaveBank& bank = WaveBank::get();
     const double isr = 1.0 / sr;
     const float fisr = (float) isr;
+    const bool routed = mc.any();
+    const bool follow = routed && mc.routes->anyFollow;
 
     int done = 0;
     while (done < numSamples && active)
     {
         const int n = std::min (kCtrl, numSamples - done);
+
+        // ---- modulation matrix: sources, then a per-voice copy of the parameters with the
+        // routes applied. Everything below reads that copy, so every registered parameter is
+        // a destination without the oscillators, filter or effects knowing about the matrix.
+        const Snapshot* sp = &s;
+        if (routed)
+        {
+            computeSources (s, mc.in, lastDt);
+            modSnap = s;
+            applyRoutes (*mc.routes, s.v, modSnap.v, srcV, rstate, lastDt, RF_All, liveOut);
+            sp = &modSnap;
+        }
+        const Snapshot& ps = *sp;
+        lastDt = (float) (n * isr);
+
         ModState mod;
-        computeMod (s, mod);
-        updateControl (s, wavs, mod, false);
+        computeMod (ps, mod);
+        updateControl (ps, wavs, mod, false);
         modOut = mod;
 
+        // ---- audio-rate routes: an oscillator's raw output driving a destination per sample
+        struct ARoute { int ad, src, curve; float k; bool uni; };
+        ARoute ar[kNumRoutes]; int nar = 0;
+        bool arCut = false, arFmSlot = false;
+        if (routed && mc.routes->anyAudio)
+        {
+            for (int i = 0; i < mc.routes->n; ++i)
+            {
+                const ResolvedRoute& r = mc.routes->r[i];
+                if (! r.audio) continue;
+                float scale = 1.0f;
+                const int ad = audioDestFor (r.dst, scale);
+                if (ad < 0) continue;
+                float k = ps.v[P_mod1Amt + r.slot] * scale;
+                if (r.via != MS_None)
+                {
+                    float vv = srcV[r.via];
+                    if (kModSrcBipolar[r.via]) vv = 0.5f * (vv + 1.0f);
+                    k *= 1.0f - r.viaDepth + r.viaDepth * vv;
+                }
+                if (std::abs (k) < 1.0e-9f) continue;
+                ar[nar++] = { ad, r.src - MS_Osc1Audio, r.curve, k, r.unipolar };
+                arCut |= ad == AD_Cut || ad == AD_Res;
+                arFmSlot |= ad >= AD_Fm1 && ad <= AD_Fm4;
+            }
+        }
+        float ad[AD_COUNT];
+
         // gather FM routes per destination
-        float fmA[6][4]; int fmS[6][4]; int fmN[6] = { 0, 0, 0, 0, 0, 0 };
+        float fmA[6][4]; int fmS[6][4]; int fmK[6][4]; int fmN[6] = { 0, 0, 0, 0, 0, 0 };
         for (int k = 0; k < 4; ++k)
         {
             const FmSlot& f = fmSlots[k];
             if (! f.on) continue;
             const float a = fmAmt[k].v * f.scale;
-            if (std::abs (a) < 1.0e-9f) continue;
-            fmA[f.dst][fmN[f.dst]] = a; fmS[f.dst][fmN[f.dst]] = f.src; ++fmN[f.dst];
+            if (std::abs (a) < 1.0e-9f && ! arFmSlot) continue;
+            fmA[f.dst][fmN[f.dst]] = a; fmS[f.dst][fmN[f.dst]] = f.src; fmK[f.dst][fmN[f.dst]] = k; ++fmN[f.dst];
         }
-        auto fmIn = [&] (int d)
-        {
-            float a = 0.0f;
-            for (int k = 0; k < fmN[d]; ++k) a += fmA[d][k] * srcVals[fmS[d][k]];
-            return a;
-        };
-
         // which units are needed this block
         bool usedAsSource[6] = { false, false, false, false, false, false };
         for (int k = 0; k < 6; ++k) if (fmN[k] > 0) for (int j = 0; j < fmN[k]; ++j) usedAsSource[fmS[k][j]] = true;
@@ -528,25 +665,70 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         for (int i = 0; i < 9; ++i) ssFreq[i] = ssBase.v * pow2 (ssCents[i].v / 1200.0);
         const int ssCount = needSS ? 9 : 0;
 
+        // follower coefficients (per sample)
+        const float fA = 1.0f - std::exp (-1.0f / (0.005f * (float) sr)), fR = 1.0f - std::exp (-1.0f / (0.12f * (float) sr));
+        const float tfA = 1.0f - std::exp (-1.0f / (0.001f * (float) sr)), tfR = 1.0f - std::exp (-1.0f / (0.03f * (float) sr));
+        const float tsA = 1.0f - std::exp (-1.0f / (0.03f * (float) sr)), tsR = 1.0f - std::exp (-1.0f / (0.25f * (float) sr));
 
+        auto sampleLoop = [&] (auto arTag)
+        {
+        constexpr bool AR = decltype (arTag)::value;
+        auto fmIn = [&] (int d)
+        {
+            float a = 0.0f;
+            if constexpr (! AR)
+                for (int k = 0; k < fmN[d]; ++k) a += fmA[d][k] * srcVals[fmS[d][k]];
+            else
+                for (int k = 0; k < fmN[d]; ++k)
+                    a += (fmA[d][k] + ad[AD_Fm1 + fmK[d][k]] * fmSlots[fmK[d][k]].scale) * srcVals[fmS[d][k]];
+            return a;
+        };
+        auto lvl = [&] (float v, int a)
+        {
+            if constexpr (! AR) { juce::ignoreUnused (a); return v; }
+            else return v > 0.0f ? clampv (v + ad[a], 0.0f, 2.0f) : 0.0f;
+        };
         for (int i = 0; i < n; ++i)
         {
+            if constexpr (AR)
+            {
+                std::fill (ad, ad + AD_COUNT, 0.0f);
+                for (int k = 0; k < nar; ++k)
+                {
+                    float x = aPrev[ar[k].src];
+                    if (ar[k].uni) x = 0.5f * (x + 1.0f);
+                    ad[ar[k].ad] += ar[k].k * applyCurve (ar[k].curve, x);
+                }
+                if (arCut)
+                    filter.update (clampv (cutoff.v * (float) pow2 (ad[AD_Cut]), 20.0f, 18000.0f), clampv (res.v + ad[AD_Res], 0.1f, 30.0f), sr);
+            }
+            auto pm = [&] (int a) { return ! AR ? 1.0 : pow2 (ad[a]); };
+
             // Osc 2 and 3 first so Osc 1's legacy FM uses this sample's Osc 2 (as in Web Audio)
-            double fr = f2.v + fmIn (1);
+            double fr = ! AR ? (double) (f2.v + fmIn (1)) : f2.v * pm (AD_P2) + fmIn (1);
             const float o2 = bank.sample (wave2, ph2, (float) std::abs (fr) * fisr);
             ph2 = wrap01 (ph2 + fr * isr); srcVals[1] = o2;
 
-            fr = f3.v + fmIn (2);
+            fr = ! AR ? (double) (f3.v + fmIn (2)) : f3.v * pm (AD_P3) + fmIn (2);
             const float o3 = bank.sample (wave3, ph3, (float) std::abs (fr) * fisr);
             ph3 = wrap01 (ph3 + fr * isr); srcVals[2] = o3;
 
-            const float osub = bank.sample (waveSub, phSub, fSub.v * fisr);
-            phSub = wrap01 (phSub + fSub.v * isr);
+            const double fsub = ! AR ? (double) fSub.v : fSub.v * pm (AD_PSub);
+            const float osub = bank.sample (waveSub, phSub, (float) fsub * fisr);
+            phSub = wrap01 (phSub + fsub * isr);
 
             // Osc 4 (WT 1) and WT 2: sample playback
             float o4L, o4R, w2L, w2R;
-            wt[0].tick (fmIn (3), isr, o4L, o4R);
-            wt[1].tick (0.0, isr, w2L, w2R);
+            if (! AR)
+            {
+                wt[0].tick (fmIn (3), isr, o4L, o4R);
+                wt[1].tick (0.0, isr, w2L, w2R);
+            }
+            else
+            {
+                wt[0].tick (fmIn (3) + wt[0].rate.v * (pm (AD_PWt1) - 1.0), isr, o4L, o4R);
+                wt[1].tick (wt[1].rate.v * (pm (AD_PWt2) - 1.0), isr, w2L, w2R);
+            }
             const float o4m = 0.5f * (o4L + o4R);
             srcVals[3] = o4m;
 
@@ -554,13 +736,16 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             float cOut = 0;
             if (needComplex)
             {
-                const double mf = (double) cBase.v * cRatio.v;
+                const double cb = ! AR ? (double) cBase.v : cBase.v * pm (AD_PCx);
+                const double mf = cb * cRatio.v;
                 const float om = bank.sample (waveB, phMod, (float) std::abs (mf) * fisr);
                 phMod = wrap01 (phMod + mf * isr);
-                const double cf = cBase.v + cFm.v * om + fmIn (4);
+                const double cf = ! AR ? (double) (cBase.v + cFm.v * om + fmIn (4))
+                                            : cb + std::max (0.0f, cFm.v + ad[AD_CxFm]) * om + fmIn (4);
                 const float oc = bank.sample (waveA, phCar, (float) std::abs (cf) * fisr);
                 phCar = wrap01 (phCar + cf * isr);
-                cOut = driveShape (oc * cMixS.v + om * (1.0f - cMixS.v), cShapeK) * lC.v;
+                const float shapeK = ! AR ? cShapeK : clampv (cShapeK + ad[AD_CxShape], 1.0f, 25.0f);
+                cOut = driveShape (oc * cMixS.v + om * (1.0f - cMixS.v), shapeK) * lvl (lC.v, AD_LCx);
             }
             srcVals[4] = cOut;
 
@@ -569,28 +754,33 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             if (ssCount > 0)
             {
                 const float fmS6 = fmIn (5);
+                const double ssm = pm (AD_PSs);
                 for (int u = 0; u < 9; ++u)
                 {
                     const float g = ssGain[u].v;
                     if (g <= 1.0e-7f) continue;
-                    const double f = ssFreq[u] + fmS6;
+                    const double f = (! AR ? ssFreq[u] : ssFreq[u] * ssm) + fmS6;
                     const float sw = bank.sample (W_SAW, ssPh[u], (float) std::abs (f) * fisr) * g;
                     ssPh[u] = wrap01 (ssPh[u] + f * isr);
                     ssMono += sw; ssL += sw * ssPanL[u]; ssR += sw * ssPanR[u];
                 }
-                ssMono *= lSS.v; ssL *= lSS.v; ssR *= lSS.v;
+                const float gss = lvl (lSS.v, AD_LSs);
+                ssMono *= gss; ssL *= gss; ssR *= gss;
             }
             srcVals[5] = ssMono;
 
             // Osc 1 (with the legacy Osc2 -> Osc1 FM)
-            fr = f1.v + legacyFm.v * o2 + fmIn (0);
+            fr = ! AR ? (double) (f1.v + legacyFm.v * o2 + fmIn (0))
+                          : f1.v * pm (AD_P1) + std::max (0.0f, legacyFm.v + ad[AD_LegFm]) * o2 + fmIn (0);
             const float o1 = bank.sample (wave1, ph1, (float) std::abs (fr) * fisr);
             ph1 = wrap01 (ph1 + fr * isr); srcVals[0] = o1;
+            aPrev[0] = o1; aPrev[1] = o2; aPrev[2] = o3; aPrev[3] = osub;
 
             // mixer
-            const float o4g = wt[0].level.v * wt[0].comp;
-            const float w2g = wt[1].level.v * wt[1].comp;
-            const float mono = o1 * l1.v + o2 * l2.v + o3 * l3.v + osub * lSub.v + cOut;
+            const float g1 = lvl (l1.v, AD_L1), g2 = lvl (l2.v, AD_L2), g3 = lvl (l3.v, AD_L3), gs = lvl (lSub.v, AD_LSub);
+            const float o4g = lvl (wt[0].level.v, AD_LWt1) * wt[0].comp;
+            const float w2g = lvl (wt[1].level.v, AD_LWt2) * wt[1].comp;
+            const float mono = o1 * g1 + o2 * g2 + o3 * g3 + osub * gs + cOut;
             const float mL = mono + o4L * o4g + w2L * w2g + ssL;
             const float mR = mono + o4R * o4g + w2R * w2g + ssR;
 
@@ -609,25 +799,26 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 {
                     switch (idx)
                     {
-                        case 0: return o1 * l1.v;
-                        case 1: return o2 * l2.v;
-                        case 2: return o3 * l3.v;
+                        case 0: return o1 * g1;
+                        case 1: return o2 * g2;
+                        case 2: return o3 * g3;
                         case 3: return (right ? o4R : o4L) * o4g;
                         case 4: return cOut;
                         case 5: return ssMono;
                         default: return right ? mR : mL;
                     }
                 };
-                const float srcV = r.src == 3 ? o4m * o4g : post (r.src, false);
-                const float g = 2.0f + srcV * ringDepth[k].v;
+                const float srcV2 = r.src == 3 ? o4m * o4g : post (r.src, false);
+                const float g = 2.0f + srcV2 * ringDepth[k].v;
                 const float yl = r.lp.process (r.hp.process (driveShape (post (r.dst, false) * g, r.shapeK), 0), 0) * ringOut[k].v;
                 rL += yl;
                 if (stereo) rR += r.lp.process (r.hp.process (driveShape (post (r.dst, true) * g, r.shapeK), 1), 1) * ringOut[k].v;
                 else rR += yl;
             }
 
-            const float xL = mL * dry.v + rL * ringMix.v;
-            const float xR = mR * dry.v + rR * ringMix.v;
+            const float rmix = ! AR ? ringMix.v : clampv (ringMix.v + ad[AD_Ring], 0.0f, 1.0f);
+            const float xL = mL * dry.v + rL * rmix;
+            const float xR = mR * dry.v + rR * rmix;
             const float yL = filter.process (xL, 0, drive);
             const float yR = stereo ? filter.process (xR, 1, drive) : yL;
 
@@ -635,8 +826,20 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             L[done + i] += yL * g;
             R[done + i] += yR * g;
             t += isr;
+
+            if (follow)
+            {
+                const float a = std::abs (yL * g), b = std::abs (xL);
+                envF += (a - envF) * (a > envF ? fA : fR);
+                audF += (b - audF) * (b > audF ? fA : fR);
+                trFast += (a - trFast) * (a > trFast ? tfA : tfR);
+                trSlow += (a - trSlow) * (a > trSlow ? tsA : tsR);
+            }
         }
+        };
+        if (nar > 0) sampleLoop (std::true_type {}); else sampleLoop (std::false_type {});
         done += n;
+        advanceLfos (ps, n);
 
         if (ampEnv.finished (t)) active = false;
     }
@@ -828,6 +1031,8 @@ void Engine::prepare (double sampleRate, int maxBlock)
     for (auto& v : voices) v.prepare (sr);
     fxBus.prepare (sr, maxBlock);
     globalMod.clear();
+    normTable();   // build the conversion tables off the audio thread
+    globalRouteState.reset();
     lastFreq = -1.0;
 }
 
@@ -878,7 +1083,13 @@ void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const S
     }
 
     const double glide = (s.f (P_porta) > 0.0005f && lastFreq > 0) ? lastFreq : freq;
-    slot->start (key, freq, glide, o, s, ++orderCounter);
+    ModContext mc;
+    if (routeStore != nullptr)
+    {
+        routeSet.build (*routeStore);
+        mc.routes = &routeSet; mc.in = modIn;
+    }
+    slot->start (key, freq, glide, o, s, ++orderCounter, mc);
     lastFreq = freq;
 }
 
@@ -897,12 +1108,42 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& s, cons
     Voice* newest = nullptr;
     for (auto& v : voices) if (v.active && (! newest || v.order > newest->order)) newest = &v;
 
+    ModContext mc;
+    if (routeStore != nullptr)
+    {
+        routeSet.build (*routeStore);
+        mc.routes = &routeSet; mc.in = modIn;
+    }
+    std::fill (std::begin (liveScratch), std::end (liveScratch), 0.0f);
+
     ModState scratch;
     for (auto& v : voices)
         if (v.active)
-            v.render (L, R, numSamples, s, wavs, &v == newest ? globalMod : scratch);
+            v.render (L, R, numSamples, s, wavs, &v == newest ? globalMod : scratch, mc, &v == newest ? liveScratch : nullptr);
 
-    fxBus.process (L, R, numSamples, s, globalMod);
+    // Global effects are shared by all voices, so routes onto them follow the newest voice's
+    // sources (or, with no note playing, the MIDI controllers alone).
+    const Snapshot* fs = &s;
+    const float* src = newest != nullptr ? newest->srcV : globalSrc;
+    if (newest == nullptr)
+    {
+        std::fill (std::begin (globalSrc), std::end (globalSrc), 0.0f);
+        if (modIn != nullptr)
+        {
+            globalSrc[MS_ModWheel] = modIn->wheel; globalSrc[MS_PitchBend] = modIn->bend;
+            globalSrc[MS_Aftertouch] = modIn->aftertouch; globalSrc[MS_CcA] = modIn->ccA; globalSrc[MS_CcB] = modIn->ccB;
+        }
+    }
+    if (mc.any() && routeSet.anyGlobal)
+    {
+        fxSnap = s;
+        applyRoutes (routeSet, s.v, fxSnap.v, src, globalRouteState, (float) (numSamples / sr), RF_Global, liveScratch);
+        fs = &fxSnap;
+    }
+    fxBus.process (L, R, numSamples, *fs, globalMod);
+
+    for (int i = 0; i < P_COUNT; ++i) liveOffset[(size_t) i].store (liveScratch[i], std::memory_order_relaxed);
+    for (int i = 0; i < MS_COUNT; ++i) liveSrc[(size_t) i].store (src[i], std::memory_order_relaxed);
 }
 
 } // namespace tg

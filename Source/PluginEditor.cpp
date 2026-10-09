@@ -75,6 +75,29 @@ void Look::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, floa
     g.drawLine (c.x, c.y, tip.x, tip.y, 2.0f);
 }
 
+void Look::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos,
+                             juce::Slider::SliderStyle style, juce::Slider& s)
+{
+    if (style != juce::Slider::LinearBar)
+    {
+        LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, pos, minPos, maxPos, style, s);
+        return;
+    }
+    // bars: bipolar ranges fill from the centre, so 0 reads as empty
+    const auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
+    g.setColour (s.findColour (juce::Slider::backgroundColourId));
+    g.fillRoundedRectangle (r, 3.0f);
+    const bool bipolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;
+    const float zero = bipolar ? (float) x + (float) s.valueToProportionOfLength (0.0) * (float) w : (float) x;
+    g.setColour (s.findColour (juce::Slider::trackColourId).withMultipliedAlpha (s.isEnabled() ? 1.0f : 0.4f));
+    g.fillRoundedRectangle (juce::Rectangle<float> (std::min (zero, pos), (float) y, std::abs (pos - zero), (float) h), 3.0f);
+    if (bipolar)
+    {
+        g.setColour (col::muted.withAlpha (0.5f));
+        g.fillRect (juce::Rectangle<float> (zero - 0.5f, (float) y + 2.0f, 1.0f, (float) h - 4.0f));
+    }
+}
+
 void Look::drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& box)
 {
     const auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h).reduced (0.5f);
@@ -120,7 +143,7 @@ void Look::drawTabButton (juce::TabBarButton& b, juce::Graphics& g, bool over, b
 }
 
 //==============================================================================
-Knob::Knob (MegaSynthProcessor& p, int idx, const juce::String& cap, juce::Colour c)
+Knob::Knob (MegaSynthProcessor& p, int idx, const juce::String& cap, juce::Colour c) : paramIndex (idx), proc (p)
 {
     slider.setColour (juce::Slider::textBoxTextColourId, col::muted);
     slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
@@ -144,10 +167,93 @@ Knob::Knob (MegaSynthProcessor& p, int idx, const juce::String& cap, juce::Colou
         juce::String tip = m.name + "  (" + m.module + ")";
         if (m.unit.isNotEmpty()) tip << "\nUnit: " << m.unit;
         tip << "\nScale: " << tg::scaleName (m.scale) << (m.bipolar ? ", bipolar" : "");
-        if (m.modulatable) tip << "\nModulatable" << (m.audioRate ? " (audio rate)" : "");
+        if (m.modulatable) tip << "\nModulatable" << (m.audioRate ? " (audio rate too)" : "") << " - right-click to modulate";
         tip << "\nDouble-click to reset";
         slider.setTooltip (tip);
     }
+    slider.onRightClick = [this] { showMenu(); };
+}
+
+void Knob::showMenu()
+{
+    const auto& m = tg::meta (paramIndex);
+    if (! m.modulatable) return;
+    juce::PopupMenu menu, add;
+    menu.addSectionHeader (m.name);
+    SrcKind lastKind = K_NONE;
+    for (int s = 1; s < MS_COUNT; ++s)
+    {
+        if (kModSrcKind[s] == K_AUDIO && ! m.audioRate) continue;
+        if (kModSrcKind[s] != lastKind && lastKind != K_NONE) add.addSeparator();
+        lastKind = kModSrcKind[s];
+        add.addItem (1000 + s, kModSrcNames[s]);
+    }
+    menu.addSubMenu ("Modulate with", add);
+    bool any = false;
+    for (int i = 0; i < kNumRoutes; ++i)
+    {
+        const auto c = proc.routes.get (i);
+        if (c.dst != paramIndex || c.src == MS_None) continue;
+        if (! any) { menu.addSeparator(); any = true; }
+        const float a = proc.param (P_mod1Amt + i)->convertFrom0to1 (proc.param (P_mod1Amt + i)->getValue());
+        juce::PopupMenu sub;
+        sub.addItem (2000 + i, "Show in Mod Matrix");
+        sub.addItem (3000 + i, "Remove");
+        menu.addSubMenu ("Route " + juce::String (i + 1) + ": " + kModSrcNames[c.src] + "  " + formatParam (P_mod1Amt + i, a), sub);
+    }
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&slider),
+                        [this] (int r)
+                        {
+                            if (r >= 1000 && r < 1000 + MS_COUNT)
+                            {
+                                const int slot = proc.addRoute (r - 1000, paramIndex, 0.25f);
+                                if (slot >= 0 && onShowRoute) onShowRoute (-1 - slot);   // negative: just note it, don't switch tabs
+                            }
+                            else if (r >= 2000 && r < 2000 + kNumRoutes) { if (onShowRoute) onShowRoute (r - 2000); }
+                            else if (r >= 3000 && r < 3000 + kNumRoutes) proc.clearRoute (r - 3000);
+                            updateMod();
+                        });
+}
+
+void Knob::updateMod()
+{
+    bool h = false; float lo = 0, hi = 0;
+    for (int i = 0; i < kNumRoutes; ++i)
+    {
+        const auto c = proc.routes.get (i);
+        if (! c.active() || c.dst != paramIndex) continue;
+        h = true;
+        const float a = proc.param (P_mod1Amt + i)->convertFrom0to1 (proc.param (P_mod1Amt + i)->getValue());
+        if (kModSrcBipolar[c.src] && ! c.unipolar) { lo -= std::abs (a); hi += std::abs (a); }
+        else if (a > 0) hi += a; else lo += a;
+    }
+    const float lv = h ? proc.getEngine().liveOffset[(size_t) paramIndex].load (std::memory_order_relaxed) : 0.0f;
+    if (h != hasMod || std::abs (lo - modLo) > 1.0e-5f || std::abs (hi - modHi) > 1.0e-5f || std::abs (lv - live) > 0.002f)
+    {
+        hasMod = h; modLo = lo; modHi = hi; live = lv;
+        repaint();
+    }
+}
+
+void Knob::paintOverChildren (juce::Graphics& g)
+{
+    if (! hasMod) return;
+    const auto layout = slider.getLookAndFeel().getSliderLayout (slider);
+    const auto bounds = layout.sliderBounds.toFloat().translated ((float) slider.getX(), (float) slider.getY()).reduced (3.0f);
+    const float radius = std::min (bounds.getWidth(), bounds.getHeight()) * 0.5f;
+    const auto c = bounds.getCentre();
+    const auto rp = slider.getRotaryParameters();
+    const float span = rp.endAngleRadians - rp.startAngleRadians;
+    const float base = (float) slider.valueToProportionOfLength (slider.getValue());
+    const float p0 = juce::jlimit (0.0f, 1.0f, base + modLo), p1 = juce::jlimit (0.0f, 1.0f, base + modHi);
+    const float r = radius - 7.5f;
+    juce::Path arc;
+    arc.addCentredArc (c.x, c.y, r, r, 0.0f, rp.startAngleRadians + p0 * span, rp.startAngleRadians + std::max (p1, p0 + 0.003f) * span, true);
+    g.setColour (col::mod.withAlpha (0.85f));
+    g.strokePath (arc, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    const float a = rp.startAngleRadians + juce::jlimit (0.0f, 1.0f, base + live) * span;
+    g.setColour (juce::Colours::white);
+    g.fillEllipse (juce::Rectangle<float> (4.5f, 4.5f).withCentre ({ c.x + r * std::sin (a), c.y - r * std::cos (a) }));
 }
 
 void Knob::resized()
@@ -302,6 +408,230 @@ void AssignSlot::resized()
     source.setBounds (r.removeFromTop (24));
     r.removeFromTop (4);
     target.setBounds (r.removeFromTop (24));
+}
+
+//==============================================================================
+static void addSourceItems (juce::ComboBox& box, bool includeAudio, const juce::String& noneText)
+{
+    box.addItem (noneText, MS_None + 1);
+    const char* headings[] = { "", "LFOs", "Envelopes", "MIDI / Performance", "MPE", "Random", "Note", "Followers", "Audio rate (pitch, level, filter, FM)" };
+    SrcKind last = K_NONE;
+    for (int s = 1; s < MS_COUNT; ++s)
+    {
+        if (kModSrcKind[s] == K_AUDIO && ! includeAudio) continue;
+        if (kModSrcKind[s] != last) { box.addSectionHeading (headings[kModSrcKind[s]]); last = kModSrcKind[s]; }
+        box.addItem (kModSrcNames[s], s + 1);
+    }
+}
+
+RouteRow::RouteRow (MegaSynthProcessor& p, int s, std::function<juce::String()> searchText)
+    : slot (s), proc (p), search (std::move (searchText))
+{
+    on.setTooltip ("Route on / off");
+    on.setColour (juce::ToggleButton::tickColourId, col::mod);
+    on.onClick = [this] { push(); };
+
+    addSourceItems (src, true, "-");
+    src.setTooltip ("Modulation source. Audio-rate sources (an oscillator's raw output) can drive pitch, levels, cutoff, resonance and FM depths sample by sample.");
+    src.onChange = [this] { push(); };
+
+    dest.setTooltip ("Destination: any modulatable parameter. Type in the search box above to filter the list.");
+    dest.onClick = [this] { chooseDest(); };
+
+    amount.setSliderStyle (juce::Slider::LinearBar);
+    amount.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    amount.setColour (juce::Slider::trackColourId, col::mod.withAlpha (0.6f));
+    amount.setColour (juce::Slider::backgroundColourId, col::panel3);
+    amtAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, kParamIds[P_mod1Amt + slot], amount);
+    amount.setDoubleClickReturnValue (true, 0.0);
+    amount.setTooltip ("Depth: how far the source moves the destination, as a share of the destination's full travel. Double-click for zero.");
+    amount.onValueChange = [this] { amtText.setText (formatParam (P_mod1Amt + slot, (float) amount.getValue()), juce::dontSendNotification); };
+    amtText.setJustificationType (juce::Justification::centred);
+    amtText.setColour (juce::Label::textColourId, col::text);
+    amtText.setFont (juce::Font (juce::FontOptions (11.5f)));
+    amount.onValueChange();
+
+    for (int c = 0; c < MC_COUNT; ++c) curve.addItem (kModCurveNames[c], c + 1);
+    curve.setTooltip ("Response curve. Smooth adds a 60 ms glide; Stepped holds the value and updates 12 times a second; Quantized snaps to 8 levels.");
+    curve.onChange = [this] { push(); };
+
+    polarity.setTooltip ("Polarity of bipolar sources: +/- swings both ways around the knob, + only pushes up (source mapped to 0..1)");
+    polarity.onClick = [this] { auto c = proc.routes.get (slot); c.unipolar = ! c.unipolar; proc.routes.set (slot, c); refresh(); };
+
+    addSourceItems (via, false, "No via");
+    via.setTooltip ("Via: a second source that scales this route's depth (e.g. mod wheel opens an LFO's vibrato)");
+    via.onChange = [this] { push(); };
+
+    for (auto* sl : { &viaDepth, &smooth })
+    {
+        sl->setSliderStyle (juce::Slider::LinearBar);
+        sl->setColour (juce::Slider::trackColourId, col::mod.withAlpha (0.35f));
+        sl->setColour (juce::Slider::backgroundColourId, col::panel3);
+        sl->setColour (juce::Slider::textBoxTextColourId, col::text);
+        sl->onDragEnd = [this] { push(); };
+        sl->onValueChange = [this, sl] { if (! sl->isMouseButtonDown()) push(); };
+    }
+    viaDepth.setRange (0.0, 1.0, 0.01);
+    viaDepth.textFromValueFunction = [] (double v) { return "via " + juce::String (juce::roundToInt (v * 100)) + "%"; };
+    viaDepth.setTooltip ("How much the via source scales the depth");
+    smooth.setRange (0.0, 2000.0, 1.0);
+    smooth.setSkewFactorFromMidPoint (150.0);
+    smooth.textFromValueFunction = [] (double v) { return v < 0.5 ? juce::String ("no smooth") : juce::String (juce::roundToInt (v)) + " ms"; };
+    smooth.setTooltip ("Smoothing (slew) applied to the source before the curve");
+    viaDepth.updateText(); smooth.updateText();
+
+    clear.setTooltip ("Clear this route");
+    clear.onClick = [this] { proc.clearRoute (slot); refresh(); };
+
+    for (juce::Component* c : { (juce::Component*) &on, (juce::Component*) &src, (juce::Component*) &dest, (juce::Component*) &amount,
+                                (juce::Component*) &amtText, (juce::Component*) &curve, (juce::Component*) &polarity, (juce::Component*) &via,
+                                (juce::Component*) &viaDepth, (juce::Component*) &smooth, (juce::Component*) &clear })
+        addAndMakeVisible (c);
+    refresh();
+}
+
+void RouteRow::push()
+{
+    auto c = proc.routes.get (slot);
+    const bool wasEmpty = c.src == MS_None && c.dst < 0;
+    c.on = on.getToggleState();
+    c.src = juce::jmax (0, src.getSelectedId() - 1);
+    c.curve = juce::jmax (0, curve.getSelectedId() - 1);
+    c.via = juce::jmax (0, via.getSelectedId() - 1);
+    c.viaDepth = (float) viaDepth.getValue();
+    c.smoothMs = (float) smooth.getValue();
+    c.dst = dstIndex;
+    if (wasEmpty && c.src != MS_None) c.on = true;
+    proc.routes.set (slot, c);
+    refresh();
+}
+
+void RouteRow::refresh()
+{
+    const auto c = proc.routes.get (slot);
+    dstIndex = c.dst;
+    on.setToggleState (c.on, juce::dontSendNotification);
+    src.setSelectedId (c.src + 1, juce::dontSendNotification);
+    curve.setSelectedId (c.curve + 1, juce::dontSendNotification);
+    via.setSelectedId (c.via + 1, juce::dontSendNotification);
+    if (! viaDepth.isMouseButtonDown()) viaDepth.setValue (c.viaDepth, juce::dontSendNotification);
+    if (! smooth.isMouseButtonDown()) smooth.setValue (c.smoothMs, juce::dontSendNotification);
+    viaDepth.setEnabled (c.via != MS_None);
+    viaDepth.setAlpha (c.via != MS_None ? 1.0f : 0.4f);
+    polarity.setButtonText (c.unipolar ? "+" : "+/-");
+    polarity.setEnabled (kModSrcBipolar[c.src]);
+    dest.setButtonText (c.dst >= 0 ? tg::meta (c.dst).module + ": " + tg::meta (c.dst).name : juce::String ("Choose destination..."));
+    juce::String warn;
+    if (c.dst >= 0 && kModSrcKind[c.src] == K_AUDIO && ! tg::meta (c.dst).audioRate)
+        warn = "An audio-rate source can only drive pitch, level, cutoff, resonance or FM depths - this route is inactive.";
+    dest.setTooltip (warn.isNotEmpty() ? warn : juce::String ("Destination: any modulatable parameter. Type in the search box above to filter the list."));
+    dest.setColour (juce::TextButton::textColourOffId, warn.isNotEmpty() ? juce::Colour (0xffff6b6b) : col::text);
+    setAlpha (c.on || c.src == MS_None ? 1.0f : 0.55f);
+    repaint();
+}
+
+void RouteRow::chooseDest()
+{
+    const auto c = proc.routes.get (slot);
+    const bool audioOnly = kModSrcKind[c.src] == K_AUDIO;
+    const juce::String q = search ? search().trim() : juce::String();
+    juce::PopupMenu menu;
+    menu.addItem (100000, "None");
+    menu.addSeparator();
+    const auto dests = modulationDestinations();
+    if (q.isNotEmpty())
+    {
+        int shown = 0;
+        for (int d : dests)
+        {
+            const auto& m = tg::meta (d);
+            if (! (m.name.containsIgnoreCase (q) || m.module.containsIgnoreCase (q) || m.id.containsIgnoreCase (q))) continue;
+            menu.addItem (d + 1, m.module + ": " + m.name + (m.audioRate ? "  (audio rate)" : ""), ! audioOnly || m.audioRate, d == c.dst);
+            ++shown;
+        }
+        if (shown == 0) menu.addItem (-1, "Nothing matches \"" + q + "\"", false);
+    }
+    else
+    {
+        juce::String module; juce::PopupMenu sub;
+        auto flush = [&] { if (module.isNotEmpty()) menu.addSubMenu (module, sub); sub = {}; };
+        for (int d : dests)
+        {
+            const auto& m = tg::meta (d);
+            if (m.module != module) { flush(); module = m.module; }
+            sub.addItem (d + 1, m.name + (m.audioRate ? "  (audio rate)" : ""), ! audioOnly || m.audioRate, d == c.dst);
+        }
+        flush();
+    }
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&dest),
+                        [this] (int r)
+                        {
+                            if (r == 0) return;
+                            const bool fresh = dstIndex < 0;
+                            dstIndex = r == 100000 ? -1 : r - 1;
+                            push();
+                            if (fresh && dstIndex >= 0 && std::abs (amount.getValue()) < 1.0e-6)
+                                amount.setValue (0.25, juce::sendNotificationSync);   // a new route starts audible
+                        });
+}
+
+void RouteRow::updateLive()
+{
+    const auto c = proc.routes.get (slot);
+    const float sv = c.src != MS_None ? proc.getEngine().liveSrc[(size_t) c.src].load (std::memory_order_relaxed) : 0.0f;
+    const float dv = c.dst >= 0 ? proc.getEngine().liveOffset[(size_t) c.dst].load (std::memory_order_relaxed) : 0.0f;
+    if (std::abs (sv - srcLive) > 0.01f || std::abs (dv - dstLive) > 0.005f || highlight)
+    {
+        srcLive = sv; dstLive = dv;
+        repaint();
+    }
+}
+
+void RouteRow::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f, 1.0f);
+    g.setColour (highlight ? col::mod.withAlpha (0.25f) : ((slot % 2) ? col::panel : col::panel2));
+    g.fillRoundedRectangle (r, 5.0f);
+    highlight = false;
+    g.setColour (col::muted);
+    g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+    g.drawText (juce::String (slot + 1), 26, 0, 22, getHeight(), juce::Justification::centred);
+
+    // meters: the source's value (centre line = 0 for bipolar sources) and the destination's movement
+    const auto c = proc.routes.get (slot);
+    auto meter = [&] (juce::Rectangle<float> m, float v, bool bip)
+    {
+        g.setColour (col::panel3);
+        g.fillRoundedRectangle (m, 2.0f);
+        g.setColour (col::mod);
+        if (bip)
+        {
+            const float mid = m.getCentreX(), x = mid + juce::jlimit (-1.0f, 1.0f, v) * m.getWidth() * 0.5f;
+            g.fillRect (juce::Rectangle<float> (std::min (mid, x), m.getY(), std::abs (x - mid) + 1.0f, m.getHeight()));
+        }
+        else g.fillRect (m.withWidth (m.getWidth() * juce::jlimit (0.0f, 1.0f, v)));
+    };
+    if (c.src != MS_None && kModSrcKind[c.src] != K_AUDIO)
+        meter ({ (float) getWidth() - 86.0f, 7.0f, 50.0f, 5.0f }, srcLive, kModSrcBipolar[c.src]);
+    if (c.dst >= 0)
+        meter ({ (float) getWidth() - 86.0f, (float) getHeight() - 12.0f, 50.0f, 5.0f }, dstLive, true);
+}
+
+void RouteRow::resized()
+{
+    auto r = getLocalBounds().reduced (2, 3);
+    on.setBounds (r.removeFromLeft (24));
+    r.removeFromLeft (24);
+    src.setBounds (r.removeFromLeft (140)); r.removeFromLeft (4);
+    dest.setBounds (r.removeFromLeft (212)); r.removeFromLeft (4);
+    amount.setBounds (r.removeFromLeft (120)); r.removeFromLeft (2);
+    amtText.setBounds (r.removeFromLeft (46)); r.removeFromLeft (4);
+    curve.setBounds (r.removeFromLeft (104)); r.removeFromLeft (4);
+    polarity.setBounds (r.removeFromLeft (36)); r.removeFromLeft (4);
+    via.setBounds (r.removeFromLeft (120)); r.removeFromLeft (4);
+    viaDepth.setBounds (r.removeFromLeft (72)); r.removeFromLeft (4);
+    smooth.setBounds (r.removeFromLeft (80));
+    clear.setBounds (r.removeFromRight (28));
 }
 
 //==============================================================================
@@ -471,6 +801,17 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     tabs.setOutline (0);
     content.addAndMakeVisible (tabs);
     buildPages();
+
+    // every knob can show its modulation and open the matrix
+    std::function<void (juce::Component&)> collect = [&] (juce::Component& c)
+    {
+        if (auto* k = dynamic_cast<Knob*> (&c)) allKnobs.add (k);
+        for (auto* ch : c.getChildren()) collect (*ch);
+    };
+    for (int i = 0; i < tabs.getNumTabs(); ++i)
+        if (auto* page = tabs.getTabContentComponent (i)) collect (*page);
+    collect (content);
+    for (auto* k : allKnobs) k->onShowRoute = [this] (int slot) { showRoute (slot); };
 
     keyboard.setAvailableRange (36, 96);
     keyboard.setOctaveForMiddleC (4);
@@ -761,6 +1102,71 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Mod Matrix
+    {
+        auto* page = addPage ("Mod Matrix");
+        matrixTab = tabs.getNumTabs() - 1;
+        auto* srcSec = sec (page, "More sources", col::mod);
+        srcSec->choice (P_lfo4Wave, "LFO 4 Wave", 110);
+        srcSec->knob (P_lfo4Rate, "LFO 4 Rate", 64);
+        srcSec->knob (P_lfo4Depth, "LFO 4 Depth", 64);
+        srcSec->knob (P_randRate, "Random Rate", 70);
+        srcSec->knob (P_ccANum, "CC A", 56);
+        srcSec->knob (P_ccBNum, "CC B", 56);
+        auto* help = page->own (new juce::Label ({}, "Any source to any knob. Right-click a knob to modulate it; a cyan ring shows the range and a dot shows the "
+                                                     "value the newest note hears. Depth is a share of the destination's travel. Envelope times are set at note-on."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.0f)));
+        help->setJustificationType (juce::Justification::topLeft);
+
+        auto* listSec = sec (page, "Routes", col::mod);
+        page->addAndMakeVisible (matrixSearch);
+        matrixSearch.setTextToShowWhenEmpty ("Search destinations (e.g. cutoff, osc 2, reverb)", col::muted);
+        matrixSearch.setFont (juce::Font (juce::FontOptions (12.5f)));
+        auto* header = page->own (new juce::Component());
+        struct H { const char* t; int x, w; };
+        static const H heads[] = { { "On", 0, 30 }, { "#", 26, 24 }, { "Source", 48, 140 }, { "Destination", 192, 212 }, { "Depth", 408, 168 },
+                                   { "Curve", 580, 104 }, { "Pol.", 688, 36 }, { "Via", 728, 120 }, { "Via depth", 852, 72 }, { "Smooth", 928, 80 },
+                                   { "Src / Dst", 1066, 70 } };
+        for (auto& h : heads)
+        {
+            auto* l = new juce::Label ({}, h.t);
+            l->setColour (juce::Label::textColourId, col::muted);
+            l->setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+            l->setBounds (h.x, 0, h.w, 16);
+            header->addAndMakeVisible (l);
+            page->children.add (l);
+        }
+        auto* list = new juce::Component();
+        for (int i = 0; i < kNumRoutes; ++i)
+        {
+            auto* row = new RouteRow (proc, i, [this] { return matrixSearch.getText(); });
+            list->addAndMakeVisible (row);
+            page->children.add (row);
+            routeRows.add (row);
+        }
+        matrixView = std::make_unique<juce::Viewport>();
+        matrixView->setViewedComponent (list, true);   // the viewport owns the list; rows are owned by the page (deleted after)
+        matrixView->setScrollBarsShown (true, false);
+        matrixView->setScrollBarThickness (8);
+        page->addAndMakeVisible (*matrixView);
+        auto* view = matrixView.get();
+        juce::Array<RouteRow*> rows (routeRows);
+        page->onResize = [page, srcSec, help, listSec, header, view, list, rows, this]
+        {
+            const int g = 10, W = page->getWidth();
+            srcSec->setBounds (g, g, 520, 128);
+            help->setBounds (540, g + 6, W - 540 - g, 120);
+            listSec->setBounds (g, 146, W - 2 * g, page->getHeight() - 146 - g);
+            matrixSearch.setBounds (W - g - 330, 152, 316, 22);
+            header->setBounds (g + 10, 180, W - 2 * g - 20, 16);
+            view->setBounds (g + 8, 198, W - 2 * g - 16, page->getHeight() - 198 - g - 6);
+            const int rw = view->getWidth() - 10;
+            list->setSize (rw, 30 * kNumRoutes);
+            for (int i = 0; i < rows.size(); ++i) rows[i]->setBounds (0, i * 30, rw, 30);
+        };
+    }
+
     // ---------------------------------------------------------------- Sequencer
     {
         auto* page = addPage ("Sequencer");
@@ -882,6 +1288,23 @@ void MegaSynthEditor::shiftOctave (int delta)
     p->endChangeGesture();
 }
 
+void MegaSynthEditor::showRoute (int slot)
+{
+    if (slot < 0)
+    {
+        // a route was just added from a knob's menu
+        slot = -1 - slot;
+        if (auto c = proc.routes.get (slot); c.dst >= 0)
+            setStatus (juce::String ("Route ") + juce::String (slot + 1) + ": " + kModSrcNames[c.src] + " -> " + tg::meta (c.dst).name
+                       + " at +25% (drag the knob's depth in Mod Matrix)");
+        return;
+    }
+    if (matrixTab < 0 || slot >= routeRows.size()) return;
+    tabs.setCurrentTabIndex (matrixTab);
+    matrixView->setViewPosition (0, juce::jmax (0, slot * 30 - 60));
+    routeRows[slot]->flash();
+}
+
 bool MegaSynthEditor::keyPressed (const juce::KeyPress& k)
 {
     const auto c = juce::CharacterFunctions::toLowerCase (k.getTextCharacter());
@@ -927,6 +1350,13 @@ void MegaSynthEditor::timerCallback()
     }
 
     for (auto* s : assignSlots) s->refresh();
+
+    // modulation matrix: rows follow the store; knobs show their rings
+    const auto rv = proc.routes.getVersion();
+    if (rv != lastRouteVersion) { lastRouteVersion = rv; for (auto* r : routeRows) r->refresh(); }
+    if (matrixTab >= 0 && tabs.getCurrentTabIndex() == matrixTab)
+        for (auto* r : routeRows) r->updateLive();
+    for (auto* k : allKnobs) if (k->isShowing()) k->updateMod();
 
     if (statusTicks > 0 && --statusTicks == 0) status.setText ({}, juce::dontSendNotification);
 }

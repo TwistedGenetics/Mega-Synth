@@ -34,6 +34,8 @@ class Look : public juce::LookAndFeel_V4
 public:
     Look();
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float start, float end, juce::Slider&) override;
+    void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float pos, float minPos, float maxPos,
+                           juce::Slider::SliderStyle, juce::Slider&) override;
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;
     juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::Font (juce::FontOptions (12.5f)); }
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
@@ -42,16 +44,42 @@ public:
     int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 150; }
 };
 
+// Slider that hands right-clicks to its owner instead of dragging.
+class KnobSlider : public juce::Slider
+{
+public:
+    std::function<void()> onRightClick;
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu()) { rightDown = true; if (onRightClick) onRightClick(); return; }
+        rightDown = false; juce::Slider::mouseDown (e);
+    }
+    void mouseDrag (const juce::MouseEvent& e) override { if (! rightDown) juce::Slider::mouseDrag (e); }
+    void mouseUp (const juce::MouseEvent& e) override { if (! rightDown) juce::Slider::mouseUp (e); rightDown = false; }
+private:
+    bool rightDown = false;
+};
+
 // A rotary knob with a caption above and the parameter's value text below.
+// When the modulation matrix drives its parameter it shows a ring: the range the routes
+// can reach, and a dot at the value the newest note is hearing right now.
 class Knob : public juce::Component
 {
 public:
     Knob (MegaSynthProcessor&, int paramIndex, const juce::String& caption, juce::Colour);
     void resized() override;
-    juce::Slider slider;
+    void paintOverChildren (juce::Graphics&) override;
+    void updateMod();                          // called by the editor's timer
+    KnobSlider slider;
+    const int paramIndex;
+    std::function<void (int slot)> onShowRoute;   // open the matrix at a route
 private:
+    void showMenu();
+    MegaSynthProcessor& proc;
     juce::Label caption;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
+    bool hasMod = false;
+    float modLo = 0, modHi = 0, live = 0;
 };
 
 // Caption + drop-down attached to a choice parameter.
@@ -106,6 +134,34 @@ private:
     juce::Label amountText;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> srcAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> amtAtt;
+};
+
+// One row of the modulation matrix.
+class RouteRow : public juce::Component
+{
+public:
+    RouteRow (MegaSynthProcessor&, int slot, std::function<juce::String()> searchText);
+    void resized() override;
+    void paint (juce::Graphics&) override;
+    void refresh();          // from the route store
+    void updateLive();       // meters
+    void chooseDest();
+    const int slot;
+private:
+    void push();
+    MegaSynthProcessor& proc;
+    std::function<juce::String()> search;
+    juce::ToggleButton on;
+    juce::ComboBox src, curve, via;
+    juce::TextButton dest, polarity, clear { "X" };
+    juce::Slider amount, viaDepth, smooth;
+    juce::Label amtText;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> amtAtt;
+    int dstIndex = -1;
+    float srcLive = 0, dstLive = 0;
+    bool highlight = false;
+public:
+    void flash() { highlight = true; repaint(); }
 };
 
 class StepCell : public juce::Component
@@ -201,6 +257,13 @@ private:
     juce::Label octLabel;
 
     juce::Array<tgui::AssignSlot*> assignSlots;   // owned by their tab pages
+    juce::Array<tgui::Knob*> allKnobs;
+    juce::Array<tgui::RouteRow*> routeRows;
+    std::unique_ptr<juce::Viewport> matrixView;
+    juce::TextEditor matrixSearch;
+    int matrixTab = -1;
+    uint32_t lastRouteVersion = 0;
+    void showRoute (int slot);
     juce::Array<tgui::StepCell*> stepCells;
     juce::TextButton seqRandomBtn { "Random Phrase" };
     juce::ToggleButton seqRunBtn { "Run Sequencer" };

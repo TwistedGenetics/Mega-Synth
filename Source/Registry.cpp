@@ -1,4 +1,5 @@
 #include "Registry.h"
+#include "ModMatrix.h"
 
 namespace tg
 {
@@ -49,6 +50,9 @@ namespace
         if (id.startsWith ("fEnv")) return "Filter Envelope";
         if (id.startsWith ("mEnv")) return "Mod Envelope " + id.substring (4, 5);
         if (id.startsWith ("lfoAssign")) return "LFO Slots";
+        if (id.startsWith ("mod") && id.endsWith ("Amt")) return "Mod Matrix";
+        if (id == "randRate") return "Random";
+        if (id.startsWith ("cc")) return "MIDI";
         if (id.startsWith ("envAssign")) return "Envelope Slots";
         if (id.startsWith ("lfo")) return "LFO " + id.substring (3, 4);
         if (id.startsWith ("delay") || id.startsWith ("tape") || id.startsWith ("flutter")) return "Tape Delay";
@@ -128,6 +132,12 @@ namespace
                 { m.category = Category::Env; m.group = MutGroup::Envelopes; }
             else if (startsAny (id, { "delay", "tape", "flutter", "reverb", "shimmer", "chorus", "reverse" }))
                 { m.category = Category::Fx; m.group = MutGroup::Fx; }
+            else if (isAny (id, { "ccANum", "ccBNum" }))
+                { m.category = Category::Performance; m.group = MutGroup::None; }
+            else if (id.startsWith ("mod") && id.endsWith ("Amt"))
+                { m.category = Category::Mod; m.group = MutGroup::Modulation; }
+            else if (id == "randRate")
+                { m.category = Category::Lfo; m.group = MutGroup::Modulation; }
             else if (startsAny (id, { "lfoAssign", "envAssign" }))
                 { m.category = Category::Mod; m.group = MutGroup::Modulation; }
             else if (id.startsWith ("lfo"))
@@ -141,12 +151,10 @@ namespace
 
             // ---- modulation capability: continuous sound parameters yes; administrative ones no
             const bool admin = isAny (id, { "polyphony", "keyboardOctave", "bendRange", "seqLength", "seqEuclidPulses",
-                                            "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root" });
+                                            "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum" });
             m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin;
-            m.audioRate = m.modulatable && (id.containsIgnoreCase ("Detune") || id.endsWith ("Gain") || id == "filterCutoff"
-                                            || id == "filterRes" || id == "fmAmount" || (id.endsWith ("Amt") && id.startsWith ("fmSlot"))
-                                            || id == "ringMix" || id == "complexFm" || id == "complexShape"
-                                            || id == "osc4Position" || id == "wt2Position");
+            float adScale;
+            m.audioRate = m.modulatable && audioDestFor (i, adScale) >= 0;   // what the voice can drive per sample
 
             // ---- smoothing: envelope times are read at note-on; pitch follows portamento
             if (m.category == Category::Env && m.unit == "s") m.smoothingMs = 0.0f;

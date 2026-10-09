@@ -4,6 +4,7 @@
 #include <atomic>
 #include "Params.h"
 #include "DSP.h"
+#include "ModMatrix.h"
 
 namespace tg
 {
@@ -151,6 +152,14 @@ struct FilterChain
     }
 };
 
+// What the voices need from the modulation matrix for one block.
+struct ModContext
+{
+    const RouteSet* routes = nullptr;
+    const GlobalModInputs* in = nullptr;
+    bool any() const { return routes != nullptr && routes->n > 0; }
+};
+
 //==============================================================================
 class Voice
 {
@@ -162,15 +171,22 @@ public:
         float accentBoost = 0.0f;
         float filterAccent = 0.0f;
         float velocity = 1.0f;
+        int channel = 1;        // MIDI channel (for MPE sources)
+        int note = -1;          // MIDI note number; derived from the frequency when -1
     };
 
-    void start (int key, double freq, double glideFromFreq, const StartOptions&, const Snapshot&, uint64_t order);
+    void start (int key, double freq, double glideFromFreq, const StartOptions&, const Snapshot&, uint64_t order,
+                const ModContext& = {});
     void release();
     void retune (double freq) { baseFreq = freq; }
     void kill() { active = false; }
 
-    // Adds this voice's output into L/R. Writes its modulation values to modOut.
-    void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* const* wavs, ModState& modOut);
+    // Adds this voice's output into L/R. Writes its modulation values to modOut, and (when
+    // liveOut is given) how far the matrix moved each destination, in normalised units.
+    void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* const* wavs, ModState& modOut,
+                 const ModContext& = {}, float* liveOut = nullptr);
+
+    float srcV[MS_COUNT] {};   // this voice's modulation sources (control rate)
 
     bool active = false;
     bool released = false;
@@ -184,6 +200,8 @@ public:
     float currentLevel() const { return (float) ampEnv.eval (t); }
 
 private:
+    void computeSources (const Snapshot&, const GlobalModInputs*, float dt);
+    void advanceLfos (const Snapshot&, int numSamples);
     void computeMod (const Snapshot&, ModState&) const;
     void updateControl (const Snapshot&, const WaveSample* const* wavs, const ModState&, bool first);
 
@@ -259,6 +277,22 @@ private:
     float srcVals[6] {};    // latest raw/FM-source outputs: osc1, osc2, osc3, osc4(mono), complex, supersaw
     FilterChain filter;
     bool stereo = false;
+
+    // ---- modulation matrix state
+    int midiNote = 60, channel = 1;
+    float velocity = 1.0f;
+    double lfoPh[4] {};          // LFO phases (free per voice, reset at note-on)
+    float lfoDepthNow[4] {};
+    uint32_t rng = 1;
+    float randNote = 0.0f;
+    double rndPh = 0.0, driftPh2 = 0.0;
+    float rndA = 0, rndB = 0, shVal = 0, chaosX = 0.5f, drA = 0, drB = 0;
+    float envF = 0, audF = 0, trFast = 0, trSlow = 0;
+    float lastDt = 0.0f;
+    float aPrev[4] {};           // previous sample of Osc 1, 2, 3 and Sub, for audio-rate routes
+    RouteState rstate;
+    Snapshot modSnap;            // the parameters with this voice's modulation applied
+    float nextRand() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng & 0xFFFFFF) / 8388608.0f - 1.0f; }
 };
 
 //==============================================================================
@@ -322,6 +356,12 @@ public:
 
     void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* const* wavs);
 
+    // Modulation matrix inputs (owned by the processor; read on the audio thread)
+    void setModulation (const RouteStore* r, const GlobalModInputs* in) { routeStore = r; modIn = in; }
+    // For the editor: how far each destination is currently moved (normalised), and source values
+    std::array<std::atomic<float>, P_COUNT> liveOffset {};
+    std::array<std::atomic<float>, MS_COUNT> liveSrc {};
+
     FxBus& fx() { return fxBus; }
     int activeVoiceCount() const;
 
@@ -333,6 +373,14 @@ private:
     double lastFreq = -1.0;
     double sr = 48000.0;
     std::vector<float> vL, vR;
+
+    const RouteStore* routeStore = nullptr;
+    const GlobalModInputs* modIn = nullptr;
+    RouteSet routeSet;
+    RouteState globalRouteState;
+    Snapshot fxSnap;
+    float liveScratch[P_COUNT] {};
+    float globalSrc[MS_COUNT] {};
 };
 
 } // namespace tg

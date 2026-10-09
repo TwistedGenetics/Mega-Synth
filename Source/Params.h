@@ -301,6 +301,9 @@ inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT 
     C(lfo3Wave, "LFO3 Wave", kListLfoWave, 0) \
     F(lfo3Rate, "LFO3 Rate", 0.01, 20, 0.4, 0.01, 2) \
     F(lfo3Depth,"LFO3 Depth", 0, 1, 0.5, 0.01, 0) \
+    C(lfo4Wave, "LFO4 Wave", kListLfoWave, 0) \
+    F(lfo4Rate, "LFO4 Rate", 0.01, 20, 1, 0.01, 2) \
+    F(lfo4Depth,"LFO4 Depth", 0, 1, 1, 0.01, 0) \
     F(mEnv1A, "Mod Env1 Attack", 0.001, 4, 0.01, 0.001, 0.5) \
     F(mEnv1D, "Mod Env1 Decay", 0.001, 4, 0.2, 0.001, 0.5) \
     F(mEnv1S, "Mod Env1 Sustain", 0, 1, 0, 0.01, 0) \
@@ -341,7 +344,42 @@ inline const ChoiceList kListTarget      { kTargetKeys, kTargetLabels, MT_COUNT 
     F(seqLength,       "Sequence Length", 1, 32, 16, 1, 0) \
     C(seqGenMode,      "Generator Mode", kListGen, 0) \
     F(seqEuclidPulses, "Euclidean Pulses", 1, 32, 7, 1, 0) \
-    F(seqEuclidRotate, "Euclidean Rotate", 0, 31, 0, 1, 0)
+    F(seqEuclidRotate, "Euclidean Rotate", 0, 31, 0, 1, 0) \
+    F(randRate,        "Random Rate", 0.05, 20, 2, 0.01, 2) \
+    F(ccANum,          "MIDI CC A Number", 0, 127, 74, 1, 0) \
+    F(ccBNum,          "MIDI CC B Number", 0, 127, 71, 1, 0) \
+    F(mod1Amt, "Mod 1 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod2Amt, "Mod 2 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod3Amt, "Mod 3 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod4Amt, "Mod 4 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod5Amt, "Mod 5 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod6Amt, "Mod 6 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod7Amt, "Mod 7 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod8Amt, "Mod 8 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod9Amt, "Mod 9 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod10Amt, "Mod 10 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod11Amt, "Mod 11 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod12Amt, "Mod 12 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod13Amt, "Mod 13 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod14Amt, "Mod 14 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod15Amt, "Mod 15 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod16Amt, "Mod 16 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod17Amt, "Mod 17 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod18Amt, "Mod 18 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod19Amt, "Mod 19 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod20Amt, "Mod 20 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod21Amt, "Mod 21 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod22Amt, "Mod 22 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod23Amt, "Mod 23 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod24Amt, "Mod 24 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod25Amt, "Mod 25 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod26Amt, "Mod 26 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod27Amt, "Mod 27 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod28Amt, "Mod 28 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod29Amt, "Mod 29 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod30Amt, "Mod 30 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod31Amt, "Mod 31 Amount", -1, 1, 0, 0.001, 0) \
+    F(mod32Amt, "Mod 32 Amount", -1, 1, 0, 0.001, 0)
 
 enum ParamIndex
 {

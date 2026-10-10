@@ -7,6 +7,7 @@
 #include "Registry.h"
 #include "Mut/Mutator.h"
 #include "UI/FilterPanel.h"
+#include "UI/PatchBrowser.h"
 
 using namespace tg;
 
@@ -88,6 +89,12 @@ static std::vector<std::pair<double, juce::MidiMessage>> chord (double on, doubl
     std::vector<std::pair<double, juce::MidiMessage>> ev;
     for (int n : notes) { ev.push_back ({ on, juce::MidiMessage::noteOn (1, n, (juce::uint8) 100) }); ev.push_back ({ off, juce::MidiMessage::noteOff (1, n) }); }
     return ev;
+}
+
+static int tabByName (juce::TabbedComponent* t, const juce::String& name)
+{
+    if (t != nullptr) for (int i = 0; i < t->getNumTabs(); ++i) if (t->getTabNames()[i].equalsIgnoreCase (name)) return i;
+    return 0;
 }
 
 int main()
@@ -496,8 +503,9 @@ int main()
             return nullptr;
         };
         auto* tabs = findTabs (ed.get());
-        tabs->setCurrentTabIndex (7);
-        auto* pageC = tabs->getTabContentComponent (7);
+        const int fxTab = tabByName (tabs, "Effects");
+        tabs->setCurrentTabIndex (fxTab);
+        auto* pageC = tabs->getTabContentComponent (fxTab);
         tgui::Segmented* pick = nullptr;
         for (auto* ch : pageC->getChildren()) if (auto* sg = dynamic_cast<tgui::Segmented*> (ch)) pick = sg;
         auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
@@ -508,6 +516,25 @@ int main()
             auto f = dir.getChildFile ("fx_ui_" + juce::String (k) + ".png"); f.deleteFile();
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
         }
+        return 0;
+    }
+
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BROWSERSHOT", {}).isNotEmpty())
+    {
+        auto p = make();
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+        ed->setSize (1200, 860);
+        std::function<juce::TextButton* (juce::Component*, const juce::String&)> findBtn = [&] (juce::Component* c, const juce::String& t) -> juce::TextButton*
+        {
+            if (auto* b = dynamic_cast<juce::TextButton*> (c)) if (b->getButtonText() == t) return b;
+            for (auto* ch : c->getChildren()) if (auto* b = findBtn (ch, t)) return b;
+            return nullptr;
+        };
+        if (auto* b = findBtn (ed.get(), "Browse")) b->onClick();
+        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+        auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+        auto f = dir.getChildFile ("browser_ui.png"); f.deleteFile();
+        juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
         return 0;
     }
 
@@ -527,7 +554,7 @@ int main()
             for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
             return nullptr;
         };
-        if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (12);
+        if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (tabByName (tabs, "DNA Seq"));
         auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 640), true, 1.0f);
         auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
         auto f = dir.getChildFile ("dna_ui.png"); f.deleteFile();
@@ -643,7 +670,7 @@ int main()
                     for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
                     return nullptr;
                 };
-                if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (6);
+                if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (tabByName (tabs, "Filter & Env"));
                 auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 310), true, 1.0f);
                 auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
                 auto f = dir.getChildFile ("filter_ui_" + juce::String (n++) + ".png"); f.deleteFile();
@@ -1142,6 +1169,147 @@ int main()
             CHECK (t->fxRack.getOrder() != moved, "rack moves are undoable");
         }
     };
+    // ---- Playability: MIDI learn, A/B compare, patch browser catalogue, window size memory
+    auto playTests = [&]
+    {
+        std::cout << "Playability" << std::endl;
+        auto cc = [] (int n, int v) { return std::vector<std::pair<double, juce::MidiMessage>> { { 0.0, juce::MidiMessage::controllerEvent (1, n, v) } }; };
+        auto norm = [] (MegaSynthProcessor& q, int i) { return q.param (i)->getValue(); };
+        {
+            auto p = make();
+            CHECK (p->ccForParam (P_filterCutoff) < 0, "nothing mapped at start");
+            p->midiLearn (P_filterCutoff);
+            CHECK (p->learningParam() == P_filterCutoff, "learn armed");
+            render (*p, 0.02, cc (21, 0));
+            CHECK (p->ccForParam (P_filterCutoff) == 21 && p->learningParam() < 0, "first CC moved is learned");
+            CHECK (norm (*p, P_filterCutoff) < 0.01f, "learned CC sets the parameter (0)");
+            render (*p, 0.02, cc (21, 127));
+            CHECK (norm (*p, P_filterCutoff) > 0.99f, "learned CC sets the parameter (127)");
+            render (*p, 0.02, cc (21, 64));
+            CHECK (std::abs (norm (*p, P_filterCutoff) - 64.0f / 127.0f) < 0.01f, "learned CC is linear over the knob");
+            // a second parameter on another CC; re-learning moves a CC
+            p->midiLearn (P_delayMix); render (*p, 0.02, cc (22, 100));
+            CHECK (p->ccForParam (P_delayMix) == 22 && p->ccForParam (P_filterCutoff) == 21, "two mappings");
+            p->midiLearn (P_filterRes); render (*p, 0.02, cc (21, 10));
+            CHECK (p->ccForParam (P_filterRes) == 21 && p->ccForParam (P_filterCutoff) < 0, "re-learning a CC takes it from the old parameter");
+            p->midiLearn (P_filterRes); render (*p, 0.02, cc (23, 10));
+            CHECK (p->ccForParam (P_filterRes) == 23, "re-learning a parameter moves it to the new CC");
+            CHECK (p->midiMapToString().indexOf ("21:") < 0, "the old CC is released");
+            // channel-mode messages are never learned
+            p->midiLearn (P_filterDrive); render (*p, 0.02, cc (123, 0));
+            CHECK (p->ccForParam (P_filterDrive) < 0 && p->learningParam() == P_filterDrive, "CC 120+ (channel mode) aren't learned");
+            p->midiForget (P_filterDrive);
+            CHECK (p->learningParam() < 0, "forget cancels a pending learn");
+            // forget
+            p->midiForget (P_delayMix);
+            const float before = norm (*p, P_delayMix);
+            render (*p, 0.02, cc (22, 0));
+            CHECK (p->ccForParam (P_delayMix) < 0 && std::abs (norm (*p, P_delayMix) - before) < 1e-6f, "forgotten CC no longer moves the parameter");
+            // the map belongs to the project: saved with it, untouched by loading patches
+            p->midiLearn (P_mutAmount); render (*p, 0.02, cc (30, 50));
+            p->uiWidth = 1500;
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (q->ccForParam (P_filterRes) == 23 && q->ccForParam (P_mutAmount) == 30, "MIDI map saved with the project");
+            CHECK (q->uiWidth.load() == 1500, "window size saved with the project");
+            q->loadFactoryPreset (1);
+            CHECK (q->ccForParam (P_filterRes) == 23, "loading a patch keeps the MIDI map");
+            const auto patch = q->exportBrowserPatch();
+            auto r = make(); r->importBrowserPatch (patch);
+            CHECK (r->ccForParam (P_filterRes) < 0, "patches don't carry the MIDI map");
+            // old projects (no map) load with nothing mapped
+            auto o = make(); juce::MemoryBlock m0; o->getStateInformation (m0);
+            auto o2 = make(); o2->setStateInformation (m0.getData(), (int) m0.getSize());
+            CHECK (o2->midiMapToString().isEmpty() && o2->uiWidth.load() == 0, "no map, default size");
+            // mapped CC works through the editor-free path at any time in a block, and the mapping is audible
+            auto a = make(); setP (*a, P_filterCutoff, 200.0f);
+            a->midiLearn (P_filterCutoff);
+            std::vector<std::pair<double, juce::MidiMessage>> ev { { 0.0, juce::MidiMessage::controllerEvent (1, 40, 0) }, { 0.0, juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100) },
+                                                                   { 0.25, juce::MidiMessage::controllerEvent (1, 40, 127) } };
+            juce::AudioBuffer<float> cap; render (*a, 0.5, ev, &cap);
+            auto hf = [&] (int from, int to) { double e = 0, d = 0; float prev = 0; for (int i = from; i < to; ++i) { const float x = cap.getSample (0, i); d += (x - prev) * (x - prev); e += x * x; prev = x; } return d / std::max (1e-12, e); };
+            std::cout << "  hf " << hf (int (0.15 * sr), int (0.25 * sr)) << " -> " << hf (int (0.4 * sr), int (0.5 * sr)) << std::endl;
+            CHECK (hf (int (0.4 * sr), int (0.5 * sr)) > 2.0 * hf (int (0.15 * sr), int (0.25 * sr)), "learned CC opens the filter audibly");
+        }
+        {
+            // A/B compare
+            auto p = make();
+            setP (*p, P_filterCutoff, 1000.0f); p->pushHistory ("x"); p->markOriginal();
+            auto cut = [&] { return p->param (P_filterCutoff)->convertFrom0to1 (p->param (P_filterCutoff)->getValue()); };
+            CHECK (p->abSlot() == 0, "starts on A");
+            p->abSelect (1);
+            CHECK (p->abSlot() == 1 && std::abs (cut() - 1000.0f) < 1.0f, "B starts as the loaded patch");
+            setP (*p, P_filterCutoff, 5000.0f); p->fxRack.move (0, 5);
+            const auto orderB = p->fxRack.getOrder();
+            p->abSelect (0);
+            CHECK (std::abs (cut() - 1000.0f) < 1.0f && p->fxRack.getOrder() != orderB, "A keeps its own settings (params and rack)");
+            p->abSelect (1);
+            CHECK (std::abs (cut() - 5000.0f) < 2.0f && p->fxRack.getOrder() == orderB, "B keeps its edits");
+            p->abSelect (1);
+            CHECK (std::abs (cut() - 5000.0f) < 2.0f, "selecting the current slot changes nothing");
+            p->abCopyToOther();
+            p->abSelect (0);
+            CHECK (std::abs (cut() - 5000.0f) < 2.0f, "Copy makes the other slot the same");
+            setP (*p, P_filterCutoff, 300.0f); p->abSelect (1);
+            p->undo();
+            CHECK (p->abSlot() == 1 && std::abs (cut() - 300.0f) < 1.0f, "undo after switching brings back the sound before the switch");
+            p->loadFactoryPreset (0);
+            CHECK (p->abSlot() == 0, "loading a patch resets A/B");
+            // switching while playing doesn't blow up
+            auto q = make(); q->markOriginal(); setP (*q, P_filterRes, 0.9f);
+            std::vector<std::pair<double, juce::MidiMessage>> ev { { 0.0, juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100) } };
+            auto st1 = render (*q, 0.2, ev); q->abSelect (1); auto st2 = render (*q, 0.2, {}); q->abSelect (0); auto st3 = render (*q, 0.2, {});
+            CHECK (st1.finite && st2.finite && st3.finite && st2.peak < 4.0f, "A/B while playing");
+        }
+        {
+            // patch browser catalogue and favourites
+            tgui::PatchCatalogue c; c.rescan();
+            const auto cats = c.categories();
+            CHECK (cats[0] == "All" && cats[1] == "Favourites" && cats.contains ("Your patches"), "browser categories");
+            for (auto& f : factoryPresets()) CHECK (cats.contains (f.category), "factory category listed");
+            auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("megasynth_favs_test.txt");
+            tmp.deleteFile();
+            tgui::Favourites fav (tmp);
+            const auto all = c.filter ("All", "", fav);
+            CHECK (all.size() >= (int) factoryPresets().size(), "All lists every factory preset");
+            const auto& f0 = factoryPresets()[0];
+            auto hit = c.filter ("All", juce::String (f0.name).toUpperCase(), fav);
+            bool found = false; for (int i : hit) found |= c[i].factory && c[i].index == 0;
+            CHECK (found, "search finds a preset by name (any case)");
+            auto cat0 = c.filter (f0.category, "", fav);
+            bool only = cat0.size() > 0; for (int i : cat0) only &= c[i].category == f0.category;
+            CHECK (only, "category filter");
+            CHECK (c.filter ("All", "zzqq-no-such-patch", fav).isEmpty(), "search with no match");
+            const auto words = juce::String (f0.category) + " " + juce::String (f0.name).upToFirstOccurrenceOf (" ", false, false);
+            CHECK (c.filter ("All", words, fav).size() > 0, "several words, all must match");
+            CHECK (c.filter ("Favourites", "", fav).isEmpty(), "no favourites yet");
+            fav.toggle (c[all[2]].key());
+            CHECK (c.filter ("Favourites", "", fav).size() == 1, "favourite added");
+            tgui::Favourites fav2 (tmp);
+            CHECK (fav2.contains (c[all[2]].key()), "favourites saved");
+            fav2.toggle (c[all[2]].key());
+            CHECK (tgui::Favourites (tmp).all().isEmpty(), "favourite removed");
+            tmp.deleteFile();
+        }
+        {
+            // window size memory
+            auto p = make(); p->uiWidth = 1500;
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            std::cout << "  editor " << ed->getWidth() << "x" << ed->getHeight() << std::endl;
+            CHECK (ed->getWidth() == 1500 && std::abs (ed->getHeight() - 1075) <= 1, "editor opens at the project's size");
+            ed->setSize (900, 645);
+            CHECK (p->uiWidth.load() == 900, "resizing is remembered");
+            auto q = make();
+            std::unique_ptr<juce::AudioProcessorEditor> e2 (q->createEditor());
+            CHECK (e2->getWidth() == 1080, "new projects open at 90%");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PLAYONLY", {}).isNotEmpty())
+    {
+        playTests();
+        std::cout << (failures == 0 ? "PLAY TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_FXONLY", {}).isNotEmpty())
     {
         fxTests();
@@ -2468,6 +2636,7 @@ int main()
 
     dnaTests();
     fxTests();
+    playTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {

@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "UI/PatchBrowser.h"
 
 namespace tgui
 {
@@ -80,6 +81,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
     bool hasMod = false;
     float modLo = 0, modHi = 0, live = 0;
+    int shownCC = -1; bool shownLearn = false;   // MIDI learn
 };
 
 // Caption + drop-down attached to a choice parameter.
@@ -313,7 +315,12 @@ private:
     juce::OwnedArray<tgui::Knob> headerKnobs;
     std::unique_ptr<tgui::Choice> qualityChoice;
     juce::ComboBox patchBox;
-    juce::TextButton patchPrev { "<" }, patchNext { ">" }, saveBtn { "Save Patch" };
+    juce::TextButton patchPrev { "<" }, patchNext { ">" }, saveBtn { "Save" }, browseBtn { "Browse" };
+    juce::TextButton abA { "A" }, abB { "B" }, abCopy { "Copy" }, sizeBtn { "Size" };
+    std::unique_ptr<tgui::PatchBrowser> browser;
+    void showBrowser (bool);
+    void showSizeMenu();
+    bool sizeReady = false;   // the window size is only remembered once the editor has opened at its size
     juce::Array<juce::File> patchFiles;
     juce::String lastShownName;
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
@@ -328,6 +335,12 @@ private:
     int matrixTab = -1;
     uint32_t lastRouteVersion = 0;
     tgui::XYPad* xyPad = nullptr;
+    juce::Component* perfXY = nullptr;   // Perform page
+    juce::ToggleButton perfMorphBtn { "Morph between scenes" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> perfMorphAtt;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> perfAtts;
+    juce::Label perfSeed;
+    juce::TextButton perfSeedDown { "<" }, perfSeedUp { ">" }, perfNewSeed { "New seed" }, perfCommit { "Commit" };
     juce::Label* dnaInfo = nullptr;
     juce::TextButton mutNew { "New seed" }, mutPrev { "<" }, mutNext { ">" }, mutCommit { "Commit" };
     juce::Label mutSeedLabel, mutHistLabel;

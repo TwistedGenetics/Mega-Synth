@@ -135,6 +135,7 @@ MegaSynthProcessor::MegaSynthProcessor()
     engine.setModulation (&routes, &modInputs, &scenes);
     engine.setDnaSequencer (&dnaSteps);
     engine.fx().setRack (&fxRack);
+    for (auto& c : ccMap) c.store (-1);
     normTable();
     addListener (this);
     lastStepsVersion = steps.getVersion();
@@ -195,6 +196,37 @@ bool MegaSynthProcessor::dnaGateRouted() const
     return false;
 }
 
+void MegaSynthProcessor::midiLearn (int param) { learnParam.store (param); midiMapVersion.fetch_add (1); }
+void MegaSynthProcessor::midiForget (int param)
+{
+    for (auto& c : ccMap) { int expect = param; c.compare_exchange_strong (expect, -1); }
+    if (learnParam.load() == param) learnParam.store (-1);
+    midiMapVersion.fetch_add (1);
+}
+int MegaSynthProcessor::ccForParam (int param) const
+{
+    for (int c = 0; c < 128; ++c) if (ccMap[(size_t) c].load() == param) return c;
+    return -1;
+}
+juce::String MegaSynthProcessor::midiMapToString() const
+{
+    juce::StringArray a;
+    for (int c = 0; c < 128; ++c) { const int p = ccMap[(size_t) c].load(); if (p >= 0 && p < P_COUNT) a.add (juce::String (c) + ":" + kParamIds[p]); }
+    return a.joinIntoString (",");
+}
+void MegaSynthProcessor::midiMapFromString (const juce::String& s)
+{
+    for (auto& c : ccMap) c.store (-1);
+    juce::StringArray a; a.addTokens (s, ",", {});
+    for (auto& e : a)
+    {
+        const int cc = e.upToFirstOccurrenceOf (":", false, false).getIntValue();
+        const int p = tg::indexForId (e.fromFirstOccurrenceOf (":", false, false));
+        if (cc >= 0 && cc < 120 && p >= 0) ccMap[(size_t) cc].store (p);
+    }
+    midiMapVersion.fetch_add (1);
+}
+
 void MegaSynthProcessor::setParamFromAudio (int index, float plain)
 {
     auto* p = params[(size_t) index];
@@ -242,6 +274,20 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
     {
         const int cc = m.getControllerNumber();
         const float v = m.getControllerValue() / 127.0f;
+        // MIDI learn: the first controller moved after "MIDI Learn" is mapped to that parameter
+        if (cc < 120)
+        {
+            const int learn = learnParam.load();
+            if (learn >= 0)
+            {
+                for (auto& c : ccMap) { int expect = learn; c.compare_exchange_strong (expect, -1); }
+                ccMap[(size_t) cc].store (learn);
+                learnParam.store (-1);
+                midiMapVersion.fetch_add (1);
+            }
+            const int mapped = ccMap[(size_t) cc].load();
+            if (mapped >= 0 && mapped < P_COUNT) params[(size_t) mapped]->setValueNotifyingHost (v);
+        }
         if (cc == juce::roundToInt (snap.f (P_ccANum))) modInputs.ccA = v;
         if (cc == juce::roundToInt (snap.f (P_ccBNum))) modInputs.ccB = v;
         if (cc == 74) modInputs.mpeSlide[ch - 1] = v;              // MPE slide (Y)
@@ -661,6 +707,8 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("dnaSeqSteps", dnaSteps.toString(), nullptr);   // pattern A lane 1, as older versions read it
     state.setProperty ("dnaSeq2", dnaSteps.toJson(), nullptr);         // everything
     state.setProperty ("fxRack", juce::JSON::toString (fxRack.toVar(), true), nullptr);
+    state.setProperty ("midiMap", midiMapToString(), nullptr);        // MIDI learn belongs to the project, not the patch
+    state.setProperty ("uiWidth", uiWidth.load(), nullptr);
     state.setProperty ("scenes", juce::JSON::toString (scenes.toVar(), true), nullptr);
     state.setProperty ("sceneEdit", getEditScene(), nullptr);
     state.setProperty ("macroNames", macroNamesJoined(), nullptr);
@@ -696,6 +744,8 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 5) setDnaDefaultsForOldPatch();
     if (version < 6) setFxDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
+    midiMapFromString (tree.getProperty ("midiMap").toString());
+    if (tree.hasProperty ("uiWidth")) uiWidth.store ((int) tree.getProperty ("uiWidth"));
 
     if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
@@ -1232,6 +1282,27 @@ void MegaSynthProcessor::markOriginal()
 {
     const juce::ScopedLock sl (historyLock);
     original = captureSnapshot ("Original");
+    abOther = original;
+    abSel = 0;
+}
+
+void MegaSynthProcessor::abSelect (int slot)
+{
+    const juce::ScopedLock sl (historyLock);
+    slot = slot != 0 ? 1 : 0;
+    if (slot == abSel) return;
+    pushHistory ("Edit");
+    auto current = captureSnapshot (slot == 0 ? "Compare A" : "Compare B");
+    if (abOther.params.isValid()) restoreSnapshot (abOther);
+    abOther = std::move (current);
+    abSel = slot;
+    pushHistory (slot == 0 ? "Compare A" : "Compare B");
+}
+
+void MegaSynthProcessor::abCopyToOther()
+{
+    const juce::ScopedLock sl (historyLock);
+    abOther = captureSnapshot ("Copy");
 }
 
 void MegaSynthProcessor::undo()

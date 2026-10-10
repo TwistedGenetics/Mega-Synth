@@ -181,9 +181,22 @@ Knob::Knob (MegaSynthProcessor& p, int idx, const juce::String& cap, juce::Colou
 void Knob::showMenu()
 {
     const auto& m = tg::meta (paramIndex);
-    if (! m.modulatable) return;
     juce::PopupMenu menu, add;
     menu.addSectionHeader (m.name);
+    const int cc = proc.ccForParam (paramIndex);
+    menu.addItem (5001, proc.learningParam() == paramIndex ? "MIDI Learn: move a controller..." : "MIDI Learn");
+    if (cc >= 0) menu.addItem (5002, "Forget MIDI (CC " + juce::String (cc) + ")");
+    menu.addSeparator();
+    if (! m.modulatable)
+    {
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&slider), [this] (int r)
+        {
+            if (r == 5001) proc.midiLearn (paramIndex);
+            else if (r == 5002) proc.midiForget (paramIndex);
+            updateMod(); repaint();
+        });
+        return;
+    }
     SrcKind lastKind = K_NONE;
     for (int s = 1; s < MS_COUNT; ++s)
     {
@@ -222,7 +235,9 @@ void Knob::showMenu()
                             }
                             else if (r >= 2000 && r < 2000 + kNumRoutes) { if (onShowRoute) onShowRoute (r - 2000); }
                             else if (r >= 3000 && r < 3000 + kNumRoutes) proc.clearRoute (r - 3000);
-                            updateMod();
+                            else if (r == 5001) proc.midiLearn (paramIndex);
+                            else if (r == 5002) proc.midiForget (paramIndex);
+                            updateMod(); repaint();
                         });
 }
 
@@ -244,10 +259,25 @@ void Knob::updateMod()
         hasMod = h; modLo = lo; modHi = hi; live = lv;
         repaint();
     }
+    const int cc = proc.ccForParam (paramIndex);
+    const bool learning = proc.learningParam() == paramIndex;
+    if (cc != shownCC || learning != shownLearn) { shownCC = cc; shownLearn = learning; repaint(); }
 }
 
 void Knob::paintOverChildren (juce::Graphics& g)
 {
+    // MIDI learn: the mapped controller, or an outline while waiting for one
+    if (shownLearn)
+    {
+        g.setColour (col::accent);
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 6.0f, 2.0f);
+    }
+    if (shownCC >= 0 || shownLearn)
+    {
+        g.setColour (shownLearn ? col::accent : col::muted);
+        g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
+        g.drawText (shownLearn ? "LEARN" : "CC" + juce::String (shownCC), getLocalBounds().removeFromTop (14).removeFromRight (34), juce::Justification::centredRight);
+    }
     if (! hasMod) return;
     const auto layout = slider.getLookAndFeel().getSliderLayout (slider);
     const auto bounds = layout.sliderBounds.toFloat().translated ((float) slider.getX(), (float) slider.getY()).reduced (3.0f);
@@ -972,6 +1002,7 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     : AudioProcessorEditor (&p), proc (p),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
+    const int savedWidth = p.uiWidth.load();   // read before any resize below overwrites it
     setLookAndFeel (&look);
     addAndMakeVisible (content);
     tooltips = std::make_unique<juce::TooltipWindow> (this, 600);
@@ -1010,7 +1041,18 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     subtitle.setVisible (false);
 
     // ---- patch browser
-    for (auto* b : { &patchPrev, &patchNext, &saveBtn }) content.addAndMakeVisible (*b);
+    for (auto* b : { &patchPrev, &patchNext, &saveBtn, &browseBtn, &abA, &abB, &abCopy, &sizeBtn }) content.addAndMakeVisible (*b);
+    browseBtn.setTooltip ("Browse patches: search, categories, favourites, load as you browse");
+    browseBtn.onClick = [this] { showBrowser (browser == nullptr || ! browser->isVisible()); };
+    abA.setTooltip ("A/B compare: play version A of this patch");
+    abB.setTooltip ("A/B compare: play version B. Both start as the loaded patch; edit one, then switch to hear the difference.");
+    abCopy.setTooltip ("Copy the version you're playing to the other slot");
+    for (auto* b : { &abA, &abB }) { b->setClickingTogglesState (false); b->setColour (juce::TextButton::buttonOnColourId, col::accent.withAlpha (0.55f)); }
+    abA.onClick = [this] { proc.abSelect (0); setStatus ("Playing A"); };
+    abB.onClick = [this] { proc.abSelect (1); setStatus ("Playing B"); };
+    abCopy.onClick = [this] { proc.abCopyToOther(); setStatus (proc.abSlot() == 0 ? "Copied A to B" : "Copied B to A"); };
+    sizeBtn.setTooltip ("Window size (or drag the bottom-right corner). The size is saved with your project.");
+    sizeBtn.onClick = [this] { showSizeMenu(); };
     content.addAndMakeVisible (patchBox);
     patchBox.setTooltip ("Saved patches (Music/Mega Synth/Patches)");
     patchBox.onChange = [this]
@@ -1096,7 +1138,14 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     setResizable (true, true);
     setResizeLimits (kDesignW * 2 / 3, kDesignH * 2 / 3, kDesignW * 2, kDesignH * 2);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) kDesignW / kDesignH);
-    setSize (kDesignW * 9 / 10, kDesignH * 9 / 10);   // starts at 90% so it fits laptop screens; drag the corner to resize
+    {
+        // the project's saved size, otherwise 90% so it fits laptop screens; drag the corner to resize
+        const int saved = savedWidth;
+        const int w = saved > 0 ? juce::jlimit (kDesignW * 2 / 3, kDesignW * 2, saved) : kDesignW * 9 / 10;
+        setSize (w, juce::roundToInt (w * (double) kDesignH / kDesignW));
+        sizeReady = true;
+        if (sizeReady) proc.uiWidth = getWidth();
+    }
     // Inside a DAW, never take the computer keyboard: clicking a control would
     // otherwise steal keys from the host's own QWERTY keyboard (e.g. Live's
     // Computer MIDI Keyboard). The standalone app keeps QWERTY note entry.
@@ -1130,6 +1179,80 @@ void MegaSynthEditor::buildPages()
         return page;
     };
     auto sec = [this] (Page* page, const juce::String& t, juce::Colour c) { return page->own (new Section (proc, t, c)); };
+
+    // ---------------------------------------------------------------- Perform
+    {
+        // the controls you reach for while playing: macros, scenes, Mutate, the DNA Sequencer and the main sound knobs
+        auto* page = addPage ("Perform");
+        auto* macSec = sec (page, "Macros", col::accent);
+        juce::Array<MacroCell*> cells;
+        for (int i = 0; i < 8; ++i) { auto* m = page->own (new MacroCell (proc, i)); macroCells.add (m); cells.add (m); }
+        auto* scSec = sec (page, "Scenes", col::mod);
+        auto* pad = page->own (new XYPad (proc));
+        perfXY = pad;
+        perfMorphBtn.setColour (juce::ToggleButton::tickColourId, col::mod);
+        perfMorphAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_sceneMorph], perfMorphBtn);
+        page->addAndMakeVisible (perfMorphBtn);
+
+        auto* mu = sec (page, "Mutate", col::wavetable);
+        mu->knob (P_mutAmount, "Mutate");
+        auto* seedBox = new juce::Component();
+        perfSeed.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
+        perfSeed.setJustificationType (juce::Justification::centred);
+        perfSeed.setColour (juce::Label::textColourId, col::text);
+        perfSeed.setText ("Seed #" + juce::String (juce::roundToInt (proc.param (P_mutSeed)->convertFrom0to1 (proc.param (P_mutSeed)->getValue()))), juce::dontSendNotification);
+        seedBox->addAndMakeVisible (perfSeed);
+        for (auto* b : { &perfSeedDown, &perfSeedUp, &perfNewSeed, &perfCommit }) seedBox->addAndMakeVisible (*b);
+        perfSeedDown.onClick = [this] { proc.mutateStepSeed (-1); };
+        perfSeedUp.onClick = [this] { proc.mutateStepSeed (1); };
+        perfNewSeed.onClick = [this] { proc.mutateNewSeed(); };
+        perfCommit.onClick = [this] { proc.commitMutation(); setStatus ("Mutation committed"); };
+        perfSeed.setBounds (30, 0, 120, 30); perfSeedDown.setBounds (0, 0, 28, 30); perfSeedUp.setBounds (152, 0, 28, 30);
+        perfNewSeed.setBounds (0, 38, 88, 28); perfCommit.setBounds (92, 38, 88, 28);
+        mu->add (seedBox, 180, 70);
+
+        auto* ds = sec (page, "DNA Sequencer", col::wavetable);
+        auto* dsOn = new juce::ToggleButton ("On");
+        dsOn->setColour (juce::ToggleButton::tickColourId, col::wavetable);
+        ds->add (dsOn, 54, 40);
+        perfAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[P_dsOn], *dsOn));
+        auto* pat = new Segmented (proc, P_dsPattern, { "A", "B", "C", "D" }, col::wavetable);
+        ds->add (pat, 150, 30);
+        ds->newRow();
+        ds->knob (P_dsSwing, "Swing");
+        ds->knob (P_dsDensity, "Density");
+        ds->knob (P_dsDepth, "Depth");
+
+        auto* snd = sec (page, "Sound", col::filter);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_filterCutoff, "Cutoff" }, { P_filterRes, "Resonance" }, { P_filterDrive, "Drive" },
+                               { P_fEnvAmt, "Env Amt" }, { P_filter2Cutoff, "F2 Cutoff" }, { P_filterBalance, "F1 / F2" } })
+            snd->knob (idx, n);
+        snd->newRow();
+        for (auto [idx, n] : { std::pair<int, const char*> { P_delayMix, "Delay" }, { P_reverbMix, "Reverb" }, { P_vshDepth, "Pump" },
+                               { P_mbcDepth, "OTT" }, { P_smpDrive, "Crunch" } })
+            snd->knob (idx, n);
+        auto* rpt = new StutterPad (proc);
+        snd->add (rpt, 130, 70);
+        auto* help = page->own (new juce::Label ({}, "Right-click any knob for MIDI Learn, modulation and macros. "
+                                                     "Pump, OTT and Crunch need the Volume Shaper, Multiband and Vintage Sampler switched on (Effects > Rack); "
+                                                     "the repeat pad needs Beat Repeat."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (11.5f)));
+        page->onResize = [this, page, macSec, cells, scSec, pad, mu, ds, snd, help]
+        {
+            const int g = 10, W = page->getWidth(), H = page->getHeight();
+            macSec->setBounds (g, g, W - 2 * g, 160);
+            const int cw = (W - 2 * g - 20) / 8;
+            for (int i = 0; i < cells.size(); ++i) cells[i]->setBounds (g + 10 + i * cw, g + 32, cw - 8, 120);
+            scSec->setBounds (g, 180, 300, H - 180 - g - 22);
+            pad->setBounds (g + 20, 214, 260, 260);
+            perfMorphBtn.setBounds (g + 20, 482, 200, 26);
+            mu->setBounds (320, 180, 330, 150);
+            ds->setBounds (320, 340, 330, H - 340 - g - 22);
+            snd->setBounds (660, 180, W - g - 660, H - 180 - g - 22);
+            help->setBounds (g, H - 28, W - 2 * g, 20);
+        };
+    }
 
     // ---------------------------------------------------------------- Overview
     {
@@ -2105,18 +2228,25 @@ void MegaSynthEditor::resized()
     const float scale = (float) getWidth() / (float) kDesignW;
     content.setBounds (0, 0, kDesignW, kDesignH);
     content.setTransform (juce::AffineTransform::scale (scale));
+    proc.uiWidth = getWidth();
 
     title.setBounds (14, 8, 220, 30);
     patchPrev.setBounds (14, 42, 26, 24);
-    patchBox.setBounds (44, 42, 250, 24);
-    patchNext.setBounds (298, 42, 26, 24);
-    saveBtn.setBounds (330, 42, 100, 24);
+    patchBox.setBounds (44, 42, 196, 24);
+    patchNext.setBounds (244, 42, 26, 24);
+    browseBtn.setBounds (274, 42, 62, 24);
+    saveBtn.setBounds (340, 42, 90, 24);
     qualityChoice->setBounds (330, 0, 100, 40);
     int x = 440;
     for (auto* k : headerKnobs) { k->setBounds (x, 4, 72, 80); x += 74; }
     copyBtn.setBounds (820, 10, 120, 28);
     pasteBtn.setBounds (820, 44, 120, 28);
-    initBtn.setBounds (948, 10, 120, 28);
+    initBtn.setBounds (948, 10, 58, 28);
+    sizeBtn.setBounds (1010, 10, 58, 28);
+    abA.setBounds (1076, 10, 30, 28);
+    abB.setBounds (1108, 10, 30, 28);
+    abCopy.setBounds (1140, 10, 46, 28);
+    if (browser != nullptr) browser->setBounds (0, 88, kDesignW, 640);
     undoBtn.setBounds (948, 44, 58, 28);
     redoBtn.setBounds (1010, 44, 58, 28);
     originalBtn.setBounds (1076, 44, 110, 28);
@@ -2153,6 +2283,40 @@ void MegaSynthEditor::refreshPatchList()
     for (int i = 0; i < (int) factory.size(); ++i)
         if (name == factory[(size_t) i].name) { patchBox.setSelectedId (kFactoryIdBase + i + 1, juce::dontSendNotification); return; }
     patchBox.setText (name, juce::dontSendNotification);
+}
+
+void MegaSynthEditor::showBrowser (bool show)
+{
+    if (show)
+    {
+        if (browser == nullptr)
+        {
+            browser = std::make_unique<tgui::PatchBrowser> (proc);
+            browser->onLoadFactory = [this] (int i) { loadFactory (i); };
+            browser->onLoadFile = [this] (const juce::File& f) { loadPatch (f); };
+            browser->onClose = [this] { showBrowser (false); };
+            content.addChildComponent (*browser);
+            browser->setBounds (0, 88, kDesignW, 640);
+        }
+        browser->open();
+    }
+    else if (browser != nullptr) browser->setVisible (false);
+    browseBtn.setToggleState (show, juce::dontSendNotification);
+}
+
+void MegaSynthEditor::showSizeMenu()
+{
+    juce::PopupMenu m;
+    const int pcts[] = { 75, 90, 100, 125, 150 };
+    const int cur = juce::roundToInt (100.0 * getWidth() / kDesignW);
+    for (int pc : pcts) m.addItem (pc, juce::String (pc) + "%", true, std::abs (pc - cur) <= 1);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sizeBtn),
+                     [safe = juce::Component::SafePointer<MegaSynthEditor> (this)] (int r)
+                     {
+                         if (safe == nullptr || r <= 0) return;
+                         const int w = kDesignW * r / 100;
+                         safe->setSize (w, juce::roundToInt (w * (double) kDesignH / kDesignW));
+                     });
 }
 
 void MegaSynthEditor::loadFactory (int index)
@@ -2315,6 +2479,8 @@ bool MegaSynthEditor::keyPressed (const juce::KeyPress& k)
 
 void MegaSynthEditor::timerCallback()
 {
+    abA.setToggleState (proc.abSlot() == 0, juce::dontSendNotification);
+    abB.setToggleState (proc.abSlot() == 1, juce::dontSendNotification);
     // computer-keyboard octave (A = C4 at octave 0, like the browser version)
     const int kbOct = juce::roundToInt (proc.param (P_keyboardOctave)->convertFrom0to1 (proc.param (P_keyboardOctave)->getValue()));
     if (kbOct != lastOct)
@@ -2381,6 +2547,13 @@ void MegaSynthEditor::timerCallback()
         static_cast<NetworkView*> (netView)->update();
         static_cast<SpectrumView*> (specView)->update();
         static_cast<DnaStrandView*> (dnaView)->update();
+    }
+    if (perfXY != nullptr && perfXY->isShowing())
+    {
+        static_cast<XYPad*> (perfXY)->update();
+        for (auto* m : macroCells) m->update();
+        const int seed = juce::roundToInt (proc.param (P_mutSeed)->convertFrom0to1 (proc.param (P_mutSeed)->getValue()));
+        perfSeed.setText ("Seed #" + juce::String (seed), juce::dontSendNotification);
     }
     if (mutSeedLabel.isShowing())
     {

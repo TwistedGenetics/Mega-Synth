@@ -115,6 +115,15 @@ public:
     void resetToDefaults();
     bool loadFactoryPreset (int index);
     void copyFilter1To2();
+    // ---- MIDI learn (saved with the project; patches don't change it)
+    void midiLearn (int param);              // the next controller moved is mapped to param
+    void midiForget (int param);
+    int ccForParam (int param) const;        // -1 when not mapped
+    int learningParam() const { return learnParam.load(); }
+    uint32_t getMidiMapVersion() const { return midiMapVersion.load(); }
+    juce::String midiMapToString() const;
+    void midiMapFromString (const juce::String&);
+    std::atomic<int> uiWidth { 0 };          // editor width the project was saved with (0 = default)
     // DNA Sequencer editing (message thread, undoable). lane 0/1; acts on the selected pattern.
     enum DnaEdit { DE_Generate, DE_SeedDown, DE_SeedUp, DE_Copy, DE_Paste, DE_ShiftLeft, DE_ShiftRight, DE_Reverse, DE_Clear };
     void dnaEdit (DnaEdit, int lane);
@@ -142,6 +151,10 @@ public:
     void returnToOriginal();
     void pushHistory (const juce::String& label);   // record the current state now
     void markOriginal();                             // the current state becomes "the original"
+    // ---- A/B compare: two versions of the patch to switch between (both start as the loaded patch)
+    int abSlot() const { return abSel; }
+    void abSelect (int slot);                         // 0 = A, 1 = B (undoable)
+    void abCopyToOther();                             // the other slot becomes a copy of this one
     juce::String lastHistoryLabel() const { return historyPos >= 0 ? history[(size_t) historyPos].label : juce::String(); }
 
 private:
@@ -178,6 +191,8 @@ private:
     std::vector<Snapshot> history;
     int historyPos = -1;
     Snapshot original;
+    Snapshot abOther;   // the slot not being played
+    int abSel = 0;
     bool restoring = false;
     std::atomic<bool> snapshotPending { false };
     int snapshotDelay = 0;
@@ -186,6 +201,9 @@ private:
     tg::DnaLane dnaClip {};         // DNA Sequencer copy / paste
     bool dnaClipValid = false;
     int midiPos = 0;                // sample position of the MIDI event being handled
+    std::array<std::atomic<int>, 128> ccMap;   // MIDI learn: controller -> parameter (-1 = none)
+    std::atomic<int> learnParam { -1 };
+    std::atomic<uint32_t> midiMapVersion { 0 };
     double fxBeatStart = 0.0, fxBeatInc = 0.0, fxBeatsInternal = 0.0;   // the effects' beat clock for this block
     uint32_t lastRackVersion = 0;
     bool dnaGateRouted() const;     // a Mod Matrix route uses the DNA step gate

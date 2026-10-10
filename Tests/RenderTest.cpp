@@ -520,6 +520,82 @@ int main()
         return 0;
     }
 
+    // Demo renders of the Jungle / DnB bank in a simulated DAW: 172 BPM, play pressed mid-bar, 8 bars
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_DEMOS", {}).isNotEmpty())
+    {
+        struct FakeHead : juce::AudioPlayHead
+        {
+            PositionInfo info;
+            juce::Optional<PositionInfo> getPosition() const override { return info; }
+        } head;
+        const double bpm = 172.0, startPpq = 2.5, beats = 32.0;
+        const auto& list = factoryPresets();
+        for (int idx = 0; idx < (int) list.size(); ++idx)
+        {
+            if (juce::String (list[(size_t) idx].category) != "Jungle / DnB") continue;
+            const juce::String desc (list[(size_t) idx].description);
+            auto p = std::make_unique<MegaSynthProcessor>();
+            p->setPlayConfigDetails (0, 2, sr, 256); p->prepareToPlay (sr, 256);
+            p->setPlayHead (&head);
+            p->loadFactoryPreset (idx);
+            // notes as (beat from the start, length in beats, note, velocity)
+            struct N { double at, len; int note, vel; };
+            std::vector<N> notes;
+            auto bars = [&] (std::function<void (double)> oneBar2) { for (double b = 0; b < beats; b += 8.0) oneBar2 (b); };
+            if (desc.startsWith ("Bass"))
+                bars ([&] (double o)
+                {
+                    const int line[16] = { 41, 0, 41, 44, 0, 41, 39, 0, 41, 0, 46, 44, 0, 39, 41, 0 };
+                    for (int k = 0; k < 16; ++k) if (line[k]) notes.push_back ({ o + k * 0.5, 0.42, line[k] - 12, 105 });
+                });
+            else if (desc.startsWith ("Pad"))
+                bars ([&] (double o)
+                {
+                    for (int n : { 53, 56, 60, 63 }) notes.push_back ({ o, 3.9, n, 90 });
+                    for (int n : { 49, 53, 56, 60 }) notes.push_back ({ o + 4, 3.9, n, 90 });
+                });
+            else if (desc.startsWith ("Lead"))
+                bars ([&] (double o)
+                {
+                    const int mel[16] = { 65, 0, 68, 70, 72, 0, 70, 68, 65, 0, 63, 65, 68, 0, 0, 0 };
+                    for (int k = 0; k < 16; ++k) if (mel[k]) notes.push_back ({ o + k * 0.5, mel[k + 1 < 16 ? k + 1 : 15] == 0 ? 0.95 : 0.45, mel[k], 100 });
+                });
+            else   // stabs and plucks: off-beat chords
+                bars ([&] (double o)
+                {
+                    for (double t : { 0.0, 0.75, 1.5, 2.5, 3.25, 4.0, 4.75, 5.5, 6.5, 7.0 })
+                        for (int n : { 53, 56, 60 }) notes.push_back ({ o + t, 0.22, n, 100 });
+                });
+            if (juce::String (list[(size_t) idx].name) == "Ragga Siren Stab")
+                notes.push_back ({ 13.0, 1.0, 28, 100 });   // hold E0 for a beat: Beat Repeat
+            const double spb = 60.0 / bpm * sr;
+            const int total = (int) ((beats + 2.0) * spb);
+            juce::AudioBuffer<float> out (2, total), buf (2, 256);
+            for (int pos = 0; pos < total; pos += 256)
+            {
+                const int n = std::min (256, total - pos);
+                buf.setSize (2, n, false, false, true); buf.clear();
+                const double ppq = startPpq + pos / spb;
+                head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+                head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+                head.info.setTimeSignature (juce::AudioPlayHead::TimeSignature { 4, 4 });
+                juce::MidiBuffer midi;
+                for (auto& nt : notes)
+                {
+                    const double lead = 4.0 - startPpq;   // notes sit on the song's bars; play was pressed mid-bar
+                    const int on = (int) std::lround ((nt.at + lead) * spb), off = (int) std::lround ((nt.at + nt.len + lead) * spb);
+                    if (on >= pos && on < pos + n) midi.addEvent (juce::MidiMessage::noteOn (1, nt.note, (juce::uint8) nt.vel), on - pos);
+                    if (off >= pos && off < pos + n) midi.addEvent (juce::MidiMessage::noteOff (1, nt.note), off - pos);
+                }
+                p->processBlock (buf, midi);
+                for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, buf, c, 0, n);
+            }
+            std::cout << list[(size_t) idx].name << ": peak " << out.getMagnitude (0, total) << std::endl;
+            writeWav (out, sr, "demo_" + juce::String (list[(size_t) idx].name).replaceCharacter (' ', '_') + ".wav");
+        }
+        return 0;
+    }
+
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BROWSERSHOT", {}).isNotEmpty())
     {
         auto p = make();
@@ -997,6 +1073,22 @@ int main()
             CHECK (aliasSp > -3.0, "SP-1200 aliases (no anti-alias filter)");
             const double sp11 = bandDb (sp, 11040.0), s911 = bandDb (s9, 11040.0);
             CHECK (s911 < sp11 - 15.0, "S950's anti-alias filter removes most of the alias (" + juce::String (sp11 - s911, 1) + " dB less)");
+            {   // hiss follows the signal: there while playing, gone in silence
+                auto w = params(); w[P_smpModel] = 2; w[P_smpNoise] = 1.0f; w[P_smpDrive] = 0;
+                VintageSampler t; t.prepare (fs);
+                const int N = 96000; std::vector<float> l (N), r (N);
+                for (int i = 0; i < N; ++i) l[(size_t) i] = r[(size_t) i] = i < 24000 ? 0.3f * (float) std::sin (2.0 * kPi * 220.0 * i / fs) : 0.0f;
+                t.process (l.data(), r.data(), N, w.data(), ctx);
+                float tail = 0; for (int i = N - 4800; i < N; ++i) tail = std::max (tail, std::abs (l[(size_t) i]));
+                auto clean = params(); clean[P_smpModel] = 2; clean[P_smpNoise] = 0.0f; clean[P_smpDrive] = 0;
+                VintageSampler u; u.prepare (fs);
+                std::vector<float> l2 (24000), r2 (24000);
+                for (int i = 0; i < 24000; ++i) l2[(size_t) i] = r2[(size_t) i] = 0.3f * (float) std::sin (2.0 * kPi * 220.0 * i / fs);
+                u.process (l2.data(), r2.data(), 24000, clean.data(), ctx);
+                double diff = 0; for (int i = 4800; i < 24000; ++i) diff += std::pow (l[(size_t) i] - l2[(size_t) i], 2.0);
+                diff = std::sqrt (diff / 19200.0);
+                CHECK (tail < 1.0e-5f && diff > 0.0005, "sampler hiss rides on the signal (playing " + juce::String (20 * std::log10 (diff), 1) + " dB, silence " + juce::String (tail) + ")");
+            }
         }
         // flanger: the delay sweeps 0.3 .. 10.3 ms with Manual; through-zero lines up with the dry path
         {
@@ -1415,6 +1507,21 @@ int main()
             t->setStateInformation (mb.getData(), (int) mb.getSize());
             t->timerCallback();
             CHECK (t->getPatchName() == p->getPatchName(), "restoring state cancels a pending program change");
+        }
+
+        // every factory preset goes quiet after the notes stop (no hiss or hum on an idle track)
+        {
+            const auto& list = factoryPresets();
+            for (int i = 0; i < (int) list.size(); ++i)
+            {
+                auto p = make(); p->loadFactoryPreset (i);
+                render (*p, 0.6, chord (0.0, 0.5, { 48, 55 }));
+                render (*p, 12.0, {});
+                auto st = render (*p, 0.5, {});
+                const double db = 20.0 * std::log10 (st.peak + 1e-12);
+                if (db > -90.0) std::cout << "  idle after 12 s: " << list[(size_t) i].name << " " << juce::String (db, 1) << " dBFS" << std::endl;
+                CHECK (db < -80.0, juce::String ("goes quiet when idle: ") + list[(size_t) i].name);
+            }
         }
 
         // DNA clock settings can be modulated (Swing, Start Offset, Free Rate, Lane 2 Steps)

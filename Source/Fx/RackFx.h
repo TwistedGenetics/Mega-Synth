@@ -155,6 +155,7 @@ private:
     Biquad aa[4], out1;
     double ph = 0.0;
     float held[2] { 0, 0 }, lastIn[2] { 0, 0 };
+    float hissEnv = 0.0f;   // the hiss follows the input level, so silence stays silent
     uint32_t rng = 0x1234567u;
     int lastModel = -1; float lastRate = -1, lastCut = -1, lastRes = -1;
 };

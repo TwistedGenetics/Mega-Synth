@@ -82,6 +82,7 @@ void VintageSampler::reset()
     for (auto& b : aa) b.reset();
     out1.reset(); ph = 0.0;
     held[0] = held[1] = lastIn[0] = lastIn[1] = 0.0f;
+    hissEnv = 0.0f;
     lastModel = -1; lastRate = lastCut = lastRes = -1;
 }
 
@@ -114,6 +115,9 @@ void VintageSampler::process (float* L, float* R, int n, const float* v, const F
     const float q = std::pow (2.0f, bits - 1.0f), iq = 1.0f / q;
     const float noise = clampv (v[P_smpNoise], 0.0f, 1.0f) * 0.004f;
     const double inc = rate / sr;
+    // Hiss rides on the signal (fast attack, 0.15 s release) instead of playing through silence, so an
+    // idle track goes properly quiet: full Noise level from -24 dBFS up, fading to none at -60 dBFS.
+    const float hA = coefFor (0.005, sr), hR = coefFor (0.15, sr);
     const bool os = ctx.quality >= 2;   // High: the input clip runs at twice the rate
     auto clip = [&] (float x) { return fastTanh (drive * x) * dNorm; };
     for (int i = 0; i < n; ++i)
@@ -134,10 +138,13 @@ void VintageSampler::process (float* L, float* R, int n, const float* v, const F
             ph -= std::floor (ph);
             for (int c = 0; c < 2; ++c) held[c] = std::round (clampv (y[c], -1.0f, 1.0f) * q) * iq;
         }
+        const float lvl = std::max (std::abs (io[0][i]), std::abs (io[1][i]));
+        hissEnv += (lvl - hissEnv) * (lvl > hissEnv ? hA : hR);
+        const float hiss = hissEnv > 0.001f ? noise * clampv ((20.0f * std::log10 (hissEnv) + 60.0f) / 36.0f, 0.0f, 1.0f) : 0.0f;
         for (int c = 0; c < 2; ++c)
         {
             rng = rng * 1664525u + 1013904223u;
-            float o = held[c] + noise * ((float) (rng >> 8) * (2.0f / 16777216.0f) - 1.0f);
+            float o = held[c] + hiss * ((float) (rng >> 8) * (2.0f / 16777216.0f) - 1.0f);
             if (outMode != 0) o = out1.process (o, c);
             io[c][i] = o;
         }

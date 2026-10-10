@@ -5,6 +5,15 @@
 namespace tg
 {
 
+// "80 Hz", "350 Hz", "1.2 kHz", "20 kHz"
+inline juce::String formatHz (float v)
+{
+    if (juce::roundToInt (v) < 1000) return juce::String (juce::roundToInt (v)) + " Hz";
+    juce::String k (v / 1000.0, v < 9995.0f ? 2 : 1);
+    if (k.containsChar ('.')) k = k.trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+    return k + " kHz";
+}
+
 // Value display, following formatValue() in the browser synth.
 inline juce::String formatParam (int idx, float v)
 {
@@ -52,9 +61,13 @@ inline juce::String formatParam (int idx, float v)
     if (id == "polyphony") return juce::String (juce::roundToInt (v)) + " voices";
     if (id == "supersawVoices") return juce::String (juce::roundToInt (v)) + " voices";
     if (id == "bendRange") return juce::String (juce::roundToInt (v)) + " st";
-    if (id == "filterCutoff") return juce::String (juce::roundToInt (v)) + " Hz";
-    if (id == "fmAmount" || id.startsWith ("fmSlot") || id == "fEnvAmt" || id == "complexFm") return juce::String (juce::roundToInt (v));
-    if (id == "filterRes" || id == "filterDrive" || id == "complexShape") return fixed (v, 1);
+    if (id == "filterCutoff") return formatHz (v);
+    if (id == "fEnvAmt") { const int n = juce::roundToInt (v / 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }   // 100% = 10 kHz
+    if (id == "filterLfoAmt") { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
+    if (id == "filterMix" || id == "filterKeyTrack") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    if (id == "filterDrive") { const double db = 20.0 * std::log10 (std::max (1.0f, v)); return db < 0.05 ? juce::String ("0 dB") : "+" + fixed (db, 1) + " dB"; }
+    if (id == "fmAmount" || id.startsWith ("fmSlot") || id == "complexFm") return juce::String (juce::roundToInt (v));
+    if (id == "filterRes" || id == "complexShape") return fixed (v, 1);
     if (id == "complexRatio") return "x" + fixed (v, 3);
     if (id == "porta") return fixed (v, 3) + " s";
     if (id == "seqTempo") return juce::String (juce::roundToInt (v)) + " BPM";
@@ -78,6 +91,9 @@ inline float parseParam (int idx, const juce::String& text)
 {
     const juce::String id (kParamIds[idx]);
     float v = text.trim().upToFirstOccurrenceOf (" ", false, false).retainCharacters ("-0123456789.").getFloatValue();
+    if (id == "fEnvAmt") return text.contains ("%") || std::abs (v) <= 100.0f ? v * 100.0f : v;   // percent (100% = 10 kHz), or Hz
+    if (id == "filterDrive" && text.containsIgnoreCase ("db")) return std::pow (10.0f, v / 20.0f);
+    if (text.containsIgnoreCase ("khz") || text.trim().endsWithIgnoreCase ("k")) return v * 1000.0f;
     if (text.contains ("%")) v /= 100.0f;
     else if (text.contains ("ms") || ((id == "chorusDepth" || id == "tapeFlutter" || id == "reversePitch") && v > 0.5f)) v /= 1000.0f;
     return v;

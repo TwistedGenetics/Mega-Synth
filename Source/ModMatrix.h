@@ -210,6 +210,8 @@ struct NormTable
 {
     float lo[P_COUNT] {}, span[P_COUNT] {}, skew[P_COUNT] {}, invSkew[P_COUNT] {};
     bool skewed[P_COUNT] {};
+    bool logScale[P_COUNT] {};   // logarithmic (per-octave) parameters: lo * (hi / lo)^n
+    float logSpan[P_COUNT] {};   // ln (hi / lo)
     bool global[P_COUNT] {};     // consumed by the global effects bus rather than by voices
     bool envTime[P_COUNT] {};    // read once at note-on (envelope stages)
     bool modulatable[P_COUNT] {};
@@ -222,6 +224,11 @@ const NormTable& normTable();   // call once from a non-audio thread first (prep
 inline float normFast (const NormTable& t, int i, float plain)
 {
     if (t.span[i] <= 0.0f) return 0.0f;
+    if (t.logScale[i])
+    {
+        const float q = std::log (std::max (plain, t.lo[i]) / t.lo[i]) / t.logSpan[i];
+        return q < 0.0f ? 0.0f : (q > 1.0f ? 1.0f : q);
+    }
     float p = (plain - t.lo[i]) / t.span[i];
     p = p < 0.0f ? 0.0f : (p > 1.0f ? 1.0f : p);
     return t.skewed[i] ? std::pow (p, t.skew[i]) : p;
@@ -230,6 +237,7 @@ inline float normFast (const NormTable& t, int i, float plain)
 inline float plainFast (const NormTable& t, int i, float n)
 {
     n = n < 0.0f ? 0.0f : (n > 1.0f ? 1.0f : n);
+    if (t.logScale[i]) return t.lo[i] * std::exp (n * t.logSpan[i]);
     if (t.skewed[i]) n = n > 0.0f ? std::exp (std::log (n) * t.invSkew[i]) : 0.0f;
     return t.lo[i] + t.span[i] * n;
 }

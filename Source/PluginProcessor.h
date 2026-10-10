@@ -123,7 +123,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 2;
+    static constexpr int kStateVersion = 3;   // 3: filter overhaul (type, slope, mix, key tracking, LFO amount)
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -140,7 +140,8 @@ private:
 public:
     void updateLatency();   // message thread (timer) and prepareToPlay
 private:
-    void resetPatchState();   // every parameter, route, scene, step and sample back to the defaults
+    void resetPatchState();
+    void setFilterDefaultsForOldPatch();   // patches / projects from before the filter overhaul   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();

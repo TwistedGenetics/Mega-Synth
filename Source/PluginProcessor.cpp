@@ -10,10 +10,17 @@ namespace
     // Parameters that only exist in the plugin (not in the browser patch format's "params" block)
     // Parameters added with the modulation matrix (v0.2): stored in the patch's "plugin" block
     // and reset to their defaults when a patch without them is loaded.
+    // Parameters added with the filter overhaul (state version 3)
+    bool isFilterV2Param (const juce::String& id)
+    {
+        return id == "filterType" || id == "filterSlope" || id == "filterMix" || id == "filterKeyTrack" || id == "filterLfoAmt" || id == "filterLfoSrc";
+    }
+
     bool isNewPluginParam (const juce::String& id)
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
-            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality";
+            || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
+            || isFilterV2Param (id);
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -57,6 +64,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MegaSynthProcessor::createLa
     {
         juce::NormalisableRange<float> range (mn, mx, step);
         if (skew > 0) range.setSkewForCentre (skew);
+        if (skew < 0) range = logRange (mn, mx, step);
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { kParamIds[idx], version }, name, range, df,
             juce::AudioParameterFloatAttributes()
@@ -616,8 +624,8 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     // Version 1 (v0.1.x) state has no version number; its parameters, steps and samples
     // map 1:1 onto version 2, so no conversion is needed yet. Later versions migrate here.
     const int version = (int) tree.getProperty ("stateVersion", 1);
-    juce::ignoreUnused (version);
     apvts.replaceState (tree);
+    if (version < 3) setFilterDefaultsForOldPatch();
 
     if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
@@ -806,6 +814,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
             if (extra != nullptr && extra->hasProperty (kParamIds[i])) setPlain (i, (float) (double) extra->getProperty (kParamIds[i]));
             else setPlain (i, meta (i).def);
         }
+        if (extra == nullptr || ! extra->hasProperty ("filterSlope")) setFilterDefaultsForOldPatch();
         routes.fromVar (patch["modMatrix"]);
         dnaSteps.fromString (patch["dnaSequence"].toString());
         scenes.fromVar (patch["scenes"]);
@@ -906,6 +915,25 @@ void MegaSynthProcessor::resetPatchState()
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
+}
+
+void MegaSynthProcessor::setFilterDefaultsForOldPatch()
+{
+    // Before the overhaul every model was a low-pass at its own slope, fully wet, with no key
+    // tracking and no filter LFO: set exactly that, so old patches sound as they did.
+    auto setPlain = [this] (int idx, float plain)
+    {
+        auto* prm = params[(size_t) idx];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->convertTo0to1 (plain));
+        prm->endChangeGesture();
+    };
+    setPlain (P_filterType, (float) FT_LP);
+    setPlain (P_filterSlope, (float) nativeFilterSlope ((int) std::lround (raw[P_filterMode]->load())));
+    setPlain (P_filterMix, 1.0f);
+    setPlain (P_filterKeyTrack, 0.0f);
+    setPlain (P_filterLfoAmt, 0.0f);
+    setPlain (P_filterLfoSrc, 0.0f);
 }
 
 bool MegaSynthProcessor::loadFactoryPreset (int index)

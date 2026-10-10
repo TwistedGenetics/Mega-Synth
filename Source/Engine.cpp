@@ -37,149 +37,6 @@ double syncRate (const ChoiceList& list, int idx, double tempo, double fallback)
 }
 
 //==============================================================================
-// FilterChain: the 17 filter "flavours" of the browser synth, built from the same
-// Web Audio biquad stages, waveshapers and feedback paths.
-enum FilterMode { FM_LP, FM_SALLENKEY, FM_LADDER, FM_STEINER, FM_SVF, FM_OTA, FM_POLIVOKS, FM_SWCAP, FM_ACID,
-                  FM_MS20, FM_OBERHEIM, FM_SEM, FM_TB303, FM_MOOGFAT, FM_ARPODYSSEY, FM_CS15, FM_SH2 };
-
-void FilterChain::configure (int newMode)
-{
-    mode = newMode;
-    fbKind = FbNone; preK = 0; postK = 0; fbGain = 0; ladder = false; limitOut = false; tb303 = false;
-    auto set = [this] (std::initializer_list<Biquad::Type> t)
-    {
-        numStages = 0;
-        for (auto x : t) types[numStages++] = x;
-    };
-    using B = Biquad;
-    switch (mode)
-    {
-        case FM_LP:          set ({ B::LP }); break;
-        case FM_SALLENKEY:   set ({ B::LP, B::LP }); break;
-        case FM_LADDER:      set ({}); ladder = true; break;
-        case FM_STEINER:     set ({ B::HP, B::BP, B::LP }); break;
-        case FM_SVF:         set ({ B::BP, B::LP }); break;
-        case FM_OTA:         set ({ B::LP, B::LP }); preK = 4.0f; break;
-        case FM_POLIVOKS:    set ({ B::HP, B::LP }); postK = 7.0f; break;
-        case FM_SWCAP:       set ({ B::LP, B::NOTCH, B::LP }); break;
-        case FM_MS20:        set ({ B::HP, B::LP }); break;
-        case FM_OBERHEIM:    set ({ B::HP, B::LP }); break;
-        case FM_SEM:         set ({ B::BP, B::LP }); break;
-        case FM_TB303:       set ({}); ladder = true; tb303 = true; limitOut = true; break;
-        case FM_MOOGFAT:     set ({}); ladder = true; break;
-        case FM_ARPODYSSEY:  set ({ B::HP, B::LP }); break;
-        case FM_CS15:        set ({ B::HP, B::BP, B::LP }); break;
-        case FM_SH2:         set ({ B::LP, B::LP }); break;
-        case FM_ACID:
-        default:             set ({ B::LP, B::LP }); preK = 6.0f; limitOut = true; break;
-    }
-    reset();
-}
-
-void FilterChain::reset()
-{
-    for (auto& s : st) s.reset();
-    fbState[0] = fbState[1] = 0;
-    for (auto& ch : ls) for (auto& v : ch) v = 0.0f;
-    for (auto& b : par) b.reset();
-    dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
-    tbX[0] = tbX[1] = tbY[0] = tbY[1] = 0.0f;
-}
-
-void FilterChain::copyChannel (int from, int to)
-{
-    for (auto& s : st) s.copyState (from, to);
-    fbState[to] = fbState[from];
-    for (int k = 0; k < 4; ++k) ls[to][k] = ls[from][k];
-    for (auto& b : par) b.copyState (from, to);
-    dcX[to] = dcX[from]; dcY[to] = dcY[from];
-    tbX[to] = tbX[from]; tbY[to] = tbY[from];
-}
-
-void FilterChain::setLadder (float c, float spread, float k, double sr)
-{
-    for (int i = 0; i < 4; ++i)
-    {
-        const double fc = clampv ((double) std::max (20.0f, c * (1.0f - i * spread)), 10.0, sr * 0.45);
-        const double g = std::tan (kPi * fc / sr);
-        lg[i] = (float) (g / (1.0 + g));
-    }
-    lk = k;
-}
-
-void FilterChain::update (float c, float res, double sr)
-{
-    auto mx = [] (float a, float b) { return std::max (a, b); };
-    auto mn = [] (float a, float b) { return std::min (a, b); };
-    dcR = (float) (1.0 - 2.0 * kPi * 8.0 / sr);
-    auto S = [&] (int k, float f, float q)
-    {
-        if (types[k] == Biquad::HP) f = std::max (20.0f, f * (1.0f - 0.85f * bassKeep));
-        st[k].set (types[k], f, q, sr);
-        if (types[k] == Biquad::BP) par[k].set (Biquad::LP, f, -3.01, sr);   // Butterworth low-pass at the same frequency
-    };
-    switch (mode)
-    {
-        case FM_LP:
-            S (0, c, res); break;
-        case FM_SALLENKEY:
-            S (0, c, mx (0.2f, res * 0.18f));
-            S (1, mx (20, c * 0.92f), mx (0.2f, res * 0.18f)); break;
-        case FM_LADDER:
-            setLadder (c, 0.0f, 4.0f * mn (0.98f, res / 30.0f), sr); break;
-        case FM_STEINER:
-            S (0, mx (20, c * 0.55f), mx (0.2f, res * 0.12f));
-            S (1, c, mx (0.2f, res * 0.35f));
-            S (2, mn (18000, c * 1.15f), mx (0.2f, res * 0.18f)); break;
-        case FM_SVF:
-            S (0, c, mx (0.2f, res * 0.28f));
-            S (1, mn (18000, c * 1.08f), mx (0.2f, res * 0.14f)); break;
-        case FM_OTA:
-            S (0, c, mx (0.2f, res * 0.16f));
-            S (1, mx (20, c * 0.88f), mx (0.2f, res * 0.22f)); break;
-        case FM_POLIVOKS:
-            S (0, mx (20, c * 0.65f), mx (0.2f, res * 0.2f));
-            S (1, c, mx (0.2f, res * 0.55f)); break;
-        case FM_SWCAP:
-            S (0, c, mx (0.2f, res * 0.12f));
-            S (1, mx (20, c * 1.35f), mx (0.2f, res * 0.35f));
-            S (2, mx (20, c * 0.82f), mx (0.2f, res * 0.12f)); break;
-        case FM_MS20:
-            S (0, mx (20, c * 0.62f), mx (0.25f, res * 0.18f));
-            S (1, c, mx (0.3f, res * 0.72f)); break;
-        case FM_OBERHEIM:
-            S (0, mx (20, c * 0.28f), mx (0.2f, res * 0.08f));
-            S (1, mn (18000, c * 1.08f), mx (0.2f, res * 0.2f)); break;
-        case FM_SEM:
-            S (0, c, mx (0.2f, res * 0.18f));
-            S (1, mn (18000, c * 1.12f), mx (0.2f, res * 0.14f)); break;
-        case FM_TB303:
-            tbA = (float) (1.0 / (1.0 + 2.0 * kPi * 150.0 / sr));
-            setLadder (c, 0.0f, 4.0f * mn (0.98f, res / 24.0f), sr); break;
-        case FM_MOOGFAT:
-            setLadder (c, 0.03f, 4.0f * mn (0.985f, res / 22.0f), sr); break;
-        case FM_ARPODYSSEY:
-            S (0, mx (20, c * 0.42f), mx (0.2f, res * 0.12f));
-            S (1, mn (18000, c * 1.04f), mx (0.2f, res * 0.24f)); break;
-        case FM_CS15:
-            S (0, mx (20, c * 0.5f), mx (0.2f, res * 0.1f));
-            S (1, c, mx (0.2f, res * 0.42f));
-            S (2, mn (18000, c * 1.1f), mx (0.2f, res * 0.16f)); break;
-        case FM_SH2:
-            S (0, c, mx (0.2f, res * 0.16f));
-            S (1, mx (20, c * 0.9f), mx (0.2f, res * 0.36f)); break;
-        case FM_ACID:
-        default:
-        {
-            // resonance fades below ~500 Hz so a closed filter doesn't boom at its cutoff
-            const float rs = clampv ((c - 60.0f) / 440.0f, 0.2f, 1.0f);
-            S (0, c, res * 0.8f * rs);
-            S (1, mx (20, c * 0.95f), res * 1.2f * rs);
-            fbGain = mn (0.92f, res / 28.0f); break;
-        }
-    }
-}
-
 //==============================================================================
 void Voice::prepare (double sampleRate)
 {
@@ -275,7 +132,7 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     for (int e = 0; e < 3; ++e)
         modEnv[e].init (envV[P_mEnv1A + 4 * e], envV[P_mEnv1D + 4 * e], envV[P_mEnv1S + 4 * e], envV[P_mEnv1R + 4 * e]);
 
-    filter.configure (s.i (P_filterMode));
+    filter.configure (s.i (P_filterMode), s.i (P_filterType), s.i (P_filterSlope), true);
     for (auto& r : ringSlots) { r.hp.reset(); r.lp.reset(); }
     stereo = false;
 
@@ -555,15 +412,30 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     vGain.step (c20);
 
     // --- filter
-    const int fmode = s.i (P_filterMode);
-    if (fmode != filter.mode) filter.configure (fmode);
-    filter.warm = s.f (P_warmth);
-    filter.bassKeep = s.f (P_bassKeep);
+    filter.configure (s.i (P_filterMode), s.i (P_filterType), s.i (P_filterSlope), first);
+    filter.setAnalog (s.f (P_warmth), s.f (P_bassKeep));
     const float fe = (float) filtEnv.eval (t);
-    cutoff.target = clampv (s.f (P_filterCutoff) + filterAccent + s.f (P_fEnvAmt) * fe + mod[MT_cutoff], 20.0f, 18000.0f);
+    // Cutoff: knob (with any matrix routes), accent, the filter envelope (Env Amt, 100% = +10 kHz
+    // at the envelope's peak) and the classic LFO/Env slots, all in Hz as before; then key tracking
+    // and the filter LFO as octave offsets, so they act the same at every cutoff.
+    float cut = clampv (s.f (P_filterCutoff) + filterAccent + s.f (P_fEnvAmt) * fe + mod[MT_cutoff], 20.0f, 20000.0f);
+    double octs = 0.0;
+    const float kt = s.f (P_filterKeyTrack);
+    if (kt > 0.0f) octs += kt * std::log2 (std::max (1.0, baseFreq) / 261.6256);        // 100%: follows the keyboard from middle C
+    const float la = s.f (P_filterLfoAmt);
+    if (la != 0.0f)
+    {
+        const int src = clampv (s.i (P_filterLfoSrc), 0, 3);
+        octs += la * 4.0 * lfoShape (clampv (s.i (P_lfo1Wave + 3 * src), 0, 3), lfoPh[src]) * lfoDepthNow[src];   // 100% = +-4 octaves
+    }
+    if (octs != 0.0) cut = clampv ((float) (cut * pow2 (octs)), 20.0f, 20000.0f);
+    cutoff.target = cut;
     res.target = clampv (s.f (P_filterRes) + mod[MT_resonance], 0.1f, 30.0f);
-    drive = clampv (s.f (P_filterDrive) + mod[MT_drive], 1.0f, 30.0f);
-    cutoff.step (c10); res.step (c10);
+    filtDrive.target = clampv (s.f (P_filterDrive) + mod[MT_drive], 1.0f, 30.0f);
+    filtMix.target = clampv (s.f (P_filterMix), 0.0f, 1.0f);
+    cutoff.step (c10); res.step (c10); filtDrive.step (c10); filtMix.step (c10);
+    filter.setDrive (filtDrive.v);
+    filter.setMix (filtMix.v);
     filter.update (cutoff.v, res.v, sr);
 
     // --- FM matrix
@@ -858,7 +730,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 }
                 if (arCut)
                 {
-                    cutB[i] = clampv (cutoff.v * (float) pow2 (ad[AD_Cut]), 20.0f, 18000.0f);
+                    cutB[i] = clampv (cutoff.v * (float) pow2 (ad[AD_Cut]), 20.0f, 20000.0f);
                     resB[i] = clampv (res.v + ad[AD_Res], 0.1f, 30.0f);
                 }
             }
@@ -1026,8 +898,8 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         {
             if (arCut) filter.update (cutB[i], resB[i], sr);
             const float xL = xb[0][i], xR = xb[1][i];
-            const float yL = filter.process (xL, 0, drive);
-            const float yR = stereo ? filter.process (xR, 1, drive) : yL;
+            float yL, yR;
+            filter.processFrame (xL, xR, stereo, yL, yR);
 
             const float g = srcMute.v * (float) ampEnv.eval (t) * vGain.v;
             float oL = yL * g, oR = yR * g;

@@ -51,6 +51,15 @@ const char* scaleName (Scale);
 // and back. Used by modulation depths and mutation so "+10%" means the same
 // perceptual distance everywhere.
 float toNormalised (int paramIndex, float plain);
+
+// Logarithmic range (skewCentre -1 in the parameter table): equal knob travel per octave.
+inline juce::NormalisableRange<float> logRange (float mn, float mx, float step)
+{
+    return juce::NormalisableRange<float> (mn, mx,
+        [] (float s, float e, float v) { return s * std::pow (e / s, juce::jlimit (0.0f, 1.0f, v)); },
+        [] (float s, float e, float x) { return std::log (juce::jlimit (s, e, x) / s) / std::log (e / s); },
+        [step] (float s, float e, float x) { x = juce::jlimit (s, e, x); return step > 0 ? juce::jlimit (s, e, std::round (x / step) * step) : x; });
+}
 float fromNormalised (int paramIndex, float norm);
 
 } // namespace tg

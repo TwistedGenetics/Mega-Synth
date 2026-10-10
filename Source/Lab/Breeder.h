@@ -151,6 +151,9 @@ public:
                 if (auto* vals = o["values"].getDynamicObject())
                     for (int i = 0; i < P_COUNT; ++i)
                         if (vals->hasProperty (kParamIds[i])) p.values[(size_t) i] = (float) (double) vals->getProperty (kParamIds[i]);
+                // stored before the filter overhaul: keep the classic model's own slope
+                if (o["values"].getDynamicObject() != nullptr && ! o["values"].getDynamicObject()->hasProperty ("filterSlope"))
+                    p.values[(size_t) P_filterSlope] = (float) nativeFilterSlope ((int) std::lround (p.values[(size_t) P_filterMode]));
                 p.routes = o["routes"];
                 archive.push_back (std::move (p));
             }

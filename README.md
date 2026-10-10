@@ -33,6 +33,20 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 - Every control is automatable. Double-click a knob to reset it.
 - **Undo / Redo / Original** (header): every knob move, step edit, route change, patch load and sample load can be undone. *Original* goes back to the patch as it was loaded.
 
+## Filter (Filter & Env tab)
+
+- **Type**: Low Pass, High Pass, Band Pass, Notch, Peak / Bell, All Pass.
+- **Slope**: 6, 12, 18 or 24 dB per octave for Low Pass, High Pass and All Pass; 12 or 24 for Band Pass and Notch; Peak / Bell has none (unavailable slopes are greyed out).
+- **Model**: the 17 classic models. A model set to Low Pass at its own slope (picked automatically when you choose the model) is the original circuit, exactly as before. With any other type or slope the model gives the multimode filter its character: its input stage, how strong its resonance is, how hard the resonance saturates, and its output shaping.
+- **Cutoff** 20 Hz - 20 kHz with equal knob travel per octave, shown in Hz below 1 kHz and kHz above (you can type either). It's kept below 45% of the sample rate.
+- **Resonance**: strong peaks for Low and High Pass; the 24 dB Low Pass self-oscillates at the top of the knob, in tune with the cutoff. For Peak / Bell it sets the boost (+2 to +18 dB) and narrows it. Extreme settings stay stable and bounded.
+- **Drive**: input gain into the filter's saturation stage (shown in dB), with the level compensated so turning it up adds density and bite rather than just volume.
+- **Mix**: 0% = unfiltered, 100% = fully filtered, parallel in between.
+- **Env Amt** -100% to +100% (100% = +10 kHz at the envelope's peak; negative sweeps down), **LFO Amt** -100% to +100% of any of the four LFOs (100% = +-4 octaves), **Key Track** 0-100% (100% = the cutoff follows the keyboard from middle C).
+- The curve on the right is the real filter's response, worked out from the same code the voices run.
+- Every filter control except the type, slope and model buttons can be a Mod Matrix destination (Cutoff and Resonance at audio rate too). Changing type, slope or model while a note plays crossfades over about 6 ms, so it doesn't click.
+- Patches and projects from before this version load as they were: the classic model at its own slope, Low Pass, fully wet, no key tracking or filter LFO.
+
 ## Mutation tab
 
 Three per-note modules sit between the oscillator mix and the filter, in this order. Each has its own mix, and at 0 it's switched out completely.
@@ -121,7 +135,7 @@ Most behaviour is unchanged. These are the places where the browser version had 
 - **Delay Sync** stays in effect while notes play. The browser switched back to the manual delay time whenever a note was held.
 - Tempo-synced effects follow the DAW tempo.
 - The reverb, shimmer and reverse reverb share one impulse, so they run through one convolution with their returns applied before it. The sound only differs if you modulate their return levels quickly.
-- **Analog Warmth** (Filter & Env tab, new): *Warmth* swaps the hard clip at the filter input for a softer saturation with a little 2nd harmonic, and adds a gentle low lift and softer top on the master. *Bass Keep* holds onto low end in filter types with high-pass or band-pass stages (Steiner-Parker, State Variable, MS-20, Oberheim, SEM, CS-15...). *Drift* lets each oscillator wander slightly and start free-running. They default to 0.5 / 0.5 / 0.3; set all three to 0 for the browser's exact sound.
+- **Analog Warmth** (Filter & Env tab, new): *Warmth* swaps the hard clip at the filter input for a softer saturation with a little 2nd harmonic, and adds a gentle low lift and softer top on the master. *Bass Keep* holds onto low end in the classic filter models with high-pass or band-pass stages (Steiner-Parker, State Variable, MS-20, Oberheim, SEM, CS-15...). *Drift* lets each oscillator wander slightly and start free-running. They default to 0.5 / 0.5 / 0.3; set all three to 0 for the browser's exact sound.
 - **New**: semitone dials on every oscillator, velocity sensitivity (off by default, as before), pitch-bend range, the DAW-synced sequencer clock, and samples saved with the project.
 
 ## Building from source

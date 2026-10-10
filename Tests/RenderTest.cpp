@@ -116,6 +116,298 @@ int main()
         return 0;
     }
 
+    // ---- Filter overhaul: the filter unit on its own (frequency responses, accuracy, stability)
+    auto filterUnitTests = [&]
+    {
+        std::cout << "Filter: unit responses" << std::endl;
+        const double fs = 48000.0;
+        // steady-state gain (dB) of a FilterUnit for a sine at f
+        auto gainAt = [&] (int model, int type, int slope, float cutoff, float res, double f, float drive = 1.0f, float mix = 1.0f)
+        {
+            FilterUnit u;
+            u.configure (model, type, slope, true);
+            u.setDrive (drive); u.setMix (mix);
+            u.update (cutoff, res, fs);
+            const int n = (int) (fs * 0.25), skip = (int) (fs * 0.15);
+            double si = 0, so = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                const float x = 0.001f * (float) std::sin (2.0 * kPi * f * i / fs);
+                float yl, yr; u.processFrame (x, x, false, yl, yr);
+                if (i >= skip) { si += (double) x * x; so += (double) yl * yl; }
+            }
+            return 10.0 * std::log10 (std::max (1e-30, so) / si);
+        };
+        const char* tn[] = { "LP", "HP", "BP", "Notch", "Peak", "AP" };
+        const float fc = 1000.0f;
+        for (int type = 0; type < 6; ++type)
+            for (int slope = 0; slope < 4; ++slope)
+            {
+                if (! (filterSlopeMask (type) & (1 << slope)) && ! (type == FT_PEAK && slope == 1)) continue;
+                const double gLo = gainAt (0, type, slope, fc, 0.1f, 125.0), gM = gainAt (0, type, slope, fc, 0.1f, 1000.0),
+                             gHi = gainAt (0, type, slope, fc, 0.1f, 4000.0), gHi2 = gainAt (0, type, slope, fc, 0.1f, 8000.0);
+                std::cout << "  " << tn[type] << " " << (6 * (slope + 1)) << " dB: 125 Hz " << juce::String (gLo, 1) << "  1k " << juce::String (gM, 1)
+                          << "  4k " << juce::String (gHi, 1) << "  8k " << juce::String (gHi2, 1) << std::endl;
+                const double perOct = 6.0 * (slope + 1);
+                if (type == FT_LP) CHECK (std::abs ((gHi - gHi2) - perOct) < 3.0 && std::abs (gLo) < 1.5, juce::String ("LP slope ") + juce::String (perOct));
+                if (type == FT_HP) CHECK (std::abs ((gainAt (0, type, slope, fc, 0.1f, 250.0) - gLo) - perOct) < 3.0 && std::abs (gHi2) < 1.5, juce::String ("HP slope ") + juce::String (perOct));
+                if (type == FT_BP) CHECK (gM > gLo + 10 && gM > gHi2 + 10 && std::abs (gM) < 3.0, "band pass peaks at the cutoff");
+                if (type == FT_NOTCH) CHECK (gM < -20 && std::abs (gLo) < 3 && std::abs (gHi2) < 3, "notch cuts at the cutoff only");
+                if (type == FT_PEAK) CHECK (gM > 1.5 && std::abs (gLo) < 1.0 && std::abs (gHi2) < 1.0, "peak boosts at the cutoff only");
+                if (type == FT_AP) CHECK (std::abs (gLo) < 0.5 && std::abs (gM) < 0.5 && std::abs (gHi2) < 0.5, "all pass is flat");
+            }
+        // BP centre (and so the cutoff) is where the display says, across the range
+        for (float c : { 50.0f, 200.0f, 1000.0f, 5000.0f, 15000.0f })
+        {
+            const double g0 = gainAt (0, FT_BP, 1, c, 15.0f, c), gDn = gainAt (0, FT_BP, 1, c, 15.0f, c * 0.94), gUp = gainAt (0, FT_BP, 1, c, 15.0f, c * 1.06);
+            CHECK (g0 > gDn && g0 > gUp, "band-pass centre at " + juce::String (c) + " Hz");
+        }
+        // resonance: strong peak near the cutoff for LP / HP
+        for (int type : { FT_LP, FT_HP })
+            for (int slope : { 1, 2, 3 })
+            {
+                const double pk = gainAt (0, type, slope, 1000.0f, 22.0f, 1000.0) - gainAt (0, type, slope, 1000.0f, 0.1f, 1000.0);
+                CHECK (pk > 9.0, juce::String (tn[type]) + " " + juce::String (6 * (slope + 1)) + " dB resonance (" + juce::String (pk, 1) + " dB)");
+            }
+
+        // 24 dB low pass self-oscillates at the top of the resonance knob, at the cutoff, and stays bounded
+        for (float c : { 220.0f, 880.0f, 3000.0f })
+        {
+            FilterUnit u; u.configure (0, FT_LP, 3, true); u.update (c, 25.0f, fs);
+            int crossings = 0; float last = 0, peak = 0; const int n = (int) fs;
+            for (int i = 0; i < n; ++i)
+            {
+                float yl, yr; u.processFrame (i < 10 ? 0.2f : 0.0f, 0.0f, false, yl, yr);
+                if (i > n / 2) { if (last <= 0 && yl > 0) ++crossings; peak = std::max (peak, std::abs (yl)); }
+                last = yl;
+            }
+            const double freq = crossings / 0.5;
+            std::cout << "  self-oscillation at " << c << " Hz cutoff: " << freq << " Hz, peak " << peak << std::endl;
+            CHECK (peak > 0.05f && peak < 3.0f, "24 dB low pass self-oscillates, bounded");
+            CHECK (std::abs (freq / c - 1.0) < 0.12, "self-oscillation pitch follows the cutoff");
+        }
+
+        // mix 0% is the dry signal exactly; drive is compensated
+        {
+            FilterUnit u; u.configure (2, FT_LP, 3, true); u.setMix (0.0f); u.update (300.0f, 10.0f, fs);
+            float md = 0;
+            for (int i = 0; i < 2000; ++i) { const float x = 0.3f * (float) std::sin (i * 0.05); float yl, yr; u.processFrame (x, x, false, yl, yr); md = std::max (md, std::abs (yl - x)); }
+            CHECK (md == 0.0f, "Filter Mix 0% = untouched input");
+            auto rmsDrive = [&] (float k)
+            {
+                FilterUnit v; v.configure (0, FT_LP, 3, true); v.setDrive (k); v.update (6000.0f, 1.5f, fs);
+                double so = 0; const int n = 24000;
+                for (int i = 0; i < n; ++i) { const float x = 0.35f * (float) (2.0 * std::fmod (110.0 * i / fs, 1.0) - 1.0); float yl, yr; v.processFrame (x, x, false, yl, yr); so += (double) yl * yl; }
+                return 10.0 * std::log10 (so / n);
+            };
+            const double d1 = rmsDrive (1.0f), d25 = rmsDrive (25.0f);
+            std::cout << "  drive 25 vs 1: " << juce::String (d25 - d1, 1) << " dB" << std::endl;
+            CHECK (d25 - d1 < 8.0 && d25 - d1 > 0.5, "drive adds density without a big level jump");
+        }
+
+        // stability: every model / type / slope, extreme resonance, cutoff thrown around every 16 samples
+        {
+            uint32_t rs = 12345; auto rnd = [&] { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return (rs & 0xFFFFFF) / 16777216.0f; };
+            bool ok = true; float worst = 0;
+            for (int model = 0; model < 17; ++model)
+                for (int type = 0; type < 6; ++type)
+                    for (int slope = 0; slope < 4; ++slope)
+                    {
+                        FilterUnit u; u.configure (model, type, slope, true); u.setDrive (1.0f + 24.0f * rnd());
+                        for (int i = 0; i < 6000; ++i)
+                        {
+                            if ((i & 15) == 0) u.update (20.0f * std::pow (1000.0f, rnd()), rnd() < 0.5f ? 25.0f : 30.0f * rnd(), fs);
+                            const float x = 2.0f * rnd() - 1.0f;
+                            float yl, yr; u.processFrame (x, x, false, yl, yr);
+                            if (! std::isfinite (yl)) ok = false;
+                            worst = std::max (worst, std::abs (yl));
+                        }
+                    }
+            std::cout << "  stress: worst peak " << worst << std::endl;
+            CHECK (ok && worst < 64.0f, "every filter stays stable and bounded under extreme settings");
+        }
+
+        // switching type / slope / model mid-sound crossfades instead of clicking: the largest
+        // sample-to-sample step while switching is no bigger than either setting's own steady one
+        {
+            auto run = [&] (int seg0, int segs, bool switching, std::vector<float>& out)
+            {
+                FilterUnit u;
+                auto cfg = [&] (int k, bool imm) { u.configure ((k * 5) % 17, k % 6, (k / 2) % 4, imm); u.update (800.0f, 8.0f, fs); };
+                cfg (seg0, true);
+                out.assign ((size_t) (segs * 4800), 0.0f);
+                for (int i = 0; i < segs * 4800; ++i)
+                {
+                    if (switching && i % 4800 == 0 && i > 0) cfg (seg0 + i / 4800, false);
+                    const float x = 0.5f * (float) std::sin (2.0 * kPi * 330.0 * i / fs);
+                    float yl, yr; u.processFrame (x, x, false, yl, yr);
+                    out[(size_t) i] = yl;
+                }
+            };
+            int bad = 0;
+            for (int k = 0; k < 24; ++k)
+            {
+                std::vector<float> a, b, sw;
+                run (k, 1, false, a); run (k + 1, 1, false, b); run (k, 2, true, sw);
+                auto maxStep = [] (const std::vector<float>& v, int from, int to)
+                {
+                    float m = 0; for (int i = std::max (1, from); i < to; ++i) m = std::max (m, std::abs (v[(size_t) i] - v[(size_t) i - 1])); return m;
+                };
+                const float steady = std::max (maxStep (a, 2400, 4800), maxStep (b, 2400, 4800));
+                const float atSwitch = maxStep (sw, 4800 - 4, 4800 + 600);
+                if (atSwitch > steady * 1.25f + 0.002f) { ++bad; std::cout << "    switch " << k << ": " << atSwitch << " vs steady " << steady << std::endl; }
+            }
+            CHECK (bad == 0, "type / slope / model changes don't click");
+        }
+
+        // display
+        CHECK (formatParam (P_filterCutoff, 80.0f) == "80 Hz" && formatParam (P_filterCutoff, 350.0f) == "350 Hz"
+               && formatParam (P_filterCutoff, 1200.0f) == "1.2 kHz" && formatParam (P_filterCutoff, 8500.0f) == "8.5 kHz"
+               && formatParam (P_filterCutoff, 20000.0f) == "20 kHz", "cutoff shows Hz / kHz (" + formatParam (P_filterCutoff, 1200.0f) + ")");
+        CHECK (std::abs (parseParam (P_filterCutoff, "1.2 kHz") - 1200.0f) < 0.5f && std::abs (parseParam (P_filterCutoff, "350 Hz") - 350.0f) < 0.5f, "typing Hz / kHz");
+        CHECK (formatParam (P_fEnvAmt, 2200.0f) == "+22%" && formatParam (P_fEnvAmt, -10000.0f) == "-100%", "Env Amt in percent");
+        CHECK (meta (P_filterCutoff).min == 20.0f && meta (P_filterCutoff).max == 20000.0f, "cutoff range 20 Hz - 20 kHz");
+        CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "cutoff knob is logarithmic (centre = 632 Hz)");
+        for (int prm : { P_filterCutoff, P_filterRes, P_filterDrive, P_filterMix, P_fEnvAmt, P_filterKeyTrack, P_filterLfoAmt })
+            CHECK (meta (prm).modulatable, juce::String ("modulation destination: ") + meta (prm).id);
+
+        // ---- in the voice: key tracking, bipolar envelope, filter LFO, routing, migration
+        std::cout << "Filter: in the synth" << std::endl;
+        auto centroid = [&] (const juce::AudioBuffer<float>& b, int start)
+        {
+            juce::dsp::FFT fft (12);
+            std::vector<float> d (8192, 0.0f);
+            for (int i = 0; i < 4096; ++i)
+                d[(size_t) i] = b.getSample (0, start + i) * (0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * i / 4095.0f));
+            fft.performFrequencyOnlyForwardTransform (d.data());
+            double num = 0, den = 0;
+            for (int k = 1; k < 2048; ++k) { const double m = d[(size_t) k]; num += m * k * sr / 4096.0; den += m; }
+            return den > 0 ? num / den : 0.0;
+        };
+        auto basic = [&] (MegaSynthProcessor& p)
+        {
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain, P_lfoAssignAmt0, P_envAssignAmt0 })
+                setP (p, i, 0.0f);
+            setP (p, P_fEnvAmt, 0.0f); setP (p, P_analogDrift, 0.0f);
+            setP (p, P_ampA, 0.002f); setP (p, P_ampS, 1.0f);
+        };
+        auto noteCentroid = [&] (std::function<void (MegaSynthProcessor&)> setup, int note, double at)
+        {
+            auto p = make(); basic (*p); setup (*p);
+            juce::AudioBuffer<float> cap;
+            render (*p, at + 0.12, { { 0.0, juce::MidiMessage::noteOn (1, note, (juce::uint8) 100) } }, &cap);
+            return centroid (cap, (int) (at * sr));
+        };
+        {
+            auto kt = [&] (float amount) { return [amount] (MegaSynthProcessor& p) { setP (p, P_filterCutoff, 400.0f); setP (p, P_filterRes, 0.1f); setP (p, P_filterKeyTrack, amount); }; };
+            const double r0 = noteCentroid (kt (0.0f), 72, 0.3) / noteCentroid (kt (0.0f), 48, 0.3);
+            const double r1 = noteCentroid (kt (1.0f), 72, 0.3) / noteCentroid (kt (1.0f), 48, 0.3);
+            std::cout << "  brightness ratio two octaves apart: key track 0% " << r0 << ", 100% " << r1 << std::endl;
+            CHECK (r1 > 3.2 && r1 < 5.0 && r1 > r0 * 1.5, "key tracking 100% follows the keyboard");
+        }
+        {
+            // negative envelope: starts darker than the knob and opens as the envelope decays
+            auto env = [&] (float amt) { return [amt] (MegaSynthProcessor& p) { setP (p, P_filterCutoff, 6000.0f); setP (p, P_fEnvAmt, amt); setP (p, P_fEnvA, 0.001f); setP (p, P_fEnvD, 0.15f); setP (p, P_fEnvS, 0.0f); }; };
+            const double early = noteCentroid (env (-5000.0f), 45, 0.02), late = noteCentroid (env (-5000.0f), 45, 0.6);
+            const double earlyPos = noteCentroid (env (5000.0f), 45, 0.02), latePos = noteCentroid (env (5000.0f), 45, 0.6);
+            std::cout << "  env -50%: early " << early << " late " << late << ";  +50%: early " << earlyPos << " late " << latePos << std::endl;
+            CHECK (early < late * 0.8 && earlyPos > latePos * 1.1, "Env Amt is bipolar");
+        }
+        {
+            auto lfo = [&] (float amt) { return [amt] (MegaSynthProcessor& p) { setP (p, P_filterCutoff, 800.0f); setP (p, P_filterLfoAmt, amt); setP (p, P_filterLfoSrc, 1.0f);
+                                                                                 setP (p, P_lfo2Rate, 1.0f); setP (p, P_lfo2Depth, 1.0f); setP (p, P_lfo2Wave, 0.0f); }; };
+            // LFO 2 sine at 1 Hz: +peak at 0.25 s, -peak at 0.75 s
+            const double up = noteCentroid (lfo (0.5f), 45, 0.19), dn = noteCentroid (lfo (0.5f), 45, 0.69);
+            const double upNeg = noteCentroid (lfo (-0.5f), 45, 0.19), dnNeg = noteCentroid (lfo (-0.5f), 45, 0.69);
+            std::cout << "  filter LFO +50%: " << up << " / " << dn << ",  -50%: " << upNeg << " / " << dnNeg << std::endl;
+            CHECK (up > dn * 1.5 && upNeg < dnNeg / 1.5, "filter LFO amount is bipolar and moves the cutoff");
+        }
+        {
+            // the new controls are matrix destinations that really move the sound
+            auto p = make(); basic (*p);
+            setP (*p, P_filterCutoff, 300.0f); setP (*p, P_filterMix, 0.0f);
+            juce::AudioBuffer<float> a, b;
+            render (*p, 0.4, { { 0.0, juce::MidiMessage::noteOn (1, 45, (juce::uint8) 100) } }, &a);
+            auto q = make(); basic (*q);
+            setP (*q, P_filterCutoff, 300.0f); setP (*q, P_filterMix, 0.0f);
+            q->addRoute (MS_Macro1, P_filterMix, 1.0f); setP (*q, P_macro1, 1.0f);
+            render (*q, 0.4, { { 0.0, juce::MidiMessage::noteOn (1, 45, (juce::uint8) 100) } }, &b);
+            const double ca = centroid (a, (int) (0.25 * sr)), cb = centroid (b, (int) (0.25 * sr));
+            CHECK (cb < ca * 0.6, "Macro -> Filter Mix moves the dry/wet balance");
+        }
+        {
+            // 44.1 kHz, cutoff at the top, every type: stable
+            auto p = std::make_unique<MegaSynthProcessor>();
+            p->setPlayConfigDetails (0, 2, 44100.0, 512); p->prepareToPlay (44100.0, 512);
+            setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_filterRes, 25.0f);
+            bool ok = true;
+            for (int type = 0; type < 6; ++type)
+            {
+                setP (*p, P_filterType, (float) type); setP (*p, P_filterSlope, 3.0f);
+                auto st = render (*p, 0.3, chord (0.0, 0.25, { 60, 84 }));
+                ok = ok && st.finite && st.peak < 6.0f;
+            }
+            CHECK (ok, "cutoff at 20 kHz is safe at 44.1 kHz");
+        }
+        {
+            // a project saved before the overhaul: Ladder model, no new parameters -> Ladder at 24 dB, low pass, fully wet
+            auto p = make();
+            setP (*p, P_filterMode, 2.0f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto xml = juce::parseXML (getXmlFromBinaryForTest (mb));
+            CHECK (xml != nullptr, "state xml");
+            if (xml != nullptr)
+            {
+                xml->setAttribute ("stateVersion", 2);
+                for (auto* id : { "filterType", "filterSlope", "filterMix", "filterKeyTrack", "filterLfoAmt", "filterLfoSrc" })
+                    if (auto* e = xml->getChildByAttribute ("id", id)) xml->removeChildElement (e, true);
+                juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*xml, old);
+                auto q = make();
+                setP (*q, P_filterSlope, 0.0f); setP (*q, P_filterType, 2.0f); setP (*q, P_filterMix, 0.3f);
+                q->setStateInformation (old.getData(), (int) old.getSize());
+                auto plain = [&] (int i) { return q->param (i)->convertFrom0to1 (q->param (i)->getValue()); };
+                CHECK (std::lround (plain (P_filterSlope)) == 3 && std::lround (plain (P_filterType)) == FT_LP && plain (P_filterMix) > 0.999f,
+                       "old project: classic model keeps its own slope, low pass, fully wet");
+            }
+            // an old patch file (no filter settings in its plugin block)
+            auto q = make();
+            setP (*q, P_filterSlope, 0.0f);
+            const juce::String patch = R"({"format":"megasynth","params":{"filterMode":"tb303","filterCutoff":"900"},"plugin":{"velSens":0}})";
+            CHECK (q->importBrowserPatch (patch).isEmpty(), "old patch imports");
+            CHECK (std::lround (q->param (P_filterSlope)->convertFrom0to1 (q->param (P_filterSlope)->getValue())) == 3, "old patch: TB-303 at its own 24 dB slope");
+            CHECK (std::abs (q->param (P_filterCutoff)->convertFrom0to1 (q->param (P_filterCutoff)->getValue()) - 900.0f) < 0.5f, "old patch cutoff kept in Hz");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_FILTERONLY", {}).isNotEmpty())
+    {
+        filterUnitTests();
+        if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_SNAPSHOTS", {}).isNotEmpty())
+        {
+            const float looks[][5] = { { 9, FT_HP, 3, 18.0f, 900 }, { 2, FT_LP, 3, 24.0f, 400 }, { 0, FT_BP, 1, 10.0f, 1500 }, { 6, FT_PEAK, 1, 15.0f, 3000 }, { 0, FT_NOTCH, 3, 4.0f, 700 } };
+            int n = 0;
+            for (auto& lk : looks)
+            {
+                auto p = make();
+                setP (*p, P_filterMode, lk[0]); setP (*p, P_filterType, lk[1]); setP (*p, P_filterSlope, lk[2]); setP (*p, P_filterRes, lk[3]); setP (*p, P_filterCutoff, lk[4]);
+                std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+                ed->setSize (1200, 860);
+                std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
+                {
+                    if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
+                    for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
+                    return nullptr;
+                };
+                if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (6);
+                auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 300), true, 1.0f);
+                auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+                auto f = dir.getChildFile ("filter_ui_" + juce::String (n++) + ".png"); f.deleteFile();
+                juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+            }
+        }
+        std::cout << (failures == 0 ? "FILTER TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
    #include "Golden.inc"
 
     // ---- 1. default patch chord
@@ -339,12 +631,12 @@ int main()
             const float v = meta (i).def;
             CHECK (std::abs (fromNormalised (i, toNormalised (i, v)) - v) < 1.0e-3f * std::max (1.0f, std::abs (v)), "normalise round trip " + meta (i).id);
         }
-        CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 1200.0f) < 1.0f, "log scaling centre");
+        CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 2"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 3"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"2\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"3\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -1428,6 +1720,8 @@ int main()
         for (int i = 0; i < 512; ++i) md = std::max (md, std::abs (tail[i] - 0.5f * (cap.getSample (0, cap.getNumSamples() - 512 + i) + cap.getSample (1, cap.getNumSamples() - 512 + i))));
         CHECK (md < 1e-7f, "spectrum tap mirrors the output");
     }
+
+    filterUnitTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {

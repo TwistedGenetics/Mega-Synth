@@ -69,6 +69,12 @@ inline const char* const kDsRateKeys[]   = { "1/32","1/16t","1/16","1/8t","1/8",
 inline const char* const kDsRateLabels[] = { "1/32","1/16 Triplet","1/16","1/8 Triplet","1/8","1/4","1/2","1 Bar","Free (Hz)" };
 inline const char* const kQualityKeys[]   = { "eco","normal","high" };
 inline const char* const kQualityLabels[] = { "Eco (lower CPU)","Normal","High" };
+inline const char* const kFilterTypeKeys[]   = { "lp","hp","bp","notch","peak","ap" };
+inline const char* const kFilterTypeLabels[] = { "Low Pass","High Pass","Band Pass","Notch","Peak / Bell","All Pass" };
+inline const char* const kFilterSlopeKeys[]   = { "6","12","18","24" };
+inline const char* const kFilterSlopeLabels[] = { "6 dB/oct","12 dB/oct","18 dB/oct","24 dB/oct" };
+inline const char* const kFilterLfoKeys[]   = { "lfo1","lfo2","lfo3","lfo4" };
+inline const char* const kFilterLfoLabels[] = { "LFO 1","LFO 2","LFO 3","LFO 4" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -187,12 +193,43 @@ inline const ChoiceList kListBusOrder    { kBusOrderKeys, kBusOrderLabels, 2 };
 inline const ChoiceList kListCapPoint    { kCapPointKeys, kCapPointLabels, 2 };
 inline const ChoiceList kListDsRate      { kDsRateKeys, kDsRateLabels, 9 };
 inline const ChoiceList kListQuality     { kQualityKeys, kQualityLabels, 3 };
+inline const ChoiceList kListFilterType  { kFilterTypeKeys, kFilterTypeLabels, 6 };
+inline const ChoiceList kListFilterSlope { kFilterSlopeKeys, kFilterSlopeLabels, 4 };
+inline const ChoiceList kListFilterLfo   { kFilterLfoKeys, kFilterLfoLabels, 4 };
+
+// Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
+enum FilterType { FT_LP, FT_HP, FT_BP, FT_NOTCH, FT_PEAK, FT_AP, FT_TYPE_COUNT };
+// The slope each classic model has as a low-pass (its original circuit). Low Pass at this slope
+// runs that model exactly as before the filter overhaul; patches from before it load with it.
+inline int nativeFilterSlope (int model)
+{
+    static const int s[17] = { 1, 3, 3, 2, 2, 3, 1, 3, 3, 1, 1, 2, 3, 3, 1, 2, 3 };
+    return model >= 0 && model < 17 ? s[model] : 1;
+}
+// Slopes that mean something for each type (bit k = slope k). Peak / Bell has none.
+inline int filterSlopeMask (int type)
+{
+    switch (type)
+    {
+        case FT_BP: case FT_NOTCH: return 0b1010;   // 12, 24
+        case FT_PEAK: return 0;
+        default: return 0b1111;                       // LP, HP, All Pass: 6, 12, 18, 24
+    }
+}
+// The slope actually used: the nearest one the type allows.
+inline int effectiveFilterSlope (int type, int slope)
+{
+    const int mask = filterSlopeMask (type);
+    if (mask == 0) return 1;
+    if (mask & (1 << slope)) return slope;
+    return slope <= 1 ? 1 : 3;
+}
 inline const ChoiceList kListArMod       { kArModKeys, kArModLabels, 6 };
 inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
 #undef TG_LIST
 
 // ---------------------------------------------------------------- parameters
-// F(id, name, min, max, default, step, skewCentre (0 = linear))
+// F(id, name, min, max, default, step, skewCentre (0 = linear, -1 = logarithmic: equal distance per octave))
 // C(id, name, list, defaultIndex)
 // B(id, name, default)
 // A(id, name, default fraction)  modulation amount, stored as -1..1 of the target's range
@@ -293,8 +330,8 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(ringSlot2Source,"Ring2 Source", kListOscSrc, 3) \
     C(ringSlot2Dest,  "Ring2 Carrier", kListRingDst, 6) \
     F(ringSlot2Amt,   "Ring2 Amount", 0, 1, 0, 0.01, 0) \
-    C(filterMode,   "Filter Type", kListFilter, 0) \
-    F(filterCutoff, "Cutoff", 40, 12000, 2200, 1, 1200) \
+    C(filterMode,   "Filter Model", kListFilter, 0) \
+    F(filterCutoff, "Cutoff", 20, 20000, 2200, 0.1, -1) \
     F(filterRes,    "Resonance", 0.1, 25, 1.5, 0.1, 0) \
     F(filterDrive,  "Drive", 1, 25, 1, 0.1, 0) \
     F(ampA, "Amp Attack", 0.001, 3, 0.01, 0.001, 0.4) \
@@ -526,7 +563,13 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(dsFreeHz,    "DNA Sequencer Free Rate", 0.1, 20, 4, 0.01, 2) \
     F(dsGlide,     "DNA Sequencer Glide", 0, 1, 0.2, 0.01, 0) \
     F(dsDepth,     "DNA Sequencer Depth", 0, 1, 1, 0.01, 0) \
-    C(quality,     "Quality", kListQuality, 1)
+    C(quality,     "Quality", kListQuality, 1) \
+    C(filterType,  "Filter Type", kListFilterType, 0) \
+    C(filterSlope, "Filter Slope", kListFilterSlope, 1) \
+    F(filterMix,   "Filter Mix", 0, 1, 1, 0.01, 0) \
+    F(filterKeyTrack, "Filter Key Tracking", 0, 1, 0, 0.01, 0) \
+    F(filterLfoAmt, "Filter LFO Amount", -1, 1, 0, 0.001, 0) \
+    C(filterLfoSrc, "Filter LFO Source", kListFilterLfo, 0)
 
 enum ParamIndex
 {

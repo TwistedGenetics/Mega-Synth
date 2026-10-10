@@ -38,7 +38,9 @@ set(MEGASYNTH_SOURCES
     Source/Sequencer.cpp
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/UI/Overview.cpp)
+    Source/UI/Overview.cpp
+    Source/UI/FilterPanel.cpp
+    Source/Filter/Filter.cpp)
 
 set(MEGASYNTH_DEFINES
     JUCE_WEB_BROWSER=0

@@ -90,8 +90,8 @@ int audioDestFor (int p, float& scale)
         case P_wt2Gain:      return AD_LWt2;
         case P_complexGain:  return AD_LCx;
         case P_supersawGain: return AD_LSs;
-        // filter: full cutoff travel is log2 (12000 / 40) = 8.23 octaves
-        case P_filterCutoff: scale = 8.23f; return AD_Cut;
+        // filter: full cutoff travel is log2 (20000 / 20) = 9.97 octaves (the knob is per-octave too)
+        case P_filterCutoff: scale = 9.9658f; return AD_Cut;
         case P_filterRes:    scale = 24.9f; return AD_Res;
         // FM / ring / shape, in their own units
         case P_complexFm:    scale = 1500.0f; return AD_CxFm;
@@ -124,6 +124,11 @@ const NormTable& normTable()
                 t.invSkew[i] = 1.0f / t.skew[i];
             }
             else { t.skew[i] = t.invSkew[i] = 1.0f; }
+            if (m.skewCentre < 0 && m.min > 0 && m.max > m.min)
+            {
+                t.logScale[i] = true;
+                t.logSpan[i] = (float) std::log ((double) m.max / m.min);
+            }
             t.global[i] = m.category == Category::Fx || i == P_masterVolume || i == P_warmth || m.module == "Granular" || m.module == "Spectral" || m.module == "Feedback Matrix";   // bus stages
             t.envTime[i] = m.category == Category::Env && m.unit == "s";
             t.modulatable[i] = m.modulatable;
@@ -316,6 +321,11 @@ void SceneStore::fromVar (const juce::var& data)
             if (! nt.scene[i]) continue;
             const float plain = o->hasProperty (kParamIds[i]) ? (float) (double) o->getProperty (kParamIds[i]) : meta (i).def;
             v[k][i].store (normFast (nt, i, plain), std::memory_order_relaxed);
+        }
+        if (! o->hasProperty ("filterSlope"))   // a scene from before the filter overhaul keeps its model's own slope
+        {
+            const int model = o->hasProperty ("filterMode") ? (int) std::lround ((double) o->getProperty ("filterMode")) : 0;
+            v[k][P_filterSlope].store (normFast (nt, P_filterSlope, (float) nativeFilterSlope (model)), std::memory_order_relaxed);
         }
         stored[k].store (true);
     }

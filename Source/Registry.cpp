@@ -122,7 +122,7 @@ namespace
             {
                 m.min = r.mn; m.max = r.mx;
                 const bool integer = r.st >= 1.0f && std::floor (r.mn) == r.mn && std::floor (r.mx) == r.mx;
-                m.scale = r.sk > 0 ? Scale::Log : (integer ? Scale::Integer : Scale::Linear);
+                m.scale = r.sk != 0 ? Scale::Log : (integer ? Scale::Integer : Scale::Linear);
             }
             m.bipolar = m.min < 0 && m.max > 0;
 
@@ -268,6 +268,7 @@ const char* scaleName (Scale s)
 
 static juce::NormalisableRange<float> rangeFor (const ParamMeta& m)
 {
+    if (m.skewCentre < 0) return logRange (m.min, m.max, m.step);
     juce::NormalisableRange<float> r (m.min, m.max, m.scale == Scale::Choice || m.scale == Scale::Toggle ? 1.0f : m.step);
     if (m.skewCentre > 0) r.setSkewForCentre (m.skewCentre);
     return r;

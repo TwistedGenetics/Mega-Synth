@@ -40,7 +40,14 @@ struct PresetBuilder
         dnaAmt.fill (0.7f);
     }
 
-    PresetBuilder& set (int p, float plain) { v[(size_t) p] = plain; return *this; }
+    // Choosing a classic model also picks its own slope (Low Pass at that slope = the classic circuit);
+    // set P_filterSlope / P_filterType afterwards to use the model's character on the multimode core.
+    PresetBuilder& set (int p, float plain)
+    {
+        v[(size_t) p] = plain;
+        if (p == P_filterMode) v[(size_t) P_filterSlope] = (float) nativeFilterSlope ((int) std::lround (plain));
+        return *this;
+    }
 
     // A mod-matrix route; depth is -1..1 of the destination's range (the route's Amount knob).
     PresetBuilder& route (int src, int dst, float depth, int curve = MC_Linear, bool unipolar = false, float smoothMs = 0.0f)

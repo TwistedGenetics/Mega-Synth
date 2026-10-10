@@ -15,6 +15,7 @@
 #include "Mut/Instability.h"
 #include "Mut/Mutator.h"
 #include "Seq/DnaSequencer.h"
+#include "Filter/Filter.h"
 
 namespace tg
 {
@@ -61,106 +62,7 @@ double syncSeconds (const ChoiceList& list, int idx, double tempo, double fallba
 double syncRate (const ChoiceList& list, int idx, double tempo, double fallback);
 
 //==============================================================================
-struct FilterChain
-{
-    int mode = -1;
-    int numStages = 0;
-    Biquad st[4];
-    Biquad::Type types[4] {};
-    float fbState[2] { 0, 0 };
-    float fbGain = 0.0f;
-    enum FbKind { FbNone, FbToInput, FbToPre } fbKind = FbNone;
-    float preK = 0.0f;     // extra drive stage after the input drive (OTA / TB-303 / acid)
-    float postK = 0.0f;    // saturator after the filter (Polivoks)
-    bool limitOut = false; // soft limiter for the acid modes, whose resonance can reach +30 dB
-
-    // Ladder / Minimoog modes: a 4-pole one-pole cascade with inverted feedback.
-    // (In the browser these were Web Audio feedback loops, which don't resonate there.)
-    bool ladder = false;
-    float lg[4] { 0.5f, 0.5f, 0.5f, 0.5f };
-    float ls[2][4] {};
-    float lk = 0.0f;
-    // TB-303 mode: the ladder with its resonance feedback high-passed (~150 Hz), as in the
-    // real 303, so resonance fades at low cutoff and the filter closes right down.
-    bool tb303 = false;
-    float tbA = 0.98f;
-    float tbX[2] { 0, 0 }, tbY[2] { 0, 0 };
-
-    // Analog warmth (0 = exactly the browser's behaviour)
-    float warm = 0.0f;       // soft, slightly asymmetric input saturation instead of a hard clip
-    float bassKeep = 0.0f;   // lowers high-pass stages and adds low end back around band-pass stages
-    Biquad par[4];           // parallel low-pass for band-pass stages (Bass Keep)
-    float dcX[2] { 0, 0 }, dcY[2] { 0, 0 }, dcR = 0.9987f;
-
-    inline float inputShape (float x, float k) const
-    {
-        if (warm <= 0.0f) return driveShape (x, k);
-        const float c = clampv (x, -1.0f, 1.0f);
-        const float soft = std::abs (x) < 1.5f ? x - (4.0f / 27.0f) * x * x * x : (x > 0 ? 1.0f : -1.0f);
-        float xi = c + (soft - c) * warm;
-        xi += 0.12f * warm * xi * xi;          // a touch of 2nd harmonic
-        return fastTanh (k * xi);
-    }
-
-    inline float dcBlock (float v, int ch)
-    {
-        const float y = v - dcX[ch] + dcR * dcY[ch];
-        dcX[ch] = v; dcY[ch] = y;
-        return y;
-    }
-
-    void configure (int newMode);
-    void update (float cutoff, float res, double sr);
-    void setLadder (float cutoff, float spread, float k, double sr);
-    void reset();
-    void copyChannel (int from, int to);
-
-    inline float process (float x, int ch, float drive)
-    {
-        if (ladder)
-        {
-            float fb = fbState[ch];
-            if (tb303)
-            {
-                const float y = tbA * (tbY[ch] + fb - tbX[ch]);
-                tbX[ch] = fb; tbY[ch] = y;
-                fb = y;
-            }
-            float v = inputShape (x - lk * fb, drive);
-            float* s = ls[ch];
-            for (int k = 0; k < 4; ++k)
-            {
-                const float u = (v - s[k]) * lg[k];
-                v = u + s[k];
-                s[k] = v + u;
-            }
-            if (! std::isfinite (v)) { reset(); v = 0.0f; }
-            fbState[ch] = v;
-            v *= tb303 ? (1.0f + lk * 0.45f) : (1.0f + lk * 0.35f);   // make up some of the bass lost to resonance
-            if (limitOut) v = 1.5f * std::tanh (v * (1.0f / 1.5f));
-            return dcBlock (v, ch);
-        }
-
-        float v = inputShape (x, drive);
-        if (preK > 0.0f)
-        {
-            if (fbKind == FbToPre) v += fbGain * fbState[ch];
-            v = driveShape (v, preK);
-        }
-        for (int k = 0; k < numStages; ++k)
-        {
-            if (types[k] == Biquad::BP && bassKeep > 0.0f)
-                v = st[k].process (v, ch) + bassKeep * par[k].process (v, ch);
-            else
-                v = st[k].process (v, ch);
-        }
-        if (! std::isfinite (v)) { reset(); v = 0.0f; }
-        fbState[ch] = v;
-        if (postK > 0.0f) v = driveShape (v, postK);
-        if (limitOut) v = 1.5f * std::tanh (v * (1.0f / 1.5f));
-        return dcBlock (v, ch);
-    }
-};
+// (FilterChain, the classic filter models, lives in Filter/Filter.h)
 
 // What the voices need from the modulation matrix for one block.
 struct ModContext
@@ -270,10 +172,10 @@ private:
     void updateWt (int slot, const Snapshot&, const ModState&, double bendC, float cPort, float c10);
     S legacyFm, ringMix, dry, ringGainS, srcMute, vGain;
     S cFm, cMixS;
-    S cutoff, res;
+    S cutoff, res, filtDrive, filtMix;
     S fmAmt[4], ringDepth[2], ringOut[2];
     S ssCents[9], ssGain[9];
-    float drive = 1.0f, cShapeK = 4.5f;
+    float cShapeK = 4.5f;
     int ssVoices = 7;
     float ssPanL[9] {}, ssPanR[9] {};
     double ssDriftSin[9] {};
@@ -292,7 +194,7 @@ private:
     RingSlot ringSlots[2];
 
     float srcVals[6] {};    // latest raw/FM-source outputs: osc1, osc2, osc3, osc4(mono), complex, supersaw
-    FilterChain filter;
+    FilterUnit filter;      // one complete filter (a second unit can sit beside it later)
     bool stereo = false;
 
     // ---- modulation matrix state

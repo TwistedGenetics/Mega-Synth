@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "UI/FilterPanel.h"
 #include "ParamFormat.h"
 #include "Registry.h"
 #include "UI/Overview.h"
@@ -1553,36 +1554,32 @@ void MegaSynthEditor::buildPages()
     // ---------------------------------------------------------------- Filter & Envelopes
     {
         auto* page = addPage ("Filter & Env");
-        auto* f = sec (page, "Filter", col::filter);
-        f->choice (P_filterMode, "Filter Type", 230);
-        f->newRow();
-        f->knob (P_filterCutoff, "Cutoff");
-        f->knob (P_filterRes, "Resonance");
-        f->knob (P_filterDrive, "Drive");
+        auto* f = page->own (new FilterPanel (proc));
         auto* a = sec (page, "Amp Envelope", col::env);
         for (auto [idx, n] : { std::pair<int, const char*> { P_ampA, "Attack" }, { P_ampD, "Decay" }, { P_ampS, "Sustain" }, { P_ampR, "Release" } })
             a->knob (idx, n);
         auto* fe = sec (page, "Filter Envelope", col::env);
-        for (auto [idx, n] : { std::pair<int, const char*> { P_fEnvAmt, "Amount" }, { P_fEnvA, "Attack" }, { P_fEnvD, "Decay" }, { P_fEnvS, "Sustain" }, { P_fEnvR, "Release" } })
+        for (auto [idx, n] : { std::pair<int, const char*> { P_fEnvA, "Attack" }, { P_fEnvD, "Decay" }, { P_fEnvS, "Sustain" }, { P_fEnvR, "Release" } })
             fe->knob (idx, n);
         auto* w = sec (page, "Analog Warmth", col::supersaw);
         w->knob (P_warmth, "Warmth");
         w->knob (P_bassKeep, "Bass Keep");
         w->knob (P_analogDrift, "Drift");
         auto* wInfo = new juce::Label ({}, "Warmth: soft, rounder saturation instead of hard clipping, plus a gentle low lift and smoother top.  "
-                                           "Bass Keep: holds onto low end in filter types with high-pass or band-pass stages.  "
+                                           "Bass Keep: holds onto low end in the classic models with high-pass or band-pass stages.  "
                                            "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
         wInfo->setColour (juce::Label::textColourId, col::muted);
         wInfo->setFont (juce::Font (juce::FontOptions (12.0f)));
         wInfo->setJustificationType (juce::Justification::topLeft);
-        w->add (wInfo, 470, 84);
+        wInfo->setMinimumHorizontalScale (1.0f);
+        w->add (wInfo, 520, 84);
         page->onResize = [page, f, a, fe, w]
         {
-            const int g = 10;
-            f->setBounds (g, g, 260, 210);
-            a->setBounds (280, g, 330, 140);
-            fe->setBounds (620, g, 410, 140);
-            w->setBounds (280, 160, 750, 130);
+            const int g = 10, W = page->getWidth();
+            f->setBounds (g, g, W - 2 * g, 248);
+            a->setBounds (g, 268, 330, 140);
+            fe->setBounds (350, 268, 330, 140);
+            w->setBounds (g, 418, 840, 130);
         };
     }
 

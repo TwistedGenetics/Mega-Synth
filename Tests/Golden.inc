@@ -9,6 +9,8 @@ if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_GOLDEN", {}).isNotEmpt
         auto p = make();
         for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix }) setP (*p, i, 0.0f);
         setup (*p);
+        // what loading a patch from before the filter overhaul does: the model at its own slope
+        setP (*p, P_filterSlope, (float) nativeFilterSlope ((int) std::lround (p->param (P_filterMode)->convertFrom0to1 (p->param (P_filterMode)->getValue()))));
         juce::AudioBuffer<float> cap;
         render (*p, secs, ev, &cap);
         writeWav (cap, sr, "golden_" + name + ".wav");

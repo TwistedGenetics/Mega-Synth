@@ -1565,7 +1565,7 @@ void MegaSynthEditor::buildPages()
         w->knob (P_warmth, "Warmth");
         w->knob (P_bassKeep, "Bass Keep");
         w->knob (P_analogDrift, "Drift");
-        auto* wInfo = new juce::Label ({}, "Warmth: soft, rounder saturation instead of hard clipping, plus a gentle low lift and smoother top.  "
+        auto* wInfo = new juce::Label ({}, "Warmth: softer, rounder filter Drive saturation, plus a gentle low lift and smoother top.  "
                                            "Bass Keep: holds onto low end in the classic models with high-pass or band-pass stages.  "
                                            "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
         wInfo->setColour (juce::Label::textColourId, col::muted);

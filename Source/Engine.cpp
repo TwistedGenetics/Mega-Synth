@@ -957,7 +957,8 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 {
                     float pL, pR;
                     route (oldRouteMode, f2old, xL, xR, yL, yR, pL, pR);
-                    const float f = 1.0f - (float) routeFade / (float) FilterUnit::kFadeLen;
+                    const float lin = 1.0f - (float) routeFade / (float) FilterUnit::kFadeLen;
+                    const float f = lin * lin * (3.0f - 2.0f * lin);
                     nL = pL + (nL - pL) * f;
                     nR = pR + (nR - pR) * f;
                     --routeFade;

@@ -20,15 +20,48 @@
 namespace tg
 {
 
-// Shared input stage: the drive into the filter (Warmth makes it softer and slightly asymmetric).
+// Clean up to t, then a smooth knee that levels off at 1.5 t: only peaks above t are touched.
+inline float softKnee (float x, float t)
+{
+    const float a = std::abs (x);
+    if (a <= t) return x;
+    const float h = 0.5f * t;
+    const float y = t + h * fastTanh ((a - t) / h);
+    return x < 0.0f ? -y : y;
+}
+
+// Shared input stage: the drive into the filter.
+// At Drive 0 dB it is clean (linear below full scale; louder peaks are rounded off, not clipped).
+// Turning Drive up blends in the saturation (fully in by +12 dB): tanh, or with Warmth a softer,
+// slightly asymmetric curve with a touch of 2nd harmonic.
 inline float filterInputShape (float x, float k, float warm)
 {
-    if (warm <= 0.0f) return driveShape (x, k);
-    const float c = clampv (x, -1.0f, 1.0f);
-    const float soft = std::abs (x) < 1.5f ? x - (4.0f / 27.0f) * x * x * x : (x > 0 ? 1.0f : -1.0f);
-    float xi = c + (soft - c) * warm;
-    xi += 0.12f * warm * xi * xi;          // a touch of 2nd harmonic
-    return fastTanh (k * xi);
+    const float clean = softKnee (k * x, 1.0f);
+    if (k <= 1.0f) return clean;
+    float sat;
+    if (warm <= 0.0f) sat = driveShape (x, k);
+    else
+    {
+        const float c = clampv (x, -1.0f, 1.0f);
+        const float soft = std::abs (x) < 1.5f ? x - (4.0f / 27.0f) * x * x * x : (x > 0 ? 1.0f : -1.0f);
+        float xi = c + (soft - c) * warm;
+        xi += 0.12f * warm * xi * xi;          // a touch of 2nd harmonic
+        sat = fastTanh (k * xi);
+    }
+    const float a = std::min (1.0f, 0.5f * std::log2 (k));
+    return clean + (sat - clean) * a;
+}
+
+// How much of the drive / model saturation is in, from the Drive knob: 0 at 0 dB, all at +12 dB
+inline float driveCharacter (float k) { return k <= 1.0f ? 0.0f : std::min (1.0f, 0.5f * std::log2 (k)); }
+// A model's own shaper (OTA, acid, Polivoks), blended in by the Drive knob
+// At 0 dB it is a clean gain that keeps the model's level in line with the others.
+inline float modelShape (float v, float k, float amount)
+{
+    const float g = k >= 7.0f ? 2.8f : (k >= 6.0f ? 1.7f : (k >= 4.0f ? 1.9f : 1.0f));   // Polivoks, acid, OTA
+    if (amount <= 0.0f) return v * g;
+    const float s = driveShape (v, k);
+    return amount >= 1.0f ? s : v * g + (s - v * g) * amount;
 }
 
 // Output-level compensation for Drive: drive pushes the signal into the shaper (denser, more
@@ -51,6 +84,7 @@ struct FilterChain
     enum FbKind { FbNone, FbToInput, FbToPre } fbKind = FbNone;
     float preK = 0.0f;     // extra drive stage after the input drive (OTA / TB-303 / acid)
     float postK = 0.0f;    // saturator after the filter (Polivoks)
+    float character = 0.0f;   // how much of preK / postK is in (follows Drive: clean at 0 dB)
     bool limitOut = false; // soft limiter for the acid modes, whose resonance can reach +30 dB
 
     // Ladder / Minimoog modes: a 4-pole one-pole cascade with inverted feedback.
@@ -108,7 +142,7 @@ struct FilterChain
             if (! (std::abs (v) < 64.0f)) { reset(); v = 0.0f; }   // runaway (or NaN) under extreme modulation: start again
             fbState[ch] = v;
             v *= tb303 ? (1.0f + lk * 0.45f) : (1.0f + lk * 0.35f);   // make up some of the bass lost to resonance
-            if (limitOut) v = 1.5f * std::tanh (v * (1.0f / 1.5f));
+            if (limitOut) v = softKnee (v, 1.5f);   // only extreme resonance peaks
             return dcBlock (v, ch);
         }
 
@@ -116,7 +150,7 @@ struct FilterChain
         if (preK > 0.0f)
         {
             if (fbKind == FbToPre) v += fbGain * fbState[ch];
-            v = driveShape (v, preK);
+            v = modelShape (v, preK, character);
         }
         for (int k = 0; k < numStages; ++k)
         {
@@ -127,8 +161,8 @@ struct FilterChain
         }
         if (! (std::abs (v) < 64.0f)) { reset(); v = 0.0f; }   // runaway (or NaN) under extreme modulation: start again
         fbState[ch] = v;
-        if (postK > 0.0f) v = driveShape (v, postK);
-        if (limitOut) v = 1.5f * std::tanh (v * (1.0f / 1.5f));
+        if (postK > 0.0f) v = modelShape (v, postK, character);
+        if (limitOut) v = softKnee (v, 1.5f);   // only extreme resonance peaks
         return dcBlock (v, ch);
     }
 };
@@ -140,6 +174,7 @@ struct ModelVoice
 {
     float preK = 0;        // extra shaper after the drive (OTA, acid)
     float postK = 0;       // saturator after the filter (Polivoks)
+    float character = 0;   // how much of preK / postK is in (follows Drive)
     float resScale = 1;    // how strong its resonance is
     float satT = 3;        // where its resonance starts to saturate (lower = grittier)
     bool limitOut = false; // soft output limiter (acid, TB-303)
@@ -164,7 +199,7 @@ struct Svf
         const float v2 = ic2[ch] + a2 * ic1[ch] + a3 * v3;
         ic1[ch] = 2.0f * v1 - ic1[ch];
         ic2[ch] = 2.0f * v2 - ic2[ch];
-        if (sat > 0.0f) ic1[ch] = sat * fastTanh (ic1[ch] / sat);
+        if (sat > 0.0f) ic1[ch] = softKnee (ic1[ch], sat);   // bounds resonance; normal levels pass untouched
         lp = v2; bp = v1;
     }
     void reset() { ic1[0] = ic1[1] = ic2[0] = ic2[1] = 0.0f; }
@@ -218,20 +253,28 @@ public:
     void configure (int model, int type, int slope, bool immediate);
     void update (float cutoff, float res, double sr);     // clamps cutoff to 20 Hz .. min (20 kHz, 0.45 fs)
     void setAnalog (float warmth, float bassKeep);
-    void setDrive (float k) { drive = std::max (1.0f, k); comp = driveCompensation (drive); }
+    void setDrive (float k)
+    {
+        drive = std::max (1.0f, k); comp = driveCompensation (drive);
+        const float c = driveCharacter (drive);
+        for (Core* x : { &cur, &old }) { x->chain.character = c; x->multi.mv.character = c; }
+    }
     void setMix (float m) { mix = clampv (m, 0.0f, 1.0f); }
     void reset();
     void copyChannel (int from, int to);
 
     inline void processFrame (float xL, float xR, bool stereo, float& yL, float& yR)
     {
+        hist[0][hpos] = xL; hist[1][hpos] = xR; hpos = (hpos + 1) & (kHist - 1);
+        lastStereo = stereo;
         yL = run (cur, xL, 0);
         yR = stereo ? run (cur, xR, 1) : yL;
         if (fade > 0)
         {
             const float oL = run (old, xL, 0);
             const float oR = stereo ? run (old, xR, 1) : oL;
-            const float f = 1.0f - (float) fade / (float) kFadeLen;
+            const float lin = 1.0f - (float) fade / (float) kFadeLen;
+            const float f = lin * lin * (3.0f - 2.0f * lin);   // S-shaped: eases in and out
             yL = oL + (yL - oL) * f;
             yR = oR + (yR - oR) * f;
             --fade;
@@ -245,7 +288,7 @@ public:
     // (a saturator is very loud for a tiny test signal) would misrepresent the curve.
     void setPreview (bool p) { preview = p; }
     int model() const { return cur.model; }
-    static constexpr int kFadeLen = 288;   // ~6 ms at 48 kHz
+    static constexpr int kFadeLen = 480;   // 10 ms at 48 kHz
 
 private:
     struct Core
@@ -259,6 +302,12 @@ private:
     void setup (Core& c, int model, int type, int slope);
 
     Core cur, old;
+    // the last few milliseconds of input: a newly chosen filter is run over them first, so it
+    // joins the crossfade already settled instead of starting from silence (no start-up ring)
+    static constexpr int kHist = 512;
+    float hist[2][kHist] {};
+    int hpos = 0;
+    bool lastStereo = false, primePending = false;
     int fade = 0;
     float drive = 1.0f, comp = 1.0f, mix = 1.0f;
     float warm = 0.0f, keep = 0.0f;

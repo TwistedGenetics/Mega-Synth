@@ -40,7 +40,7 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 - **Model**: the 17 classic models. A model set to Low Pass at its own slope (picked automatically when you choose the model) is the original circuit, exactly as before. With any other type or slope the model gives the multimode filter its character: its input stage, how strong its resonance is, how hard the resonance saturates, and its output shaping.
 - **Cutoff** 20 Hz - 20 kHz with equal knob travel per octave, shown in Hz below 1 kHz and kHz above (you can type either). It's kept below 45% of the sample rate.
 - **Resonance**: strong peaks for Low and High Pass; the 24 dB Low Pass self-oscillates at the top of the knob, in tune with the cutoff. For Peak / Bell it sets the boost (+2 to +18 dB) and narrows it. Extreme settings stay stable and bounded.
-- **Drive**: input gain into the filter's saturation stage (shown in dB), with the level compensated so turning it up adds density and bite rather than just volume.
+- **Drive**: at 0 dB the filter is clean: it only filters. Turning Drive up blends in saturation (fully in by +12 dB), including the extra grit of the OTA, Acid and Polivoks models, with the level compensated so it adds density and bite rather than just volume. Only extreme peaks (far above full scale, or a screaming resonance) are rounded off at 0 dB.
 - **Mix**: 0% = unfiltered, 100% = fully filtered, parallel in between.
 - **Env Amt** -100% to +100% (100% = +10 kHz at the envelope's peak; negative sweeps down), **LFO Amt** -100% to +100% of any of the four LFOs (100% = +-4 octaves), **Key Track** 0-100% (100% = the cutoff follows the keyboard from middle C).
 - The curve on the right is the real filter's response, worked out from the same code the voices run.
@@ -136,7 +136,7 @@ Most behaviour is unchanged. These are the places where the browser version had 
 - **Delay Sync** stays in effect while notes play. The browser switched back to the manual delay time whenever a note was held.
 - Tempo-synced effects follow the DAW tempo.
 - The reverb, shimmer and reverse reverb share one impulse, so they run through one convolution with their returns applied before it. The sound only differs if you modulate their return levels quickly.
-- **Analog Warmth** (Filter & Env tab, new): *Warmth* swaps the hard clip at the filter input for a softer saturation with a little 2nd harmonic, and adds a gentle low lift and softer top on the master. *Bass Keep* holds onto low end in the classic filter models with high-pass or band-pass stages (Steiner-Parker, State Variable, MS-20, Oberheim, SEM, CS-15...). *Drift* lets each oscillator wander slightly and start free-running. They default to 0.5 / 0.5 / 0.3; set all three to 0 for the browser's exact sound.
+- **Analog Warmth** (Filter & Env tab, new): *Warmth* makes the filter's Drive saturation softer, with a little 2nd harmonic (it doesn't colour the filter at 0 dB Drive), and adds a gentle low lift and softer top on the master. *Bass Keep* holds onto low end in the classic filter models with high-pass or band-pass stages (Steiner-Parker, State Variable, MS-20, Oberheim, SEM, CS-15...). *Drift* lets each oscillator wander slightly and start free-running. They default to 0.5 / 0.5 / 0.3; set all three to 0 for the browser's exact sound.
 - **New**: semitone dials on every oscillator, velocity sensitivity (off by default, as before), pitch-bend range, the DAW-synced sequencer clock, and samples saved with the project.
 
 ## Building from source

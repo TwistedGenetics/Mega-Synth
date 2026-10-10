@@ -227,6 +227,33 @@ int main()
             CHECK (ok && worst < 64.0f, "every filter stays stable and bounded under extreme settings");
         }
 
+        // Drive at 0 dB is clean: every model, type and slope behaves linearly at normal levels
+        // (a loud signal gives the same result as a tiny one, scaled up)
+        {
+            double worst = -300; juce::String where;
+            for (int model = 0; model < 17; ++model)
+                for (int type = 0; type < 6; ++type)
+                    for (int slope = 0; slope < 4; ++slope)
+                    {
+                        if (filterSlopeMask (type) != 0 && ! (filterSlopeMask (type) & (1 << slope))) continue;
+                        FilterUnit big, small;
+                        for (auto* u : { &big, &small }) { u->setAnalog (0.5f, 0.5f); u->configure (model, type, slope, true); u->setDrive (1.0f); u->update (1000.0f, 1.5f, fs); }
+                        double e = 0, d = 0;
+                        for (int i = 0; i < 9600; ++i)
+                        {
+                            const float x = 0.45f * (float) std::sin (2.0 * kPi * 220.0 * i / fs) + 0.35f * (float) std::sin (2.0 * kPi * 1500.0 * i / fs);
+                            float b, sm, r;
+                            big.processFrame (x, x, false, b, r);
+                            small.processFrame (x * 0.001f, x * 0.001f, false, sm, r);
+                            if (i > 2400) { e += (double) b * b; d += (double) (b - sm * 1000.0f) * (b - sm * 1000.0f); }
+                        }
+                        const double db = 10 * std::log10 (d / std::max (e, 1e-20) + 1e-30);
+                        if (db > worst) { worst = db; where = juce::String (kFilterLabels[model]) + " " + kFilterTypeLabels[type] + " " + kFilterSlopeLabels[slope]; }
+                    }
+            std::cout << "  Drive 0 dB distortion, worst case: " << juce::String (worst, 1) << " dB (" << where << ")" << std::endl;
+            CHECK (worst < -70.0, "Drive 0 dB is clean for every model, type and slope");
+        }
+
         // switching type / slope / model mid-sound crossfades instead of clicking: the largest
         // sample-to-sample step while switching is no bigger than either setting's own steady one
         {
@@ -453,6 +480,70 @@ int main()
         }
 
     };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_DIAG", {}).isNotEmpty())
+    {
+        // filter "clean" check: filter wide open, Mix 100% vs 0%; the difference is what the filter adds
+        auto cleanTest = [&] (const juce::String& name, std::function<void (MegaSynthProcessor&)> setup, std::initializer_list<int> notes)
+        {
+            juce::AudioBuffer<float> b[2];
+            for (int m = 0; m < 2; ++m)
+            {
+                auto p = make();
+                for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift }) setP (*p, i, 0.0f);
+                setup (*p);
+                setP (*p, P_filterMix, m == 0 ? 0.0f : 1.0f);
+                render (*p, 1.0, chord (0.0, 0.9, notes), &b[m]);
+            }
+            double e0 = 0, ed = 0; float pk = 0;
+            for (int i = (int) (0.2 * sr); i < (int) (0.8 * sr); ++i)
+            {
+                const float d = b[1].getSample (0, i) - b[0].getSample (0, i);
+                e0 += b[0].getSample (0, i) * b[0].getSample (0, i); ed += d * d;
+                pk = std::max (pk, std::abs (b[0].getSample (0, i)));
+            }
+            std::cout << "  " << name << ": dry peak " << pk << ", filter adds " << juce::String (10 * std::log10 (ed / e0 + 1e-30), 1) << " dB" << std::endl;
+        };
+        auto open = [] (int type, float cut) { return [type, cut] (MegaSynthProcessor& p) { setP (p, P_filterType, (float) type); setP (p, P_filterCutoff, cut); setP (p, P_filterRes, 0.1f);
+                                                                                            setP (p, P_fEnvAmt, 0.0f); setP (p, P_envAssignAmt0, 0.0f); setP (p, P_lfoAssignAmt0, 0.0f); }; };
+        for (float w : { 0.0f, 0.5f })
+        {
+            std::cout << "warmth " << w << std::endl;
+            auto with = [&] (std::function<void (MegaSynthProcessor&)> f) { return [f, w] (MegaSynthProcessor& p) { f (p); setP (p, P_warmth, w); }; };
+            cleanTest ("default oscs, LP12 classic 20k, one note", with (open (FT_LP, 20000.0f)), { 57 });
+            cleanTest ("default oscs, LP12 classic 20k, chord", with (open (FT_LP, 20000.0f)), { 48, 52, 55, 60 });
+            cleanTest ("default oscs, HP12 20 Hz, chord", with (open (FT_HP, 20.0f)), { 48, 52, 55, 60 });
+            cleanTest ("one saw 0.3, LP12 20k", with ([&] (MegaSynthProcessor& p) { open (FT_LP, 20000.0f) (p);
+                for (int i : { P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain }) setP (p, i, 0.0f); setP (p, P_osc1Gain, 0.3f); }), { 57 });
+        }
+        // harmonic distortion of a sine through the open filter, by level
+        auto thd = [&] (float gain, int type, float cut, float mix, int model = 0, float drive = 1.0f)
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain,
+                           P_fEnvAmt, P_envAssignAmt0, P_lfoAssignAmt0, P_warmth }) setP (*p, i, 0.0f);
+            setP (*p, P_osc1Wave, 3.0f); setP (*p, P_osc1Gain, gain); setP (*p, P_ampS, 1.0f);
+            setP (*p, P_filterMode, (float) model); setP (*p, P_filterSlope, (float) nativeFilterSlope (model));
+            setP (*p, P_filterType, (float) type); setP (*p, P_filterCutoff, cut); setP (*p, P_filterRes, 0.1f); setP (*p, P_filterMix, mix); setP (*p, P_filterDrive, drive);
+            juce::AudioBuffer<float> b;
+            render (*p, 0.6, { { 0.0, juce::MidiMessage::noteOn (1, 45, (juce::uint8) 127) } }, &b);   // 110 Hz
+            juce::dsp::FFT fft (14);
+            std::vector<float> d (32768, 0.0f);
+            const int st = (int) (0.2 * sr);
+            for (int i = 0; i < 16384 && st + i < b.getNumSamples(); ++i) d[(size_t) i] = b.getSample (0, st + i) * (0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * i / 16383.0f));
+            fft.performFrequencyOnlyForwardTransform (d.data());
+            auto band = [&] (double f) { const int k = (int) std::round (f * 16384 / sr); float m = 0; for (int j = k - 3; j <= k + 3; ++j) m = std::max (m, d[(size_t) j]); return m; };
+            const double f0 = 110.0; double h = 0;
+            for (int n = 2; n <= 9; ++n) h += band (f0 * n) * band (f0 * n);
+            return 10 * std::log10 (h / (band (f0) * band (f0)) + 1e-30);
+        };
+        for (float dr : { 1.5f, 2.0f, 4.0f, 8.0f, 25.0f })
+            std::cout << "  drive " << juce::String (20 * std::log10 (dr), 1) << " dB, sine 0.5: harmonics " << juce::String (thd (0.5f, FT_LP, 20000.0f, 1.0f, 0, dr), 1) << " dB" << std::endl;
+        for (float g : { 0.2f, 0.5f, 0.8f, 1.0f, 1.6f })
+            std::cout << "  sine level " << g << ": harmonics  mix0 " << juce::String (thd (g, FT_LP, 20000.0f, 0.0f), 1) << " dB,  LP12 classic " << juce::String (thd (g, FT_LP, 20000.0f, 1.0f), 1)
+                      << ",  HP12 multimode " << juce::String (thd (g, FT_HP, 20.0f, 1.0f), 1) << ",  LP24 ladder model " << juce::String (thd (g, FT_LP, 20000.0f, 1.0f, 2), 1) << std::endl;
+        return 0;
+    }
+
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_FILTERONLY", {}).isNotEmpty())
     {
         filterUnitTests();
@@ -1250,8 +1341,10 @@ int main()
                 spec ([] (MegaSynthProcessor& p) { setP (p, P_osc1Wave, 0.0f); setP (p, P_spFormant, 12.0f); }, b);
                 const double cf = centroid (spectrum (b));
                 const double fp = peakHz (spectrum (b));
-                std::cout << "  centroid: saw " << cs << ", tilt +1 " << ct << ", formant +12 " << cf << " (pitch " << fp << " Hz)" << std::endl;
-                CHECK (ct > 1.3 * cs && cf > 1.2 * cs, "tilt / formant");
+                spec ([] (MegaSynthProcessor& p) { setP (p, P_osc1Wave, 0.0f); setP (p, P_spFormant, -12.0f); }, b);
+                const double cfd = centroid (spectrum (b));
+                std::cout << "  centroid: saw " << cs << ", tilt +1 " << ct << ", formant +12 " << cf << ", formant -12 " << cfd << " (pitch " << fp << " Hz)" << std::endl;
+                CHECK (ct > 1.3 * cs && cf > 1.1 * cs && cf > 1.3 * cfd, "tilt / formant");
                 // freeze holds the sound after the note; with blur and maximum feedback it stays bounded
                 {
                     auto p = clean(); setP (*p, P_ampR, 0.05f); setP (*p, P_spOn, 1.0f); setP (*p, P_spSize, 3.0f);

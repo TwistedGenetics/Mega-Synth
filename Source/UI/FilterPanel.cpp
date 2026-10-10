@@ -339,7 +339,7 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
             addChildComponent (k);
         }
         knobs[w][0]->slider.setTooltip ("Cutoff, 20 Hz - 20 kHz (equal travel per octave)");
-        knobs[w][2]->slider.setTooltip ("Pushes the signal into the filter: saturation, thicker bass, more bite. Level is compensated.");
+        knobs[w][2]->slider.setTooltip ("0 dB = clean. Turning it up pushes the signal into the filter: saturation, thicker bass, more bite (fully in by +12 dB). Level is compensated.");
         knobs[w][3]->slider.setTooltip ("Mix: 0% = unfiltered, 100% = fully filtered (parallel filtering in between)");
         knobs[w][4]->slider.setTooltip ("Filter envelope amount, -100% .. +100% (100% = +10 kHz at the envelope's peak). Negative inverts the sweep. Both filters share the Filter Envelope.");
         knobs[w][5]->slider.setTooltip ("LFO to cutoff, -100% .. +100% (100% = +-4 octaves)");

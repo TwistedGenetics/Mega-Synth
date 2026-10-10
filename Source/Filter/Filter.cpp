@@ -152,23 +152,23 @@ void FilterChain::update (float c, float res, double sr)
 const ModelVoice& modelVoice (int model)
 {
     //                                   preK postK resScale satT  limit
-    static const ModelVoice table[17] = { { 0, 0, 1.00f, 3.0f, false },    // Standard LP
-                                          { 0, 0, 0.90f, 2.5f, false },    // Sallen-Key
-                                          { 0, 0, 1.00f, 2.5f, false },    // Ladder
-                                          { 0, 0, 1.10f, 1.5f, false },    // Steiner-Parker
-                                          { 0, 0, 1.00f, 3.0f, false },    // State Variable
-                                          { 4, 0, 0.95f, 2.0f, false },    // Discrete OTA
-                                          { 0, 7, 1.15f, 1.2f, false },    // Polivoks
-                                          { 0, 0, 0.90f, 2.0f, false },    // Switched Capacitor
-                                          { 6, 0, 1.10f, 1.5f, true  },    // Acid Filter Approx
-                                          { 0, 0, 1.15f, 1.2f, false },    // MS-20
-                                          { 0, 0, 0.90f, 3.0f, false },    // Oberheim
-                                          { 0, 0, 0.85f, 3.0f, false },    // SEM
-                                          { 0, 0, 1.00f, 1.8f, true  },    // TB-303
-                                          { 0, 0, 1.00f, 2.5f, false },    // Minimoog - Fat Cat
-                                          { 0, 0, 1.00f, 2.0f, false },    // Arp Odyssey
-                                          { 0, 0, 0.95f, 2.5f, false },    // CS-15
-                                          { 0, 0, 0.95f, 2.5f, false } };  // SH-2
+    static const ModelVoice table[17] = { { 0, 0, 1.00f, 6.0f, false },    // Standard LP
+                                          { 0, 0, 0.90f, 5.0f, false },    // Sallen-Key
+                                          { 0, 0, 1.00f, 5.0f, false },    // Ladder
+                                          { 0, 0, 1.10f, 3.0f, false },    // Steiner-Parker
+                                          { 0, 0, 1.00f, 6.0f, false },    // State Variable
+                                          { 4, 0, 0.95f, 4.0f, false },    // Discrete OTA
+                                          { 0, 7, 1.15f, 2.4f, false },    // Polivoks
+                                          { 0, 0, 0.90f, 4.0f, false },    // Switched Capacitor
+                                          { 6, 0, 1.10f, 3.0f, true  },    // Acid Filter Approx
+                                          { 0, 0, 1.15f, 2.4f, false },    // MS-20
+                                          { 0, 0, 0.90f, 6.0f, false },    // Oberheim
+                                          { 0, 0, 0.85f, 6.0f, false },    // SEM
+                                          { 0, 0, 1.00f, 3.6f, true  },    // TB-303
+                                          { 0, 0, 1.00f, 5.0f, false },    // Minimoog - Fat Cat
+                                          { 0, 0, 1.00f, 4.0f, false },    // Arp Odyssey
+                                          { 0, 0, 0.95f, 5.0f, false },    // CS-15
+                                          { 0, 0, 0.95f, 5.0f, false } };  // SH-2
     return table[clampv (model, 0, 16)];
 }
 
@@ -267,7 +267,7 @@ float MultiCore::process (float x, int ch, float drive)
         const float S = G3 * H * s[0] + G2 * H * s[1] + G * H * s[2] + H * s[3];
         const float y4 = (G4 * x + S) / (1.0f + lk * G4);
         float v = filterInputShape (x - lk * y4, drive, warm);
-        if (mv.preK > 0.0f) v = driveShape (v, mv.preK);
+        if (mv.preK > 0.0f) v = modelShape (v, mv.preK, mv.character);
         for (int k = 0; k < 4; ++k)
         {
             const float u = (v - s[k]) * lg;
@@ -280,7 +280,7 @@ float MultiCore::process (float x, int ch, float drive)
     else
     {
         float v = filterInputShape (x, drive, warm);
-        if (mv.preK > 0.0f) v = driveShape (v, mv.preK);
+        if (mv.preK > 0.0f) v = modelShape (v, mv.preK, mv.character);
         switch (type)
         {
             case FT_LP:
@@ -336,8 +336,8 @@ float MultiCore::process (float x, int ch, float drive)
         }
     }
     if (! (std::abs (y) < 64.0f)) { reset(); y = 0.0f; }
-    if (mv.postK > 0.0f) y = driveShape (y, mv.postK);
-    y = mv.limitOut ? 1.5f * fastTanh (y * (1.0f / 1.5f)) : 3.0f * fastTanh (y * (1.0f / 3.0f));
+    if (mv.postK > 0.0f) y = modelShape (y, mv.postK, mv.character);
+    y = softKnee (y, mv.limitOut ? 1.5f : 4.0f);   // safety only: normal levels pass untouched
     const float d = y - dcX[ch] + dcR * dcY[ch];
     dcX[ch] = y; dcY[ch] = d;
     return d;
@@ -353,6 +353,7 @@ void FilterUnit::setup (Core& c, int model, int type, int slope)
     else c.multi.configure (type, eff, model);
     c.chain.warm = warm; c.chain.bassKeep = keep;
     c.multi.warm = warm;
+    c.chain.character = c.multi.mv.character = driveCharacter (drive);
     if (preview) { c.chain.preK = c.chain.postK = 0.0f; c.multi.mv.preK = c.multi.mv.postK = 0.0f; }
 }
 
@@ -375,12 +376,23 @@ void FilterUnit::configure (int model, int type, int slope, bool immediate)
     old = cur;
     setup (cur, model, type, slope);
     fade = kFadeLen;
+    primePending = true;   // done in update(), once the new filter has its coefficients
 }
 
 void FilterUnit::update (float c, float res, double sr)
 {
     c = clampv (c, 20.0f, (float) std::min (20000.0, sr * 0.45));
     if (cur.classic) cur.chain.update (c, res, sr); else cur.multi.update (c, res, sr);
+    if (primePending)
+    {
+        primePending = false;
+        for (int i = 0; i < kHist; ++i)
+        {
+            const int k = (hpos + i) & (kHist - 1);
+            run (cur, hist[0][k], 0);
+            if (lastStereo) run (cur, hist[1][k], 1);
+        }
+    }
     if (fade > 0) { if (old.classic) old.chain.update (c, res, sr); else old.multi.update (c, res, sr); }
 }
 
@@ -394,6 +406,8 @@ void FilterUnit::setAnalog (float warmth, float bassKeep)
 
 void FilterUnit::reset()
 {
+    for (auto& h : hist) std::fill (std::begin (h), std::end (h), 0.0f);
+    primePending = false;
     cur.chain.reset(); cur.multi.reset();
     old.chain.reset(); old.multi.reset();
     fade = 0;

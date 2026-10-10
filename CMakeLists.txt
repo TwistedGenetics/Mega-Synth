@@ -41,7 +41,9 @@ set(MEGASYNTH_SOURCES
     Source/UI/Overview.cpp
     Source/UI/FilterPanel.cpp
     Source/UI/DnaSeqPage.cpp
-    Source/Filter/Filter.cpp)
+    Source/UI/FxPages.cpp
+    Source/Filter/Filter.cpp
+    Source/Fx/RackFx.cpp)
 
 set(MEGASYNTH_DEFINES
     JUCE_WEB_BROWSER=0

@@ -83,6 +83,21 @@ inline const char* const kDsDirLabels[] = { "Forward","Reverse","Ping-pong","Ran
 inline const char* const kDsPatKeys[]   = { "A","B","C","D" };
 inline const char* const kDsMidiKeys[]   = { "off","0","12","24" };
 inline const char* const kDsMidiLabels[] = { "Off","MIDI 0-3 (C-2 to D#-2)","MIDI 12-15 (C-1 to D#-1)","MIDI 24-27 (C0 to D#0)" };
+inline const char* const kSmpModelKeys[]   = { "sp1200","s950","emu","free" };
+inline const char* const kSmpModelLabels[] = { "SP-1200 (12-bit, 26 kHz)","Akai S950 (12-bit, variable)","E-mu (12-bit, 27.8 kHz)","Free" };
+inline const char* const kRptLenKeys[]   = { "1/4","1/8","1/16","1/32" };
+inline const char* const kRptDurKeys[]   = { "1/2beat","1beat","2beats","1bar" };
+inline const char* const kRptDurLabels[] = { "1/2 beat","1 beat","2 beats","1 bar" };
+inline const char* const kRptMidiKeys[]   = { "off","4","16","28" };
+inline const char* const kRptMidiLabels[] = { "Off","MIDI 4 (E-2)","MIDI 16 (E-1)","MIDI 28 (E0)" };
+inline const char* const kFlpModeKeys[]   = { "flanger","phaser" };
+inline const char* const kFlpModeLabels[] = { "Flanger","Phaser" };
+inline const char* const kFlpStageKeys[]   = { "4","8","12" };
+inline const char* const kFlpStageLabels[] = { "4 stages","8 stages","12 stages" };
+inline const char* const kVshRateKeys[]   = { "1/4","1/2","1bar" };
+inline const char* const kVshRateLabels[] = { "1/4","1/2","1 Bar" };
+inline const char* const kVshTrigKeys[]   = { "beat","note","dna" };
+inline const char* const kVshTrigLabels[] = { "Locked to the beat","Each note","DNA step gate" };
 inline const char* const kFilterRouteKeys[]   = { "serial","parallel" };
 inline const char* const kFilterRouteLabels[] = { "Serial (1 > 2)","Parallel (1 + 2)" };
 inline const char* const kFilterLfoKeys[]   = { "lfo1","lfo2","lfo3","lfo4" };
@@ -209,6 +224,14 @@ inline const ChoiceList kListFilterType  { kFilterTypeKeys, kFilterTypeLabels, 6
 inline const ChoiceList kListFilterSlope { kFilterSlopeKeys, kFilterSlopeLabels, 4 };
 inline const ChoiceList kListFilterLfo   { kFilterLfoKeys, kFilterLfoLabels, 4 };
 inline const ChoiceList kListFilterRoute { kFilterRouteKeys, kFilterRouteLabels, 2 };
+inline const ChoiceList kListSmpModel    { kSmpModelKeys, kSmpModelLabels, 4 };
+inline const ChoiceList kListRptLen      { kRptLenKeys, kRptLenKeys, 4 };
+inline const ChoiceList kListRptDur      { kRptDurKeys, kRptDurLabels, 4 };
+inline const ChoiceList kListRptMidi     { kRptMidiKeys, kRptMidiLabels, 4 };
+inline const ChoiceList kListFlpMode     { kFlpModeKeys, kFlpModeLabels, 2 };
+inline const ChoiceList kListFlpStages   { kFlpStageKeys, kFlpStageLabels, 3 };
+inline const ChoiceList kListVshRate     { kVshRateKeys, kVshRateLabels, 3 };
+inline const ChoiceList kListVshTrig     { kVshTrigKeys, kVshTrigLabels, 3 };
 inline const ChoiceList kListDsSync      { kDsSyncKeys, kDsSyncLabels, 3 };
 inline const ChoiceList kListDsRestart   { kDsRestartKeys, kDsRestartLabels, 4 };
 inline const ChoiceList kListDsGrid      { kDsGridKeys, kDsGridKeys, 2 };
@@ -217,6 +240,13 @@ inline const ChoiceList kListDsPattern   { kDsPatKeys, kDsPatKeys, 4 };
 inline const ChoiceList kListDsMidi      { kDsMidiKeys, kDsMidiLabels, 4 };
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
+// The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
+enum FxSlot { FS_Stutter, FS_Sampler, FS_Flanger, FS_Delay, FS_Chorus, FS_Reverb, FS_Shaper, FS_Multiband, FS_Stereo, FS_COUNT };
+inline const char* const kFxSlotNames[FS_COUNT] = { "Beat Repeat", "Vintage Sampler", "Flanger / Phaser", "Tape Delay", "Juno Chorus",
+                                                    "Reverbs", "Volume Shaper", "Multiband", "Stereo Tools" };
+// The effects that are sends (they add their output to what they hear); next to each other they share one input.
+inline bool fxSlotIsSend (int s) { return s == FS_Delay || s == FS_Chorus || s == FS_Reverb; }
+
 enum FilterType { FT_LP, FT_HP, FT_BP, FT_NOTCH, FT_PEAK, FT_AP, FT_TYPE_COUNT };
 // The slope each classic model has as a low-pass (its original circuit). Low Pass at this slope
 // runs that model exactly as before the filter overhaul; patches from before it load with it.
@@ -616,7 +646,79 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(dsChainOn,   "DNA Sequencer Chain", false) \
     F(dsDensity,   "DNA Sequencer Density", 0, 1, 1, 0.01, 0) \
     F(dsProbScale, "DNA Sequencer Probability Scale", 0, 2, 1, 0.01, 0) \
-    C(dsMidiSelect, "DNA Sequencer MIDI Pattern Select", kListDsMidi, 0)
+    C(dsMidiSelect, "DNA Sequencer MIDI Pattern Select", kListDsMidi, 0) \
+    B(fxOnStutter, "Beat Repeat On", false) \
+    F(fxMixStutter, "Beat Repeat Mix", 0, 1, 1, 0.01, 0) \
+    B(fxOnSampler, "Vintage Sampler On", false) \
+    F(fxMixSampler, "Vintage Sampler Mix", 0, 1, 1, 0.01, 0) \
+    B(fxOnFlanger, "Flanger / Phaser On", false) \
+    F(fxMixFlanger, "Flanger / Phaser Mix", 0, 1, 1, 0.01, 0) \
+    B(fxOnDelay, "Delay On", true) \
+    F(fxMixDelay, "Delay Mix", 0, 1, 1, 0.01, 0) \
+    B(fxOnChorus, "Chorus On", true) \
+    F(fxMixChorus, "Chorus Mix", 0, 1, 1, 0.01, 0) \
+    B(fxOnReverb, "Reverbs On", true) \
+    F(fxMixReverb, "Reverbs Mix", 0, 1, 1, 0.01, 0) \
+    B(fxOnShaper, "Volume Shaper On", false) \
+    F(fxMixShaper, "Volume Shaper Mix", 0, 1, 1, 0.01, 0) \
+    B(fxOnMultiband, "Multiband On", false) \
+    F(fxMixMultiband, "Multiband Mix", 0, 1, 1, 0.01, 0) \
+    B(fxOnStereo, "Stereo Tools On", false) \
+    F(fxMixStereo, "Stereo Tools Mix", 0, 1, 1, 0.01, 0) \
+    F(mbcXLow,  "Multiband Low / Mid", 40, 1000, 150, 1, -1) \
+    F(mbcXHigh, "Multiband Mid / High", 1000, 12000, 2500, 1, -1) \
+    F(mbcUpL,   "Multiband Low Upward", 0, 1, 0.5, 0.01, 0) \
+    F(mbcDownL, "Multiband Low Downward", 0, 1, 0.5, 0.01, 0) \
+    F(mbcInL,   "Multiband Low Input", -24, 24, 0, 0.1, 0) \
+    F(mbcOutL,  "Multiband Low Output", -24, 24, 0, 0.1, 0) \
+    F(mbcUpM,   "Multiband Mid Upward", 0, 1, 0.5, 0.01, 0) \
+    F(mbcDownM, "Multiband Mid Downward", 0, 1, 0.5, 0.01, 0) \
+    F(mbcInM,   "Multiband Mid Input", -24, 24, 0, 0.1, 0) \
+    F(mbcOutM,  "Multiband Mid Output", -24, 24, 0, 0.1, 0) \
+    F(mbcUpH,   "Multiband High Upward", 0, 1, 0.5, 0.01, 0) \
+    F(mbcDownH, "Multiband High Downward", 0, 1, 0.5, 0.01, 0) \
+    F(mbcInH,   "Multiband High Input", -24, 24, 0, 0.1, 0) \
+    F(mbcOutH,  "Multiband High Output", -24, 24, 0, 0.1, 0) \
+    F(mbcDepth, "Multiband Depth", 0, 1, 0.5, 0.01, 0) \
+    F(mbcTime,  "Multiband Time", 0, 1, 0.5, 0.01, 0) \
+    F(mbcGain,  "Multiband Output Gain", -24, 24, 0, 0.1, 0) \
+    C(smpModel, "Sampler Model", kListSmpModel, 0) \
+    F(smpBits,  "Sampler Bits", 1, 16, 12, 0.1, 0) \
+    F(smpRate,  "Sampler Rate", 2000, 48000, 26040, 1, -1) \
+    B(smpAA,    "Sampler Anti-Alias", true) \
+    F(smpCutoff, "Sampler Filter", 500, 20000, 12000, 1, -1) \
+    F(smpRes,   "Sampler Filter Resonance", 0, 1, 0.2, 0.01, 0) \
+    F(smpNoise, "Sampler Noise", 0, 1, 0.1, 0.01, 0) \
+    F(smpDrive, "Sampler Input Clip", 0, 1, 0.2, 0.01, 0) \
+    C(rptLength, "Repeat Length", kListRptLen, 1) \
+    F(rptShrink, "Repeat Shrink", 0, 1, 0, 0.01, 0) \
+    F(rptPitch,  "Repeat Pitch Drop", 0, 12, 0, 0.1, 0) \
+    B(rptReverse, "Repeat Reverse", false) \
+    F(rptGate,   "Repeat Gate", 0.1, 1, 1, 0.01, 0) \
+    B(rptTrigger, "Repeat Trigger", false) \
+    F(rptChance, "Repeat Chance", 0, 1, 0, 0.01, 0) \
+    C(rptDuration, "Repeat Duration", kListRptDur, 1) \
+    C(rptMidi,   "Repeat MIDI Trigger", kListRptMidi, 0) \
+    B(rptDna,    "Repeat on DNA Step Gate", false) \
+    C(flpMode,   "Flanger / Phaser Mode", kListFlpMode, 0) \
+    F(flpRate,   "Flanger / Phaser Rate", 0.01, 10, 0.3, 0.01, 1) \
+    C(flpSync,   "Flanger / Phaser Sync", kListModSync, 0) \
+    F(flpDepth,  "Flanger / Phaser Depth", 0, 1, 0.7, 0.01, 0) \
+    F(flpFeedback, "Flanger / Phaser Feedback", -0.95, 0.95, 0.5, 0.01, 0) \
+    F(flpManual, "Flanger / Phaser Manual", 0, 1, 0.5, 0.01, 0) \
+    B(flpTZ,     "Flanger Through-Zero", false) \
+    C(flpStages, "Phaser Stages", kListFlpStages, 0) \
+    F(flpSpread, "Flanger / Phaser Stereo Spread", 0, 1, 0.5, 0.01, 0) \
+    B(flpEnv,    "Flanger / Phaser Envelope Mode", false) \
+    F(flpEnvSens, "Flanger / Phaser Envelope Sensitivity", 0, 1, 0.5, 0.01, 0) \
+    C(vshRate,   "Volume Shaper Rate", kListVshRate, 0) \
+    F(vshDepth,  "Volume Shaper Depth", 0, 1, 0.8, 0.01, 0) \
+    F(vshSmooth, "Volume Shaper Smooth", 0, 1, 0.3, 0.01, 0) \
+    C(vshTrig,   "Volume Shaper Trigger", kListVshTrig, 0) \
+    B(sttMono,   "Bass Mono", true) \
+    F(sttMonoFreq, "Bass Mono Below", 50, 300, 120, 1, -1) \
+    F(sttWidth,  "Stereo Width", 0, 2, 1, 0.01, 0) \
+    F(sttHaas,   "Haas Delay", 0, 30, 0, 0.1, 0)
 
 enum ParamIndex
 {

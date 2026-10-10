@@ -332,7 +332,7 @@ private:
     juce::TextButton mutNew { "New seed" }, mutPrev { "<" }, mutNext { ">" }, mutCommit { "Commit" };
     juce::Label mutSeedLabel, mutHistLabel;
     juce::OwnedArray<juce::ToggleButton> mutLocks;
-    juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> mutLockAtts;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> mutLockAtts, fxAtts;
     int lastSeedShown = -1, lastHistCount = -1;
     // Genetic Lab
     juce::Label labParent[2], labGenLabel, labLine;

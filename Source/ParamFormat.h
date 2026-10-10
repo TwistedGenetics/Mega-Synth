@@ -31,6 +31,21 @@ inline juce::String formatParam (int idx, float v)
         || id == "seqAccentAmt" || id == "velSens")
         return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id.startsWith ("mod") && id.endsWith ("Amt")) { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
+    // ---- effects rack
+    {
+        auto pct = [&] { return juce::String (juce::roundToInt (v * 100.0f)) + "%"; };
+        auto db = [&] { return (v > 0.05f ? "+" : "") + fixed (v, 1) + " dB"; };
+        if (id.startsWith ("fxMix")) return pct();
+        if (id == "mbcXLow" || id == "mbcXHigh" || id == "smpRate" || id == "smpCutoff" || id == "sttMonoFreq") return formatHz (v);
+        if (id.startsWith ("mbcIn") || id.startsWith ("mbcOut") || id == "mbcGain") return db();
+        if (id.startsWith ("mbc") || id == "smpRes" || id == "smpNoise" || id == "smpDrive" || id == "rptShrink" || id == "rptGate" || id == "rptChance"
+            || id == "flpDepth" || id == "flpManual" || id == "flpSpread" || id == "flpEnvSens" || id == "vshDepth" || id == "vshSmooth" || id == "sttWidth") return pct();
+        if (id == "smpBits") return fixed (v, 1) + " bit";
+        if (id == "rptPitch") return v < 0.05f ? juce::String ("none") : "-" + fixed (v, 1) + " st";
+        if (id == "flpRate") return fixed (v, 2) + " Hz";
+        if (id == "flpFeedback") { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
+        if (id == "sttHaas") return v < 0.05f ? juce::String ("off") : fixed (v, 1) + " ms";
+    }
     if (id == "dsLane2Steps") { const int n = juce::roundToInt (v); return juce::String (n) + (n == 1 ? " step" : " steps"); }
     if (id == "dsOffset") { const int n = juce::roundToInt (v); return n == 0 ? juce::String ("none") : "+" + juce::String (n) + (n == 1 ? " step" : " steps"); }
     if (id == "dsSwing" || id == "dsDensity" || id == "dsProbScale") return juce::String (juce::roundToInt (v * 100.0f)) + "%";

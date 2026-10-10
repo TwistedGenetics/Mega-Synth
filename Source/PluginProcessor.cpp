@@ -17,11 +17,18 @@ namespace
             || id.startsWith ("filter2") || id == "filterRouting" || id == "filterBalance" || id == "filterStereoSplit";
     }
 
+    // Parameters added with the effects rack (state version 6)
+    bool isFxV2Param (const juce::String& id)
+    {
+        for (auto* p : { "fxOn", "fxMix", "mbc", "smp", "rpt", "flp", "vsh", "stt" }) if (id.startsWith (p)) return true;
+        return false;
+    }
+
     bool isNewPluginParam (const juce::String& id)
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
-            || isFilterV2Param (id);
+            || isFilterV2Param (id) || isFxV2Param (id);
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -127,6 +134,7 @@ MegaSynthProcessor::MegaSynthProcessor()
     WaveBank::get();   // build the oscillator tables up front
     engine.setModulation (&routes, &modInputs, &scenes);
     engine.setDnaSequencer (&dnaSteps);
+    engine.fx().setRack (&fxRack);
     normTable();
     addListener (this);
     lastStepsVersion = steps.getVersion();
@@ -208,9 +216,17 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
             return;
         }
     }
+    // Beat Repeat's MIDI trigger: the note holds the repeat (and isn't played)
+    if (m.isNoteOnOrOff())
+    {
+        static const int rptBase[] = { -1, 4, 16, 28 };
+        const int rn = rptBase[juce::jlimit (0, 3, snap.i (P_rptMidi))];
+        if (rn >= 0 && m.getNoteNumber() == rn) { engine.fx().setStutterHeld (m.isNoteOn()); return; }
+    }
     if (m.isNoteOn())
     {
         dnaClock.noteOn (midiPos);
+        engine.fx().shaperNoteOn (fxBeatStart + fxBeatInc * midiPos);
         Voice::StartOptions o;
         o.velocity = m.getFloatVelocity();
         o.channel = ch;
@@ -306,6 +322,7 @@ void MegaSynthProcessor::seqTick (int stepIndex, double stepSeconds)
         o.filterAccent = filterAccent;
         engine.noteOn (key, freq, o, snap);
         dnaClock.noteOn (midiPos);
+        engine.fx().shaperNoteOn (fxBeatStart + fxBeatInc * midiPos);
         seqHeldKey = key;
     }
 
@@ -401,6 +418,14 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (dsOn && ! legacy) dsChunk = std::min (maxBlock, 64);
     }
 
+    // ---- the effects' beat clock: the DAW's position while it plays, otherwise carrying on at the tempo
+    {
+        const double tempo = snap.fxTempo;
+        if (hostPlaying && bpm > 0.0) { fxBeatStart = ppq; fxBeatInc = bpm / 60.0 / sampleRate; }
+        else { fxBeatStart = fxBeatsInternal; fxBeatInc = tempo / 60.0 / sampleRate; }
+        fxBeatsInternal = fxBeatStart + fxBeatInc * n;
+    }
+
     float* L = buffer.getWritePointer (0);
     float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
     juce::HeapBlock<float> monoR;
@@ -422,6 +447,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             const int len = std::min (next - pos, dsChunk);
             engine.keepPreFx = capRecording.load (std::memory_order_relaxed) && snap.i (P_capPoint) == 0;
             engine.setDnaPosition (dsOn ? dnaClock.stepsAt (pos + 0.5 * len) : 0.0);
+            snap.fxBeat = fxBeatStart + fxBeatInc * pos; snap.fxBeatInc = fxBeatInc;
             engine.render (L + pos, R + pos, len, snap, wavs);
             if (capRecording.load (std::memory_order_relaxed))
             {
@@ -520,6 +546,8 @@ void MegaSynthProcessor::timerCallback()
         if (v != lastStepsVersion) { lastStepsVersion = v; snapshotPending = true; snapshotDelay = 0; }
         const auto dv = dnaSteps.getVersion();
         if (dv != lastDnaVersion) { lastDnaVersion = dv; snapshotPending = true; snapshotDelay = 0; }
+        const auto fv = fxRack.getVersion();
+        if (fv != lastRackVersion) { lastRackVersion = fv; snapshotPending = true; snapshotDelay = 0; }
         const auto rv = routes.getVersion();
         if (rv != lastRoutesVersion) { lastRoutesVersion = rv; snapshotPending = true; snapshotDelay = 0; }
         if (snapshotPending && ++snapshotDelay >= 6)
@@ -632,6 +660,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("modRoutes", juce::JSON::toString (routes.toVar(), true), nullptr);
     state.setProperty ("dnaSeqSteps", dnaSteps.toString(), nullptr);   // pattern A lane 1, as older versions read it
     state.setProperty ("dnaSeq2", dnaSteps.toJson(), nullptr);         // everything
+    state.setProperty ("fxRack", juce::JSON::toString (fxRack.toVar(), true), nullptr);
     state.setProperty ("scenes", juce::JSON::toString (scenes.toVar(), true), nullptr);
     state.setProperty ("sceneEdit", getEditScene(), nullptr);
     state.setProperty ("macroNames", macroNamesJoined(), nullptr);
@@ -665,6 +694,8 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 3) setFilterDefaultsForOldPatch();
     if (version < 4) setFilter2DefaultsForOldPatch();
     if (version < 5) setDnaDefaultsForOldPatch();
+    if (version < 6) setFxDefaultsForOldPatch();
+    fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
 
     if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
@@ -739,6 +770,7 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
     root->setProperty ("modMatrix", routes.toVar());
     root->setProperty ("dnaSequence", dnaSteps.toString());   // pattern A lane 1 (older versions)
     root->setProperty ("dnaSequencer", dnaSteps.toVar());     // everything
+    root->setProperty ("fxRack", fxRack.toVar());
     root->setProperty ("scenes", scenes.toVar());
     root->setProperty ("sceneEdit", getEditScene());
     root->setProperty ("capture", captureToVar());
@@ -860,6 +892,8 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         routes.fromVar (patch["modMatrix"]);
         if (! dnaSteps.fromVar (patch["dnaSequencer"])) dnaSteps.fromString (patch["dnaSequence"].toString());
         if (extra == nullptr || ! extra->hasProperty ("dsSync")) setDnaDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("fxOnDelay")) setFxDefaultsForOldPatch();
+        fxRack.fromVar (patch["fxRack"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
         const juce::var names = patch["macroNames"];
@@ -951,6 +985,7 @@ void MegaSynthProcessor::resetPatchState()
     for (int i = 0; i < 32; ++i) steps.set (i, fresh.get (i));
     routes.clearAll();
     dnaSteps.fromString ({});
+    fxRack.fromVar ({});
     scenes.clear();
     sceneEditIndex = 0;
     for (int k = 0; k < 8; ++k) setMacroName (k, {});
@@ -958,6 +993,19 @@ void MegaSynthProcessor::resetPatchState()
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
+}
+
+void MegaSynthProcessor::setFxDefaultsForOldPatch()
+{
+    // Before the effects rack: the new effects off, the original ones on at full return
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        if (! isFxV2Param (kParamIds[i])) continue;
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
 }
 
 void MegaSynthProcessor::setDnaDefaultsForOldPatch()
@@ -1116,6 +1164,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
     s.steps = steps.toString();
     s.routes = juce::JSON::toString (routes.toVar(), true);
     s.dnaSteps = dnaSteps.toJson();
+    s.fxRack = juce::JSON::toString (fxRack.toVar(), true);
     s.scenes = juce::JSON::toString (scenes.toVar(), true);
     s.sceneEdit = getEditScene();
     s.macroNames = macroNamesJoined();
@@ -1128,7 +1177,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
 
 bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
 {
-    return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.scenes == b.scenes && a.macroNames == b.macroNames
+    return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.scenes == b.scenes && a.macroNames == b.macroNames
         && a.sceneEdit == b.sceneEdit && a.patchName == b.patchName
         && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1]
         && a.params.isEquivalentTo (b.params);
@@ -1143,6 +1192,8 @@ void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
     lastRoutesVersion = routes.getVersion();
     dnaSteps.fromJsonOrLegacy (s.dnaSteps);
     lastDnaVersion = dnaSteps.getVersion();
+    fxRack.fromVar (juce::JSON::parse (s.fxRack));
+    lastRackVersion = fxRack.getVersion();
     scenes.fromVar (juce::JSON::parse (s.scenes));
     lastScenesVersion = scenes.version.load();
     sceneEditIndex = s.sceneEdit;

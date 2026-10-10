@@ -16,6 +16,7 @@
 #include "Mut/Mutator.h"
 #include "Seq/DnaSequencer.h"
 #include "Filter/Filter.h"
+#include "Fx/RackFx.h"
 
 namespace tg
 {
@@ -26,6 +27,8 @@ struct Snapshot
     float v[P_COUNT] {};
     double sampleRate = 48000.0;
     double fxTempo = 130.0;   // tempo used for tempo-synced effects
+    double fxBeat = 0.0;      // beat position (the DAW's while it plays, otherwise the synth's clock) at the render start
+    double fxBeatInc = 0.0;   // beats per sample
     float bendSemis = 0.0f;   // current pitch-bend in semitones
 
     inline float f (int p) const { return v[p]; }
@@ -261,7 +264,33 @@ public:
     void updateImpulse (double seconds);
     double impulseSeconds() const { return irSeconds.load(); }
 
+    // ---- the rack
+    void setRack (const FxRackStore* st) { rack = st; }
+    void setDnaGate (float g) { dnaGate = g; }
+    void setStutterHeld (bool h) { stutterMidi = h; }
+    void shaperNoteOn (double beat) { shaper.noteOn (beat); }
+    MultibandComp multiband;
+    BeatRepeat stutter;
+    VolumeShaper shaper;
+
 private:
+    // Delay, chorus and the reverbs (the send effects) for one run of adjacent send slots:
+    // each hears the run's input and adds its return. mask: bit FS_Delay / FS_Chorus / FS_Reverb.
+    void processSends (float* L, float* R, int n, const Snapshot&, const ModState& mod, int mask, const float* slotGain,
+                       const float* const* delayIn, float* const* delayOut);
+    const FxRackStore* rack = nullptr;
+    VintageSampler sampler;
+    FlangerPhaser flanger;
+    StereoTools stereo;
+    float dnaGate = 0.0f;
+    bool stutterMidi = false;
+    float slotS[FS_COUNT] {};          // each slot's smoothed On x Mix
+    bool slotsReady = false;
+    uint64_t orderKey = 0;             // the order being played
+    std::array<int, FS_COUNT> order {};
+    float duck = 1.0f;                 // output dip while the order changes
+    bool reordering = false;
+    std::vector<float> dryBuf[2], runBuf[2];
     double sr = 48000.0;
     int maxBlock = 512;
 
@@ -315,6 +344,7 @@ public:
     std::array<std::atomic<float>, MS_COUNT> liveSrc {};
 
     FxBus& fx() { return fxBus; }
+    const FxBus& fx() const { return fxBus; }
     const Granular& granular() const { return gran; }
     // DNA Sequencer: the step store, and its position (in steps) at the middle of the next render call
     void setDnaSequencer (const DnaSeqStore* st) { dnaStore = st; }

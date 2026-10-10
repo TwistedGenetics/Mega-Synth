@@ -33,6 +33,20 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 - Every control is automatable. Double-click a knob to reset it.
 - **Undo / Redo / Original** (header): every knob move, step edit, route change, patch load and sample load can be undone. *Original* goes back to the patch as it was loaded.
 
+## Effects (Effects tab: Space / Dirt / Motion / Rack)
+
+- **Space**: Tape / BBD Delay, 90s Reverb + Shimmer, Juno Chorus and the Reverse Reverb (as before), plus **Stereo Tools**: Bass Mono below 50-300 Hz, Width 0-200% and a Haas delay (0-30 ms) on the top end. It works in mid/side and never touches the mid, so the mono sum is exactly unchanged.
+- **Dirt**:
+  - **Vintage Sampler**: SP-1200 (12-bit, 26.04 kHz, no anti-alias filter: it aliases), Akai S950 (12-bit at Rate, a steep anti-alias filter and the resonant Filter), E-mu (12-bit, 27.8 kHz, gentle filters) or Free (Bits, Rate, Anti-Alias), with Noise and an input clip. Quality High oversamples the clip.
+  - **Multiband** (OTT style): three bands with adjustable crossovers, upward (up to 4:1 below -36 dB) and downward (up to 20:1 above -18 dB) compression per band, input and output gain per band, Depth, Time, Output and gain meters. The bands are split so that with nothing compressing they add back to exactly the input. Quality Eco updates the gains every 8 samples.
+- **Motion**:
+  - **Beat Repeat**: repeats the last 1/4-1/32 (tempo synced). Shrink shortens each repeat (rolls), Pitch Drop lowers each one (tape-stop style), Reverse, Gate. Triggers: hold the pad (or automate Repeat Trigger), a MIDI note (that note doesn't play), Chance per beat (decided on the beat line), or each DNA Sequencer step. Duration sets how long a Chance / DNA repeat lasts. Short fades at every edge.
+  - **Flanger / Phaser**: flanger 0.3-10 ms with through-zero and +/- feedback; phaser 4 / 8 / 12 stages; free or synced rate, stereo spread, and an envelope mode where the sweep follows the input level.
+  - **Volume Shaper**: a drawn volume curve over 1/4, 1/2 or 1 bar, locked to the DAW's beat position, or restarted by each note or each DNA step, with presets (Pump, Gate, 1/8 Pump, Triplet), Depth and Smooth.
+- **Rack**: every effect is a slot with On and Mix (Return for the send effects); drag rows to change the order. Tape Delay, Juno Chorus and the Reverbs are send effects: next to each other they all hear the same signal, exactly as before; with another effect between them each one hears what comes before it. Moving a slot dips the output for a few milliseconds instead of clicking. The order and the shaper curve are saved with patches and projects, and moves can be undone.
+- All the new knobs can be automated and are Mod Matrix destinations. Synced settings follow the DAW's tempo and position (the synth's tempo when it's stopped). The effects add no latency.
+- Patches and projects from before the rack load with every new effect off, the original effects on, and the original order.
+
 ## Filter (Filter & Env tab)
 
 - **Type**: Low Pass, High Pass, Band Pass, Notch, Peak / Bell, All Pass.

@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include "UI/FilterPanel.h"
 #include "UI/DnaSeqPage.h"
+#include "UI/FxPages.h"
 #include "ParamFormat.h"
 #include "Registry.h"
 #include "UI/Overview.h"
@@ -1539,40 +1540,143 @@ void MegaSynthEditor::buildPages()
     // ---------------------------------------------------------------- Effects
     {
         auto* page = addPage ("Effects");
-        auto* d = sec (page, "Tape / BBD Delay", col::fx);
+        // four pages: Space (delay, reverbs, chorus, stereo), Dirt (sampler, multiband),
+        // Motion (beat repeat, flanger / phaser, volume shaper) and the Rack (order, On, Mix)
+        auto* pick = page->own (new Segmented (proc, -1, { "SPACE", "DIRT", "MOTION", "RACK" }, col::fx));
+        juce::Component* sub[4];
+        for (auto*& c : sub) c = page->own (new juce::Component());
+        // components on the sub-pages are owned by the page (and shown inside their sub-page)
+        auto keep = [page] (juce::Component* holder, auto* comp) { page->children.add (comp); holder->addAndMakeVisible (comp); return comp; };
+        auto own = [keep] (juce::Component* holder, Section* s) { return keep (holder, s); };
+        auto mk = [this] (const juce::String& t) { return new Section (proc, t, col::fx); };
+        auto toggle = [this] (Section* s, int param, const juce::String& text, int w = 110)
+        {
+            auto* t = new juce::ToggleButton (text);
+            t->setColour (juce::ToggleButton::tickColourId, col::fx);
+            s->add (t, w, 40);
+            fxAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[param], *t));
+            return t;
+        };
+        auto slotControls = [&] (Section* s, int slot)
+        {
+            toggle (s, P_fxOnStutter + 2 * slot, "On", 56);
+            s->knob (P_fxMixStutter + 2 * slot, fxSlotIsSend (slot) ? "Return" : "Mix");
+        };
+
+        // ---- SPACE (the original effects, unchanged, plus Stereo Tools)
+        auto* d = own (sub[0], mk ("Tape / BBD Delay"));
         d->choice (P_delaySync, "Delay Sync", 150);
         d->choice (P_flutterSync, "Flutter Sync", 150);
         d->newRow();
         for (auto [idx, n] : { std::pair<int, const char*> { P_delayTime, "Time" }, { P_delayFeedback, "Feedback" }, { P_tapeTone, "Tone" },
                                { P_tapeFlutter, "Flutter" }, { P_delayMix, "Return" } })
             d->knob (idx, n);
-        auto* r = sec (page, "90s Reverb + Shimmer", col::fx);
+        auto* r = own (sub[0], mk ("90s Reverb + Shimmer"));
         r->choice (P_reverbSync, "Reverb / Shimmer Sync", 170);
         r->newRow();
         for (auto [idx, n] : { std::pair<int, const char*> { P_reverbSize, "Size" }, { P_reverbTone, "Tone" }, { P_shimmerBright, "Shimmer Bright" },
                                { P_reverbMix, "Reverb" }, { P_shimmerMix, "Shimmer" } })
             r->knob (idx, n);
-        auto* c = sec (page, "Juno Chorus", col::fx);
+        auto* c = own (sub[0], mk ("Juno Chorus"));
         c->choice (P_chorusSync, "Chorus Sync", 150);
         c->newRow();
         for (auto [idx, n] : { std::pair<int, const char*> { P_chorusRate, "Rate" }, { P_chorusDepth, "Depth" }, { P_chorusMix, "Return" } })
             c->knob (idx, n);
-        auto* v = sec (page, "Reverse Pitch Shifter Reverb", col::fx);
+        auto* v = own (sub[0], mk ("Reverse Pitch Shifter Reverb"));
         v->choice (P_reverseSync, "Reverse Sync", 150);
         v->newRow();
         for (auto [idx, n] : { std::pair<int, const char*> { P_reverseTime, "Time" }, { P_reversePitch, "Pitch Drift" }, { P_reverseMix, "Return" } })
             v->knob (idx, n);
-        auto* note = page->own (new juce::Label ({}, "Synced times follow the host tempo (or the sequencer tempo when the host doesn't send one)."));
-        note->setColour (juce::Label::textColourId, col::muted);
-        note->setFont (juce::Font (juce::FontOptions (12.0f)));
-        page->onResize = [page, d, r, c, v, note]
+        auto* st = own (sub[0], mk ("Stereo Tools  (mono-safe: the mono sum is never changed)"));
+        toggle (st, P_fxOnStereo, "On", 56);
+        toggle (st, P_sttMono, "Bass Mono", 110)->setTooltip ("Removes the stereo spread below Mono Below, so the sub stays centred");
+        for (auto [idx, n] : { std::pair<int, const char*> { P_sttMonoFreq, "Mono Below" }, { P_sttWidth, "Width" }, { P_sttHaas, "Haas" }, { P_fxMixStereo, "Mix" } })
+            st->knob (idx, n);
+
+        // ---- DIRT
+        auto* sm = own (sub[1], mk ("Vintage Sampler"));
+        slotControls (sm, FS_Sampler);
+        sm->choice (P_smpModel, "Model", 220)->box.setTooltip ("SP-1200: 12-bit, 26 kHz, no anti-alias filter.  S950: 12-bit at Rate, with anti-alias and the resonant Filter.  "
+                                                                "E-mu: 12-bit, 27.8 kHz, gentle filters.  Free: Bits, Rate and Anti-Alias as set.");
+        toggle (sm, P_smpAA, "Anti-Alias (Free)", 150);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_smpBits, "Bits (Free)" }, { P_smpRate, "Rate" }, { P_smpCutoff, "Filter" },
+                               { P_smpRes, "Resonance" }, { P_smpNoise, "Noise" }, { P_smpDrive, "Input Clip" } })
+            sm->knob (idx, n);
+        auto* mb = own (sub[1], mk ("Multiband  (OTT style: upward and downward compression in three bands)"));
+        slotControls (mb, FS_Multiband);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_mbcXLow, "Low / Mid" }, { P_mbcXHigh, "Mid / High" }, { P_mbcDepth, "Depth" },
+                               { P_mbcTime, "Time" }, { P_mbcGain, "Output" } })
+            mb->knob (idx, n);
+        mb->newRow();
+        const char* bandName[] = { "Low", "Mid", "High" };
+        for (int b = 0; b < 3; ++b)
+            for (auto [off, n] : { std::pair<int, const char*> { 0, "Up" }, { 1, "Down" }, { 2, "In" }, { 3, "Out" } })
+                mb->knob (P_mbcUpL + 4 * b + off, juce::String (bandName[b]) + " " + n);
+        auto* metersC = keep (sub[1], new MultibandMeters (proc));
+
+        // ---- MOTION
+        auto* br = own (sub[2], mk ("Beat Repeat"));
+        slotControls (br, FS_Stutter);
+        br->choice (P_rptLength, "Length", 80);
+        br->choice (P_rptDuration, "Duration", 100);
+        br->choice (P_rptMidi, "MIDI Trigger", 150);
+        br->newRow();
+        for (auto [idx, n] : { std::pair<int, const char*> { P_rptShrink, "Shrink" }, { P_rptPitch, "Pitch Drop" }, { P_rptGate, "Gate" }, { P_rptChance, "Chance" } })
+            br->knob (idx, n);
+        toggle (br, P_rptReverse, "Reverse", 90);
+        toggle (br, P_rptDna, "DNA Gate", 100)->setTooltip ("Each DNA Sequencer step starts a repeat");
+        auto* pad = new StutterPad (proc);
+        br->add (pad, 170, 60);
+        auto* fl = own (sub[2], mk ("Flanger / Phaser"));
+        slotControls (fl, FS_Flanger);
+        fl->choice (P_flpMode, "Mode", 100);
+        fl->choice (P_flpSync, "Sync", 80);
+        fl->choice (P_flpStages, "Phaser", 100);
+        fl->newRow();
+        for (auto [idx, n] : { std::pair<int, const char*> { P_flpRate, "Rate" }, { P_flpDepth, "Depth" }, { P_flpFeedback, "Feedback" },
+                               { P_flpManual, "Manual" }, { P_flpSpread, "Spread" }, { P_flpEnvSens, "Env Sens" } })
+            fl->knob (idx, n);
+        toggle (fl, P_flpTZ, "Through-Zero", 120);
+        toggle (fl, P_flpEnv, "Envelope", 100)->setTooltip ("The sweep follows the input level instead of the LFO");
+        auto* vs = own (sub[2], mk ("Volume Shaper  (sidechain-style pump)"));
+        slotControls (vs, FS_Shaper);
+        vs->choice (P_vshRate, "Cycle", 80);
+        vs->choice (P_vshTrig, "Trigger", 160);
+        vs->knob (P_vshDepth, "Depth");
+        vs->knob (P_vshSmooth, "Smooth");
+        const char* presetNames[] = { "Pump", "Gate", "1/8 Pump", "Triplet" };
+        for (int k = 0; k < 4; ++k)
         {
-            const int g = 10, W = page->getWidth(), w2 = (W - g * 3) / 2;
-            d->setBounds (g, g, w2, 200);
-            r->setBounds (g * 2 + w2, g, w2, 200);
-            c->setBounds (g, 220, w2, 200);
-            v->setBounds (g * 2 + w2, 220, w2, 200);
-            note->setBounds (g, 430, W - 2 * g, 20);
+            auto* b = new juce::TextButton (presetNames[k]);
+            b->onClick = [this, k] { proc.fxRack.setCurvePreset (k); };
+            vs->add (b, 76, 28);
+        }
+        auto* curve = keep (sub[2], new ShaperCurve (proc));
+
+        // ---- RACK
+        auto* rack = keep (sub[3], new RackList (proc));
+
+        pick->setTooltip ("Effects pages; the Rack sets the order");
+        pick->onSelect = [sub] (int k) { for (int i = 0; i < 4; ++i) sub[i]->setVisible (i == k); };
+        for (int i = 1; i < 4; ++i) sub[i]->setVisible (false);
+        page->onResize = [page, pick, sub, d, r, c, v, st, sm, mb, metersC, br, fl, vs, curve, rack]
+        {
+            const int g = 10, W = page->getWidth(), H = page->getHeight(), w2 = (W - g * 3) / 2;
+            pick->setBounds (g, 6, 420, 28);
+            for (auto* s : sub) s->setBounds (0, 40, W, H - 40);
+            d->setBounds (g, 0, w2, 176);
+            r->setBounds (g * 2 + w2, 0, w2, 176);
+            c->setBounds (g, 184, w2, 176);
+            v->setBounds (g * 2 + w2, 184, w2, 176);
+            st->setBounds (g, 368, W - 2 * g, 136);
+            sm->setBounds (g, 0, W - 2 * g, 136);
+            mb->setBounds (g, 146, W - 2 * g - 230, 236);
+            metersC->setBounds (W - g - 220, 146, 220, 236);
+            br->setBounds (g, 0, w2, 290);
+            fl->setBounds (g * 2 + w2, 0, w2, 290);
+            vs->setBounds (g, 300, 560, 250);
+            curve->setBounds (g + 570, 300, W - 2 * g - 570, 250);
+            rack->setBounds (g, 4, W - 2 * g, H - 50);
         };
     }
 

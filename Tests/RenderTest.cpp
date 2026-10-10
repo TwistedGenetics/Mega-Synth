@@ -6,6 +6,7 @@
 #include "ParamFormat.h"
 #include "Registry.h"
 #include "Mut/Mutator.h"
+#include "UI/FilterPanel.h"
 
 using namespace tg;
 
@@ -480,6 +481,36 @@ int main()
         }
 
     };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_FXSHOT", {}).isNotEmpty())
+    {
+        auto p = make();
+        for (int i : { P_fxOnMultiband, P_fxOnStutter, P_fxOnShaper, P_fxOnFlanger }) setP (*p, i, 1.0f);
+        p->fxRack.move (0, 4);
+        render (*p, 0.5, chord (0.0, 0.4, { 48, 60 }));
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+        ed->setSize (1200, 860);
+        std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
+        {
+            if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
+            for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
+            return nullptr;
+        };
+        auto* tabs = findTabs (ed.get());
+        tabs->setCurrentTabIndex (7);
+        auto* pageC = tabs->getTabContentComponent (7);
+        tgui::Segmented* pick = nullptr;
+        for (auto* ch : pageC->getChildren()) if (auto* sg = dynamic_cast<tgui::Segmented*> (ch)) pick = sg;
+        auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+        for (int k = 0; k < 4; ++k)
+        {
+            if (pick != nullptr && pick->onSelect) pick->onSelect (k);
+            auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 640), true, 1.0f);
+            auto f = dir.getChildFile ("fx_ui_" + juce::String (k) + ".png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        }
+        return 0;
+    }
+
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_DNASHOT", {}).isNotEmpty())
     {
         auto p = make();
@@ -861,6 +892,263 @@ int main()
         return failures == 0 ? 0 : 1;
     }
 
+    // ---- Effects rack: each new effect, timing against the beat, mono safety, clicks, stability, compatibility
+    auto fxTests = [&]
+    {
+        std::cout << "Effects rack" << std::endl;
+        const double fs = 48000.0;
+        auto params = [] { std::vector<float> v ((size_t) P_COUNT); for (int i = 0; i < P_COUNT; ++i) v[(size_t) i] = meta (i).def; return v; };
+        auto levelDb = [] (const std::vector<float>& x, size_t from) { double e = 0; for (size_t i = from; i < x.size(); ++i) e += (double) x[i] * x[i]; return 10 * std::log10 (e / (x.size() - from) + 1e-30); };
+        FxContext ctx; ctx.sr = fs; ctx.tempo = 120.0; ctx.beatInc = 2.0 / fs;
+
+        // multiband: neutral = the input exactly; downward 20:1 above -18 dB; upward 4:1 below -36 dB
+        {
+            auto v = params(); v[P_mbcDepth] = 0.0f;
+            MultibandComp m; m.prepare (fs);
+            std::vector<float> L (9600), R (9600), in (9600);
+            for (int i = 0; i < 9600; ++i) in[(size_t) i] = L[(size_t) i] = R[(size_t) i] = 0.3f * (float) std::sin (i * 0.031) + 0.2f * (float) std::sin (i * 0.27) + 0.1f * (float) std::sin (i * 1.3);
+            m.process (L.data(), R.data(), 9600, v.data(), ctx);
+            float md = 0; for (int i = 0; i < 9600; ++i) md = std::max (md, std::abs (L[(size_t) i] - in[(size_t) i]));
+            CHECK (md < 1e-5f, "multiband neutral = input (no crossover smearing), max diff " + juce::String (md));
+            auto run = [&] (float amp, float up, float down)
+            {
+                auto w = params(); w[P_mbcDepth] = 1.0f;
+                for (int b = 0; b < 3; ++b) { w[(size_t) (P_mbcUpL + 4 * b)] = up; w[(size_t) (P_mbcDownL + 4 * b)] = down; }
+                MultibandComp c; c.prepare (fs);
+                std::vector<float> a ((size_t) fs), bR ((size_t) fs);
+                for (size_t i = 0; i < a.size(); ++i) a[i] = bR[i] = amp * (float) std::sin (2.0 * kPi * 1000.0 * i / fs);
+                c.process (a.data(), bR.data(), (int) a.size(), w.data(), ctx);
+                return levelDb (a, a.size() / 2) + 3.0103;   // peak dBFS of the sine
+            };
+            const double dn = run (0.5f, 0.0f, 1.0f), upw = run (0.00316f, 1.0f, 0.0f);
+            std::cout << "  multiband: -6 dBFS in -> " << juce::String (dn, 1) << " dBFS (20:1 above -18);  -50 dBFS in -> " << juce::String (upw, 1) << " dBFS (4:1 below -36)" << std::endl;
+            CHECK (std::abs (dn - (-6.02 - 12.0 * 0.95)) < 1.0, "multiband downward ratio");
+            CHECK (std::abs (upw - (-50.0 + 14.0 * 0.75)) < 1.0, "multiband upward ratio");
+        }
+        // vintage sampler: bit depth, the machine's rate, aliasing with / without the anti-alias filter
+        {
+            auto v = params(); v[P_smpModel] = 3; v[P_smpBits] = 4; v[P_smpRate] = 48000; v[P_smpAA] = 0; v[P_smpDrive] = 0; v[P_smpNoise] = 0; v[P_smpCutoff] = 20000;
+            VintageSampler s; s.prepare (fs);
+            std::vector<float> L (4800), R (4800);
+            for (int i = 0; i < 4800; ++i) L[(size_t) i] = R[(size_t) i] = 0.7f * (float) std::sin (i * 0.013);
+            s.process (L.data(), R.data(), 4800, v.data(), ctx);
+            std::set<int> levels; bool onGrid = true;
+            for (float x : L) { levels.insert ((int) std::lround (x * 8)); onGrid &= std::abs (x * 8 - std::round (x * 8)) < 1e-4f; }
+            CHECK (onGrid && levels.size() <= 16, "4 bits: 16 levels (" + juce::String ((int) levels.size()) + " used)");
+            auto runModel = [&] (int model, double freq, std::vector<float>& out)
+            {
+                auto w = params(); w[P_smpModel] = (float) model; w[P_smpRate] = 26040; w[P_smpDrive] = 0; w[P_smpNoise] = 0; w[P_smpCutoff] = 20000; w[P_smpRes] = 0;
+                VintageSampler t; t.prepare (fs);
+                out.assign (16384, 0.0f); std::vector<float> r2 (16384);
+                for (int i = 0; i < 16384; ++i) out[(size_t) i] = r2[(size_t) i] = 0.5f * (float) std::sin (2.0 * kPi * freq * i / fs);
+                t.process (out.data(), r2.data(), 16384, w.data(), ctx);
+            };
+            std::vector<float> sp, s9;
+            {   // noise in, so every new sample differs from the last
+                auto w = params(); w[P_smpModel] = 0; w[P_smpDrive] = 0; w[P_smpNoise] = 0;
+                VintageSampler t; t.prepare (fs);
+                sp.assign (16384, 0.0f); std::vector<float> r2 (16384);
+                uint32_t z = 3; for (int i = 0; i < 16384; ++i) { z = z * 1664525u + 1013904223u; sp[(size_t) i] = r2[(size_t) i] = ((z >> 8) / 16777216.0f - 0.5f); }
+                t.process (sp.data(), r2.data(), 16384, w.data(), ctx);
+            }
+            int runs = 0; for (size_t i = 1; i < sp.size(); ++i) runs += sp[i] != sp[i - 1] ? 1 : 0;
+            const double hold = (double) sp.size() / std::max (1, runs);
+            std::cout << "  SP-1200: a new sample every " << juce::String (hold, 3) << " output samples (48 kHz / 26.04 kHz = 1.843)" << std::endl;
+            CHECK (std::abs (hold - 48000.0 / 26040.0) < 0.05, "SP-1200 runs at 26.04 kHz");
+            auto bandDb = [&] (std::vector<float> x, double f)
+            {
+                juce::dsp::FFT fft (14); x.resize (32768, 0.0f);
+                for (int i = 0; i < 16384; ++i) x[(size_t) i] *= 0.5f - 0.5f * (float) std::cos (2.0 * kPi * i / 16383.0);
+                fft.performFrequencyOnlyForwardTransform (x.data());
+                const int k = (int) std::round (f * 16384 / fs); float m = 0; for (int j = k - 3; j <= k + 3; ++j) m = std::max (m, x[(size_t) j]);
+                return 20 * std::log10 (m + 1e-9);
+            };
+            runModel (0, 15000.0, sp); runModel (1, 15000.0, s9);
+            const double aliasSp = bandDb (sp, 26040.0 - 15000.0) - bandDb (sp, 15000.0), aliasS9 = bandDb (s9, 26040.0 - 15000.0) - bandDb (s9, 15000.0);
+            std::cout << "  15 kHz in: alias at 11.04 kHz vs 15 kHz  SP-1200 " << juce::String (aliasSp, 1) << " dB,  S950 (anti-alias filter) " << juce::String (aliasS9, 1) << " dB" << std::endl;
+            CHECK (aliasSp > -3.0, "SP-1200 aliases (no anti-alias filter)");
+            const double sp11 = bandDb (sp, 11040.0), s911 = bandDb (s9, 11040.0);
+            CHECK (s911 < sp11 - 15.0, "S950's anti-alias filter removes most of the alias (" + juce::String (sp11 - s911, 1) + " dB less)");
+        }
+        // flanger: the delay sweeps 0.3 .. 10.3 ms with Manual; through-zero lines up with the dry path
+        {
+            auto delayPeak = [&] (float manual, bool tz)
+            {
+                auto v = params(); v[P_flpDepth] = 0; v[P_flpFeedback] = 0; v[P_flpManual] = manual; v[P_flpTZ] = tz ? 1.0f : 0.0f;
+                FlangerPhaser f; f.prepare (fs);
+                std::vector<float> L (2000, 0.0f), R (2000, 0.0f); L[100] = R[100] = 1.0f;
+                f.process (L.data(), R.data(), 2000, v.data(), ctx);
+                std::vector<std::pair<float, int>> pk;
+                for (int i = 0; i < 2000; ++i) if (std::abs (L[(size_t) i]) > 0.1f) pk.push_back ({ L[(size_t) i], i - 100 });
+                return pk;
+            };
+            auto lo = delayPeak (0.0f, false), hi = delayPeak (1.0f, false), tz = delayPeak (0.5f, true);
+            double hiMs = -1; { float wsum = 0, wpos = 0; for (auto& t : hi) if (t.second > 100) { wsum += std::abs (t.first); wpos += std::abs (t.first) * t.second; } if (wsum > 0) hiMs = wpos / wsum / fs * 1000.0; }
+            std::cout << "  flanger delay: Manual 100% -> " << juce::String (hiMs, 2) << " ms;  through-zero, no depth: " << (int) tz.size() << " tap(s)" << std::endl;
+            float tzSum = 0; for (auto& t : tz) tzSum += std::abs (t.first);
+            CHECK (std::abs (hiMs - 10.0) < 0.1 && ! lo.empty() && lo.back().second < 20, "flanger delay range 0.3 .. 10 ms");
+            CHECK (tz.size() >= 1 && tz.size() <= 2 && tzSum > 1.1f, "through-zero: wet and dry meet");
+        }
+        // volume shaper: locked to the beat at several tempos
+        {
+            bool ok = true;
+            for (double tempo : { 90.0, 140.0, 174.0 })
+            {
+                auto v = params(); v[P_vshDepth] = 1.0f; v[P_vshSmooth] = 0.0f; v[P_vshRate] = 0;
+                FxRackStore st; st.setCurvePreset (1);   // gate: on for 1/16, off for 1/16
+                VolumeShaper sh; sh.reset();
+                FxContext c = ctx; c.tempo = tempo; c.beatInc = tempo / 60.0 / fs; c.beat = 10.0;
+                std::vector<float> L ((size_t) fs), R ((size_t) fs, 1.0f); std::fill (L.begin(), L.end(), 1.0f);
+                sh.process (L.data(), R.data(), (int) L.size(), v.data(), c, st);
+                auto at = [&] (double beat) { return L[(size_t) ((beat - 10.0) / c.beatInc)]; };
+                ok &= at (10.06) > 0.99f && at (10.19) < 0.01f && at (11.06) > 0.99f && at (11.20) < 0.01f;
+            }
+            CHECK (ok, "volume shaper follows the beat (90 / 140 / 174 BPM)");
+        }
+        // stereo tools: the mono sum never changes; Bass Mono removes low side; Width scales the side
+        {
+            auto v = params(); v[P_sttWidth] = 2.0f; v[P_sttHaas] = 20.0f; v[P_sttMono] = 1.0f; v[P_sttMonoFreq] = 150.0f;
+            StereoTools t; t.prepare (fs);
+            std::vector<float> L (9600), R (9600), sum (9600);
+            uint32_t r = 7; auto rnd = [&] { r = r * 1664525u + 1013904223u; return (r >> 8) / 16777216.0f - 0.5f; };
+            for (int i = 0; i < 9600; ++i) { L[(size_t) i] = rnd(); R[(size_t) i] = rnd(); sum[(size_t) i] = L[(size_t) i] + R[(size_t) i]; }
+            t.process (L.data(), R.data(), 9600, v.data(), ctx);
+            float md = 0; for (int i = 0; i < 9600; ++i) md = std::max (md, std::abs (L[(size_t) i] + R[(size_t) i] - sum[(size_t) i]));
+            CHECK (md < 1e-5f, "stereo tools: mono sum unchanged");
+            auto side = [&] (double f)
+            {
+                StereoTools u; u.prepare (fs); auto w = params(); w[P_sttMonoFreq] = 150.0f;
+                std::vector<float> a ((size_t) fs), b ((size_t) fs);
+                for (size_t i = 0; i < a.size(); ++i) { a[i] = 0.5f * (float) std::sin (2.0 * kPi * f * i / fs); b[i] = -a[i]; }
+                u.process (a.data(), b.data(), (int) a.size(), w.data(), ctx);
+                return levelDb (a, a.size() / 2) + 9.03;   // 0 dB = unchanged
+            };
+            const double s40 = side (40.0), s2k = side (2000.0);
+            std::cout << "  bass mono: side signal at 40 Hz " << juce::String (s40, 1) << " dB, at 2 kHz " << juce::String (s2k, 1) << " dB" << std::endl;
+            CHECK (s40 < -20.0 && std::abs (s2k) < 0.5, "bass mono below 150 Hz only");
+        }
+
+        // in the synth, with a simulated DAW transport: Beat Repeat starts on the beat and repeats the last 1/8
+        {
+            struct FakeHead : juce::AudioPlayHead
+            {
+                PositionInfo info;
+                juce::Optional<PositionInfo> getPosition() const override { return info; }
+            } head;
+            for (double bpm : { 90.0, 174.0 })
+            {
+                auto p = std::make_unique<MegaSynthProcessor>();
+                p->setPlayConfigDetails (0, 2, sr, 64); p->prepareToPlay (sr, 64);
+                p->setPlayHead (&head);
+                for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain }) setP (*p, i, 0.0f);
+                setP (*p, P_fxOnStutter, 1.0f); setP (*p, P_rptChance, 1.0f); setP (*p, P_rptLength, 1.0f); setP (*p, P_rptDuration, 1.0f);
+                setP (*p, P_lfoAssignAmt0, 0.0f);
+                juce::AudioBuffer<float> buf (2, 64);
+                double ppq = 2.37; int firstActive = -1; double firstPpq = 0;
+                std::vector<float> out;
+                for (int b = 0; b < 1200; ++b)
+                {
+                    head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+                    juce::MidiBuffer midi; if (b == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 45, (juce::uint8) 100), 0);
+                    buf.clear(); p->processBlock (buf, midi);
+                    for (int i = 0; i < 64; ++i) out.push_back (buf.getSample (0, i));
+                    if (firstActive < 0 && p->getEngine().fx().stutter.activity.load() > 0) { firstActive = b; firstPpq = ppq; }
+                    ppq += 64.0 * bpm / 60.0 / sr;
+                }
+                const double endPpq = firstPpq + 64.0 * bpm / 60.0 / sr;
+                CHECK (firstActive >= 0 && std::floor (endPpq) == 3.0 && std::floor (firstPpq) == 2.0, "beat repeat starts at the beat line (" + juce::String (bpm) + " BPM)");
+                // during the repeat the output repeats every 1/8 note
+                const int seg = (int) std::lround (0.5 * 60.0 / bpm * sr);
+                const int st = firstActive * 64 + seg + seg / 4;
+                double num = 0, d1 = 0, d2 = 0;
+                for (int i = st; i < st + seg / 2; ++i) { num += out[(size_t) i] * out[(size_t) (i - seg)]; d1 += out[(size_t) i] * out[(size_t) i]; d2 += out[(size_t) (i - seg)] * out[(size_t) (i - seg)]; }
+                const double corr = num / std::sqrt (d1 * d2 + 1e-30);
+                CHECK (corr > 0.98, "beat repeat repeats the last 1/8 (correlation " + juce::String (corr, 3) + ")");
+            }
+        }
+
+        // no clicks: switching an effect on and moving it in the rack while a note plays
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_analogDrift, P_supersawGain, P_complexGain, P_lfoAssignAmt0 }) setP (*p, i, 0.0f);
+            setP (*p, P_osc1Wave, 3.0f); setP (*p, P_osc2Gain, 0.0f); setP (*p, P_osc3Gain, 0.0f); setP (*p, P_subGain, 0.0f);
+            juce::AudioBuffer<float> a, b, c;
+            render (*p, 0.5, chord (0.0, 3.0, { 57 }), &a);
+            setP (*p, P_fxOnFlanger, 1.0f); setP (*p, P_fxOnMultiband, 1.0f); setP (*p, P_fxOnSampler, 1.0f);
+            render (*p, 0.4, {}, &b);
+            p->fxRack.move (5, 0);   // the reverbs to the top
+            p->fxRack.move (8, 2);
+            render (*p, 0.4, {}, &c);
+            auto maxStep = [] (const juce::AudioBuffer<float>& x, int from, int to) { float m = 0; for (int i = std::max (1, from); i < to; ++i) m = std::max (m, std::abs (x.getSample (0, i) - x.getSample (0, i - 1))); return m; };
+            const float steadyA = maxStep (a, 12000, a.getNumSamples()), steadyB = maxStep (b, 9000, b.getNumSamples()), steadyC = maxStep (c, 9000, c.getNumSamples());
+            const float swOn = maxStep (b, 0, 3000), swMove = maxStep (c, 0, 3000);
+            std::cout << "  largest sample step: switching on " << swOn << " (steady " << std::max (steadyA, steadyB) << "), reordering " << swMove << " (steady " << std::max (steadyB, steadyC) << ")" << std::endl;
+            CHECK (swOn < std::max (steadyA, steadyB) * 1.3f + 0.002f, "switching effects on doesn't click");
+            CHECK (swMove < std::max (steadyB, steadyC) * 1.3f + 0.002f, "reordering doesn't click");
+            CHECK (p->getLatencySamples() == 0, "the effects add no latency");
+        }
+
+        // stability: everything on, extreme settings thrown around
+        {
+            auto p = make();
+            for (int k = 0; k < FS_COUNT; ++k) setP (*p, P_fxOnStutter + 2 * k, 1.0f);
+            uint32_t r = 99; auto rnd = [&] { r = r * 1664525u + 1013904223u; return (r >> 8) / 16777216.0f; };
+            bool finite = true; float peak = 0;
+            for (int blk = 0; blk < 60; ++blk)
+            {
+                for (int i = 0; i < P_COUNT; ++i)
+                {
+                    const juce::String id (kParamIds[i]);
+                    if (! (id.startsWith ("mbc") || id.startsWith ("smp") || id.startsWith ("rpt") || id.startsWith ("flp") || id.startsWith ("vsh") || id.startsWith ("stt"))) continue;
+                    p->param (i)->setValueNotifyingHost (rnd() < 0.5f ? (rnd() < 0.5f ? 0.0f : 1.0f) : rnd());
+                }
+                auto st = render (*p, 0.05, blk == 0 ? chord (0.0, 3.0, { 36, 48, 60, 72 }) : std::vector<std::pair<double, juce::MidiMessage>> {});
+                finite &= st.finite; peak = std::max (peak, st.peak);
+            }
+            std::cout << "  stress: peak " << peak << std::endl;
+            CHECK (finite && peak < 8.0f, "effects stay stable and bounded under extreme settings");
+        }
+
+        // compatibility: a project from before the rack gets the new effects off and the default order
+        {
+            auto o = make();
+            setP (*o, P_delayMix, 0.4f);
+            juce::MemoryBlock mb; o->getStateInformation (mb);
+            auto xml = juce::parseXML (getXmlFromBinaryForTest (mb));
+            if (xml != nullptr)
+            {
+                xml->setAttribute ("stateVersion", 5);
+                xml->removeAttribute ("fxRack");
+                juce::Array<juce::XmlElement*> drop;
+                for (auto* e : xml->getChildIterator())
+                {
+                    const juce::String id = e->getStringAttribute ("id");
+                    for (auto* pre : { "fxOn", "fxMix", "mbc", "smp", "rpt", "flp", "vsh", "stt" }) if (id.startsWith (pre)) { drop.add (e); break; }
+                }
+                for (auto* e : drop) xml->removeChildElement (e, true);
+                juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*xml, old);
+                auto q = make();
+                setP (*q, P_fxOnSampler, 1.0f); setP (*q, P_fxOnDelay, 0.0f); q->fxRack.move (0, 7);
+                q->setStateInformation (old.getData(), (int) old.getSize());
+                auto ord = q->fxRack.getOrder(); bool identity = true; for (int k = 0; k < FS_COUNT; ++k) identity &= ord[(size_t) k] == k;
+                CHECK (q->param (P_fxOnSampler)->getValue() < 0.5f && q->param (P_fxOnDelay)->getValue() > 0.5f && identity, "old project: new effects off, original ones on, default order");
+            }
+            auto t = make(); t->fxRack.move (2, 6); t->fxRack.setCurve (5, 0.25f);
+            auto u = make(); u->importBrowserPatch (t->exportBrowserPatch());
+            CHECK (u->fxRack.getOrder() == t->fxRack.getOrder() && std::abs (u->fxRack.curve (5) - 0.25f) < 0.002f, "rack order and shaper curve saved in patches");
+            t->fxRack.move (0, 3); t->pushHistory ("move");
+            const auto moved = t->fxRack.getOrder();
+            t->undo();
+            CHECK (t->fxRack.getOrder() != moved, "rack moves are undoable");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_FXONLY", {}).isNotEmpty())
+    {
+        fxTests();
+        std::cout << (failures == 0 ? "FX TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
    #include "Golden.inc"
 
     // ---- 1. default patch chord
@@ -1087,9 +1375,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 5"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 6"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"5\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"6\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -2179,6 +2467,7 @@ int main()
     filterUnitTests();
 
     dnaTests();
+    fxTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {

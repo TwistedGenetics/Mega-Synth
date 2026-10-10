@@ -177,6 +177,16 @@ void MegaSynthProcessor::fillSnapshot (int)
     snap.bendSemis = bendSemis;
 }
 
+bool MegaSynthProcessor::dnaGateRouted() const
+{
+    for (int i = 0; i < tg::kNumRoutes; ++i)
+    {
+        const auto r = routes.get (i);
+        if (r.active() && (r.src == MS_DnaGate || r.via == MS_DnaGate)) return true;
+    }
+    return false;
+}
+
 void MegaSynthProcessor::setParamFromAudio (int index, float plain)
 {
     auto* p = params[(size_t) index];
@@ -186,8 +196,21 @@ void MegaSynthProcessor::setParamFromAudio (int index, float plain)
 void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
 {
     const int ch = juce::jlimit (1, 16, m.getChannel());
+    // DNA Sequencer pattern select: four notes choose A-D (and aren't played)
+    if (m.isNoteOnOrOff())
+    {
+        static const int base[] = { -1, 0, 12, 24 };
+        const int b = base[juce::jlimit (0, 3, snap.i (P_dsMidiSelect))];
+        const int nn = m.getNoteNumber();
+        if (b >= 0 && nn >= b && nn < b + 4)
+        {
+            if (m.isNoteOn()) setParamFromAudio (P_dsPattern, (float) (nn - b));
+            return;
+        }
+    }
     if (m.isNoteOn())
     {
+        dnaClock.noteOn (midiPos);
         Voice::StartOptions o;
         o.velocity = m.getFloatVelocity();
         o.channel = ch;
@@ -282,6 +305,7 @@ void MegaSynthProcessor::seqTick (int stepIndex, double stepSeconds)
         o.accentBoost = boost;
         o.filterAccent = filterAccent;
         engine.noteOn (key, freq, o, snap);
+        dnaClock.noteOn (midiPos);
         seqHeldKey = key;
     }
 
@@ -299,14 +323,16 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     buffer.clear();
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
 
-    bool hostPlaying = false;
-    double ppq = 0.0, bpm = 0.0;
+    bool hostPlaying = false, hasBar = false;
+    double ppq = 0.0, bpm = 0.0, barStart = 0.0, beatsPerBar = 4.0;
     if (auto* ph = getPlayHead())
     {
         if (auto pos = ph->getPosition())
         {
             if (auto b = pos->getBpm()) bpm = *b;
             if (auto p = pos->getPpqPosition()) ppq = *p;
+            if (auto bs = pos->getPpqPositionOfLastBarStart()) { barStart = *bs; hasBar = true; }
+            if (auto ts = pos->getTimeSignature()) if (ts->numerator > 0 && ts->denominator > 0) beatsPerBar = ts->numerator * 4.0 / ts->denominator;
             hostPlaying = pos->getIsPlaying();
         }
     }
@@ -352,20 +378,27 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
     hostWasPlaying = hostClock && seqRunning;
 
-    // ---- DNA Sequencer clock: locked to the host's beat position while it plays, otherwise free-running
-    double dsBlockPos = 0.0, dsInc = 0.0;
+    // ---- DNA Sequencer clock: Host (the DAW's beat position while it plays, else the tempo),
+    // Internal (the synth's tempo) or Free (Hz); restart, start offset and swing on top
+    const bool dsOn = snap.i (P_dsOn) != 0;
+    int dsChunk = maxBlock;
     {
-        const bool on = snap.i (P_dsOn) != 0;
-        if (on && ! dsWasOn) dsRunPos = 0.0;
-        dsWasOn = on;
-        static const double beatsPerStep[] = { 0.125, 1.0 / 6.0, 0.25, 1.0 / 3.0, 0.5, 1.0, 2.0, 4.0 };
-        const int rate = juce::jlimit (0, 8, snap.i (P_dsRate));
-        const double tempo = bpm > 0.0 ? bpm : (double) snap.f (P_seqTempo);
-        if (rate == 8) dsInc = snap.f (P_dsFreeHz) / sampleRate;
-        else dsInc = (tempo / 60.0) / beatsPerStep[rate] / sampleRate;
-        if (on && rate < 8 && hostPlaying && bpm > 0.0) dsRunPos = ppq / beatsPerStep[rate];
-        dsBlockPos = dsRunPos;
-        dsRunPos += dsInc * n;
+        tg::DnaClock::Block b;
+        b.on = dsOn; b.sync = juce::jlimit (0, 2, snap.i (P_dsSync)); b.rate = juce::jlimit (0, 8, snap.i (P_dsRate));
+        b.restart = juce::jlimit (0, 3, snap.i (P_dsRestart)); b.freeHz = snap.f (P_dsFreeHz);
+        b.offset = std::round (snap.f (P_dsOffset)); b.swing = snap.f (P_dsSwing); b.swingGrid = snap.i (P_dsSwingGrid);
+        b.barSteps = juce::jlimit (1, 32, snap.i (P_dsSteps));
+        b.hostPlaying = hostPlaying; b.ppq = ppq; b.bpm = bpm; b.barStartPpq = barStart; b.hasBar = hasBar; b.beatsPerBar = beatsPerBar;
+        b.fallbackTempo = b.sync == tg::DS_Internal ? (double) snap.f (P_seqTempo) : (bpm > 0.0 ? bpm : (double) snap.f (P_seqTempo));
+        if (b.sync == tg::DS_Internal) b.bpm = 0.0, b.hostPlaying = false;
+        b.sampleRate = sampleRate;
+        dnaClock.beginBlock (b);
+        // The original sequencer worked block by block; the new features (ratchets, swing, the gate
+        // source, restarts...) need finer timing, so then the block is evaluated every 64 samples.
+        const bool legacy = b.sync == tg::DS_Host && b.restart == tg::DR_Never && b.offset == 0.0 && b.swing <= 0.0
+                            && snap.i (P_dsDirection) == 0 && snap.i (P_dsLane2On) == 0 && snap.i (P_dsPattern) == 0 && snap.i (P_dsChainOn) == 0
+                            && snap.f (P_dsDensity) >= 1.0f && std::abs (snap.f (P_dsProbScale) - 1.0f) < 1.0e-4f && dnaSteps.legacyOnly() && ! dnaGateRouted();
+        if (dsOn && ! legacy) dsChunk = std::min (maxBlock, 64);
     }
 
     float* L = buffer.getWritePointer (0);
@@ -386,9 +419,9 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         // render up to the next event, in chunks no larger than the prepared block size
         while (pos < next)
         {
-            const int len = std::min (next - pos, maxBlock);
+            const int len = std::min (next - pos, dsChunk);
             engine.keepPreFx = capRecording.load (std::memory_order_relaxed) && snap.i (P_capPoint) == 0;
-            engine.setDnaSeqClock (dsBlockPos + dsInc * pos, dsInc);
+            engine.setDnaPosition (dsOn ? dnaClock.stepsAt (pos + 0.5 * len) : 0.0);
             engine.render (L + pos, R + pos, len, snap, wavs);
             if (capRecording.load (std::memory_order_relaxed))
             {
@@ -412,6 +445,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             if (seqReleaseKey >= 0 && seqReleaseKey == seqHeldKey) { engine.noteOff (seqHeldKey); seqHeldKey = -1; }
             seqReleaseIn = -1;
         }
+        midiPos = pos;
         while (it != end && (*it).samplePosition <= pos)
         {
             handleMidi ((*it).getMessage());
@@ -436,6 +470,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (pos >= n) break;
     }
 
+    dnaClock.endBlock (n);
     if (buffer.getNumChannels() == 1)
         for (int i = 0; i < n; ++i) L[i] = 0.5f * (L[i] + R[i]);
 
@@ -595,7 +630,8 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("stateVersion", kStateVersion, nullptr);
     state.setProperty ("seqSteps", steps.toString(), nullptr);
     state.setProperty ("modRoutes", juce::JSON::toString (routes.toVar(), true), nullptr);
-    state.setProperty ("dnaSeqSteps", dnaSteps.toString(), nullptr);
+    state.setProperty ("dnaSeqSteps", dnaSteps.toString(), nullptr);   // pattern A lane 1, as older versions read it
+    state.setProperty ("dnaSeq2", dnaSteps.toJson(), nullptr);         // everything
     state.setProperty ("scenes", juce::JSON::toString (scenes.toVar(), true), nullptr);
     state.setProperty ("sceneEdit", getEditScene(), nullptr);
     state.setProperty ("macroNames", macroNamesJoined(), nullptr);
@@ -628,12 +664,14 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     apvts.replaceState (tree);
     if (version < 3) setFilterDefaultsForOldPatch();
     if (version < 4) setFilter2DefaultsForOldPatch();
+    if (version < 5) setDnaDefaultsForOldPatch();
 
     if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
     if (stepStr.isNotEmpty()) steps.fromString (stepStr);
     routes.fromVar (juce::JSON::parse (tree.getProperty ("modRoutes").toString()));   // none in v1 state
-    dnaSteps.fromString (tree.getProperty ("dnaSeqSteps").toString());
+    if (! (tree.hasProperty ("dnaSeq2") && dnaSteps.fromVar (juce::JSON::parse (tree.getProperty ("dnaSeq2").toString()))))
+        dnaSteps.fromString (tree.getProperty ("dnaSeqSteps").toString());
     scenes.fromVar (juce::JSON::parse (tree.getProperty ("scenes").toString()));
     sceneEditIndex = juce::jlimit (0, 3, (int) tree.getProperty ("sceneEdit", 0));
     setMacroNamesJoined (tree.getProperty ("macroNames").toString());
@@ -699,7 +737,8 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
         root->setProperty ("plugin", juce::var (extra));
     }
     root->setProperty ("modMatrix", routes.toVar());
-    root->setProperty ("dnaSequence", dnaSteps.toString());
+    root->setProperty ("dnaSequence", dnaSteps.toString());   // pattern A lane 1 (older versions)
+    root->setProperty ("dnaSequencer", dnaSteps.toVar());     // everything
     root->setProperty ("scenes", scenes.toVar());
     root->setProperty ("sceneEdit", getEditScene());
     root->setProperty ("capture", captureToVar());
@@ -819,7 +858,8 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("filterSlope")) setFilterDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("filter2On")) setFilter2DefaultsForOldPatch();
         routes.fromVar (patch["modMatrix"]);
-        dnaSteps.fromString (patch["dnaSequence"].toString());
+        if (! dnaSteps.fromVar (patch["dnaSequencer"])) dnaSteps.fromString (patch["dnaSequence"].toString());
+        if (extra == nullptr || ! extra->hasProperty ("dsSync")) setDnaDefaultsForOldPatch();
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
         const juce::var names = patch["macroNames"];
@@ -920,6 +960,25 @@ void MegaSynthProcessor::resetPatchState()
     lastEuclid[0] = -1;
 }
 
+void MegaSynthProcessor::setDnaDefaultsForOldPatch()
+{
+    // Before the DNA Sequencer update: host sync, no restart / offset / swing, forward, one lane,
+    // pattern A, everything plays. A sequence on the old "Free" rate keeps running free.
+    for (int i : { P_dsSync, P_dsRestart, P_dsOffset, P_dsSwing, P_dsSwingGrid, P_dsDirection, P_dsLane2On, P_dsLane2Steps,
+                   P_dsPattern, P_dsChainOn, P_dsDensity, P_dsProbScale, P_dsMidiSelect })
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
+    if ((int) std::lround (raw[P_dsRate]->load()) == 8)
+    {
+        auto* prm = params[(size_t) P_dsSync];
+        prm->setValueNotifyingHost (prm->convertTo0to1 ((float) tg::DS_Free));
+    }
+}
+
 void MegaSynthProcessor::setFilter2DefaultsForOldPatch()
 {
     // Before Filter 2 existed: it's off, so the patch sounds as it did
@@ -931,6 +990,30 @@ void MegaSynthProcessor::setFilter2DefaultsForOldPatch()
         prm->setValueNotifyingHost (prm->getDefaultValue());
         prm->endChangeGesture();
     }
+}
+
+void MegaSynthProcessor::dnaEdit (DnaEdit e, int lane)
+{
+    lane = juce::jlimit (0, 1, lane);
+    const int pat = dnaEditPattern(), len = dnaLaneLength (lane);
+    auto& g = dnaSteps.gen;
+    juce::String label;
+    switch (e)
+    {
+        case DE_Generate:
+            g.seed = juce::Random::getSystemRandom().nextInt ({ 1, 1000000 });
+            tg::dnaGenerate (dnaSteps, pat, lane, len, g); label = "Generate DNA pattern"; break;
+        case DE_SeedDown: g.seed = std::max (1, g.seed - 1); tg::dnaGenerate (dnaSteps, pat, lane, len, g); label = "DNA seed"; break;
+        case DE_SeedUp:   g.seed = g.seed + 1;               tg::dnaGenerate (dnaSteps, pat, lane, len, g); label = "DNA seed"; break;
+        case DE_Copy:     dnaClip = tg::dnaGetLane (dnaSteps, pat, lane); dnaClipValid = true; return;
+        case DE_Paste:    if (! dnaClipValid) return; tg::dnaSetLane (dnaSteps, pat, lane, dnaClip); label = "Paste DNA steps"; break;
+        case DE_ShiftLeft:  tg::dnaShift (dnaSteps, pat, lane, len, -1); label = "Shift DNA steps"; break;
+        case DE_ShiftRight: tg::dnaShift (dnaSteps, pat, lane, len, 1); label = "Shift DNA steps"; break;
+        case DE_Reverse:  tg::dnaReverse (dnaSteps, pat, lane, len); label = "Reverse DNA steps"; break;
+        case DE_Clear:    tg::dnaClear (dnaSteps, pat, lane); label = "Clear DNA steps"; break;
+    }
+    lastDnaVersion = dnaSteps.getVersion();   // recorded here with a name, not again as "Edit"
+    pushHistory (label);
 }
 
 void MegaSynthProcessor::copyFilter1To2()
@@ -1032,7 +1115,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
     s.params = apvts.copyState();
     s.steps = steps.toString();
     s.routes = juce::JSON::toString (routes.toVar(), true);
-    s.dnaSteps = dnaSteps.toString();
+    s.dnaSteps = dnaSteps.toJson();
     s.scenes = juce::JSON::toString (scenes.toVar(), true);
     s.sceneEdit = getEditScene();
     s.macroNames = macroNamesJoined();
@@ -1058,7 +1141,7 @@ void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
     steps.fromString (s.steps);
     routes.fromVar (juce::JSON::parse (s.routes));
     lastRoutesVersion = routes.getVersion();
-    dnaSteps.fromString (s.dnaSteps);
+    dnaSteps.fromJsonOrLegacy (s.dnaSteps);
     lastDnaVersion = dnaSteps.getVersion();
     scenes.fromVar (juce::JSON::parse (s.scenes));
     lastScenesVersion = scenes.version.load();

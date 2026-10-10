@@ -6,6 +6,7 @@
 #include "Mut/Capture.h"
 #include "Lab/Breeder.h"
 #include "Presets/Factory.h"
+#include "Seq/DnaGenerator.h"
 
 class MegaSynthProcessor : public juce::AudioProcessor,
                            private juce::Timer,
@@ -51,7 +52,9 @@ public:
     float scope[kScopeLen] {};
     std::atomic<int> scopeWrite { 0 };
     void readScope (float* dest, int n) const;   // the newest n samples (message thread)
-    int getDnaSeqStep() const { return engine.dnaSeqStep.load(); }                    // modulation matrix routes (amounts are the mod1Amt.. parameters)
+    int getDnaSeqStep() const { return engine.dnaSeqStep.load(); }
+    int getDnaSeqStep2() const { return engine.dnaSeqStep2.load(); }
+    int getDnaPatternPlaying() const { return engine.dnaPatternPlaying.load(); }                    // modulation matrix routes (amounts are the mod1Amt.. parameters)
     const tg::Engine& getEngine() const { return engine; }
     // Adds a route from src to dest in the first free slot with the given depth; returns the slot or -1.
     int addRoute (int src, int destParam, float depth);
@@ -110,7 +113,13 @@ public:
     juce::String importBrowserPatch (const juce::String& json);   // returns an error message, or empty on success
     void resetToDefaults();
     bool loadFactoryPreset (int index);
-    void copyFilter1To2();                // Filter 2 takes all of Filter 1's settings (undoable)   // tg::factoryPresets() index; false when out of range
+    void copyFilter1To2();
+    // DNA Sequencer editing (message thread, undoable). lane 0/1; acts on the selected pattern.
+    enum DnaEdit { DE_Generate, DE_SeedDown, DE_SeedUp, DE_Copy, DE_Paste, DE_ShiftLeft, DE_ShiftRight, DE_Reverse, DE_Clear };
+    void dnaEdit (DnaEdit, int lane);
+    int dnaEditPattern() const { return juce::jlimit (0, 3, (int) std::lround (raw[tg::P_dsPattern]->load())); }
+    int dnaLaneLength (int lane) const { return juce::jlimit (1, 32, (int) std::lround (raw[lane == 0 ? tg::P_dsSteps : tg::P_dsLane2Steps]->load())); }
+    bool dnaHasClipboard() const { return dnaClipValid; }                // Filter 2 takes all of Filter 1's settings (undoable)   // tg::factoryPresets() index; false when out of range
 
     // Patch files (.megasynth = the browser patch JSON plus a name and the plugin-only settings)
     static juce::File getPatchFolder();
@@ -124,7 +133,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 4;   // 3: filter overhaul; 4: Filter 2
+    static constexpr int kStateVersion = 5;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -143,7 +152,8 @@ public:
 private:
     void resetPatchState();
     void setFilterDefaultsForOldPatch();   // patches / projects from before the filter overhaul
-    void setFilter2DefaultsForOldPatch();  // ... and from before Filter 2   // every parameter, route, scene, step and sample back to the defaults
+    void setFilter2DefaultsForOldPatch();  // ... and from before Filter 2
+    void setDnaDefaultsForOldPatch();      // ... and from before the DNA Sequencer update   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();
@@ -170,8 +180,11 @@ private:
     std::atomic<bool> snapshotPending { false };
     int snapshotDelay = 0;
     uint32_t lastStepsVersion = 0, lastRoutesVersion = 0, lastDnaVersion = 0;
-    double dsRunPos = 0.0;          // DNA Sequencer position (steps) when free-running
-    bool dsWasOn = false;
+    tg::DnaClock dnaClock;          // DNA Sequencer clock (audio thread)
+    tg::DnaLane dnaClip {};         // DNA Sequencer copy / paste
+    bool dnaClipValid = false;
+    int midiPos = 0;                // sample position of the MIDI event being handled
+    bool dnaGateRouted() const;     // a Mod Matrix route uses the DNA step gate
     tg::GlobalModInputs modInputs;
     juce::AudioBuffer<float> capBuf;            // audio thread writes while recording
     std::atomic<bool> capRecording { false }, capStopReq { false }, capReady { false };

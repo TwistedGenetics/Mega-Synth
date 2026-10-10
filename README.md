@@ -85,7 +85,20 @@ Make two sounds the parents (**Current sound > A**, then build or load another a
 
 ## Sonic DNA Sequencer (DNA Seq tab)
 
-Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (Wave Mutation), Shift, Ring, FM (Audio-Rate Transform), Splice (DNA Splice), Resonate (Resonator), Filter (closes the filter), Grain (Granular), Blur (Spectral, which must be On), Mutate (Master Mutate) and Octave (+12 semitones). The running step pushes its transform's destinations, **Glide** crossfades into the next step and **Depth** scales everything. **Rate** is a note value (1/32 to 1 bar, locked to the DAW's beat position while it plays, the internal tempo otherwise) or **Free** in Hz. The sequencer's output (the blended step amount) is also a Mod Matrix source, "DNA Sequencer". Steps are saved with the project and in patches.
+Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (Wave Mutation), Shift, Ring, FM (Audio-Rate Transform), Splice (DNA Splice), Resonate (Resonator), Filter (closes both filters), Grain (Granular), Blur (Spectral, which must be On), Mutate (Master Mutate) and Octave (+12 semitones). The running step pushes its transform's destinations, **Glide** crossfades into the next step and **Depth** scales everything.
+
+- **Sync**: *Host* follows the DAW's tempo and song position (press play mid-bar and it's on the right step); when the DAW is stopped it carries on at the tempo. *Internal* uses the synth's own tempo. *Free* runs at Free Rate in Hz. **Rate** is the step length (1/32 to 1 bar).
+- **Restart**: *Never* (runs on; in Host sync it's locked to the song position), *Each note*, *Each bar* (follows the DAW's time signature), *Host start*. **Start Offset** begins the pattern up to 31 steps in.
+- **Swing** 0-75% on 1/16 or 1/8: every second unit starts late by that share of a unit (33% is about a triplet shuffle); downbeats don't move.
+- **Direction**: forward, reverse, ping-pong or random.
+- **Per step**: probability (the bar under the amount), ratchet (x1-x4 repeats inside the step), glide (G = the global Glide, G+ = always, G- = never) and lock.
+- **Lane 2** has its own steps and its own length (**Lane 2 Steps**) for polymeter, e.g. 16 against 12; both lanes add their transforms together.
+- **Patterns A-D**, each with both lanes. **Chain** plays them in order (e.g. AABA), one lane-1 cycle each. **MIDI select** lets four notes pick the pattern from a clip (those notes don't sound).
+- **Copy / Paste / << / >> / Reverse / Clear** work on the lane you're editing (Clear keeps locked steps).
+- **Generator**: Random, Euclidean (Fill's hits spread evenly, Rotate moves them) or Variation (small changes to the current pattern), with Fill, Min / Max amount, Extras (chance of ratchets and probabilities) and the transforms it may use. **Generate** picks a new seed; **<** / **>** step through seeds, and the same seed always gives the same pattern. Locked steps are never changed. Every edit can be undone.
+- **Density** thins the pattern and **Probability** scales every step's probability (0% = nothing plays, 100% = as written, 200% = everything plays); with Glide and Depth they can be automated or driven from the Mod Matrix. Probability decisions follow the song position, so a bounce plays the same way twice.
+- **Mod Matrix sources**: DNA Sequencer (lane 1's step amount), DNA Sequencer Lane 2, and DNA Step Gate (a pulse at every step and ratchet hit).
+- Patches and projects from before this version load with these settings off and their steps in pattern A, and play exactly as they did.
 
 ## Overview tab
 

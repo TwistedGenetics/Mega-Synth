@@ -225,23 +225,6 @@ private:
     juce::Label name, info;
 };
 
-// One step of the Sonic DNA Sequencer: transform type and amount
-class DnaStepCell : public juce::Component
-{
-public:
-    DnaStepCell (MegaSynthProcessor&, int index);
-    void resized() override;
-    void paint (juce::Graphics&) override;
-    void refresh();
-    void setPlaying (bool);
-private:
-    MegaSynthProcessor& proc;
-    const int index;
-    bool playing = false;
-    juce::ComboBox type;
-    juce::Slider amount;
-};
-
 class StepCell : public juce::Component
 {
 public:
@@ -364,10 +347,7 @@ private:
     juce::Component* netView = nullptr;
     juce::Component* specView = nullptr;
     juce::Component* dnaView = nullptr;
-    juce::Array<tgui::DnaStepCell*> dnaCells;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> dsOnAtt;
-    uint32_t lastDnaVersion = 0;
-    int lastDnaStep = -2, lastDnaLen = -1;
     tgui::CaptureView* capView = nullptr;
     juce::TextButton capRecord { "Record" }, capSave { "Save WAV..." };
     juce::OwnedArray<juce::TextButton> capSends;

@@ -26,6 +26,15 @@ if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_GOLDEN", {}).isNotEmpt
         setP (p, P_envAssignTarget1, (float) MT_supersawSpread); setP (p, P_envAssignAmt1, 0.6f);
         setP (p, P_delaySync, 6); setP (p, P_chorusMix, 0.5f);
     }, chord (0.05, 1.2, { 45, 57, 64 }), 2.0);
+    // the DNA Sequencer as it was before its update (internal clock, and the Free rate)
+    for (int free = 0; free < 2; ++free)
+        golden (free ? "dnaseq_free" : "dnaseq", [free] (MegaSynthProcessor& p)
+        {
+            const int t[8] = { DT_Fold, DT_Off, DT_Crush, DT_Filter, DT_Ring, DT_Off, DT_Splice, DT_Octave };
+            for (int i = 0; i < 8; ++i) p.dnaSteps.set (i, t[i], 0.4f + 0.07f * i);
+            setP (p, P_dsOn, 1.0f); setP (p, P_dsSteps, 8.0f); setP (p, P_dsGlide, 0.3f);
+            setP (p, P_dsRate, free ? 8.0f : 2.0f); setP (p, P_dsFreeHz, 7.0f);
+        }, chord (0.05, 1.6, { 45, 57 }), 2.0);
     golden ("sequence", [] (MegaSynthProcessor& p)
     {
         const int notes[8] = { 0, 3, -1, 7, 10, 7, 3, 0 };

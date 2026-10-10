@@ -31,6 +31,9 @@ inline juce::String formatParam (int idx, float v)
         || id == "seqAccentAmt" || id == "velSens")
         return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id.startsWith ("mod") && id.endsWith ("Amt")) { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
+    if (id == "dsLane2Steps") { const int n = juce::roundToInt (v); return juce::String (n) + (n == 1 ? " step" : " steps"); }
+    if (id == "dsOffset") { const int n = juce::roundToInt (v); return n == 0 ? juce::String ("none") : "+" + juce::String (n) + (n == 1 ? " step" : " steps"); }
+    if (id == "dsSwing" || id == "dsDensity" || id == "dsProbScale") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id == "dsSteps") { const int n = juce::roundToInt (v); return juce::String (n) + (n == 1 ? " step" : " steps"); }
     if (id == "dsFreeHz") return fixed (v, 2) + " Hz";
     if (id == "dsGlide" || id == "dsDepth") return juce::String (juce::roundToInt (v * 100.0f)) + "%";

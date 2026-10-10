@@ -73,6 +73,16 @@ inline const char* const kFilterTypeKeys[]   = { "lp","hp","bp","notch","peak","
 inline const char* const kFilterTypeLabels[] = { "Low Pass","High Pass","Band Pass","Notch","Peak / Bell","All Pass" };
 inline const char* const kFilterSlopeKeys[]   = { "6","12","18","24" };
 inline const char* const kFilterSlopeLabels[] = { "6 dB/oct","12 dB/oct","18 dB/oct","24 dB/oct" };
+inline const char* const kDsSyncKeys[]   = { "host","internal","free" };
+inline const char* const kDsSyncLabels[] = { "Host (DAW)","Internal","Free (Hz)" };
+inline const char* const kDsRestartKeys[]   = { "never","note","bar","hoststart" };
+inline const char* const kDsRestartLabels[] = { "Never (free running)","Each note","Each bar","Host start" };
+inline const char* const kDsGridKeys[]   = { "1/16","1/8" };
+inline const char* const kDsDirKeys[]   = { "forward","reverse","pingpong","random" };
+inline const char* const kDsDirLabels[] = { "Forward","Reverse","Ping-pong","Random" };
+inline const char* const kDsPatKeys[]   = { "A","B","C","D" };
+inline const char* const kDsMidiKeys[]   = { "off","0","12","24" };
+inline const char* const kDsMidiLabels[] = { "Off","MIDI 0-3 (C-2 to D#-2)","MIDI 12-15 (C-1 to D#-1)","MIDI 24-27 (C0 to D#0)" };
 inline const char* const kFilterRouteKeys[]   = { "serial","parallel" };
 inline const char* const kFilterRouteLabels[] = { "Serial (1 > 2)","Parallel (1 + 2)" };
 inline const char* const kFilterLfoKeys[]   = { "lfo1","lfo2","lfo3","lfo4" };
@@ -199,6 +209,12 @@ inline const ChoiceList kListFilterType  { kFilterTypeKeys, kFilterTypeLabels, 6
 inline const ChoiceList kListFilterSlope { kFilterSlopeKeys, kFilterSlopeLabels, 4 };
 inline const ChoiceList kListFilterLfo   { kFilterLfoKeys, kFilterLfoLabels, 4 };
 inline const ChoiceList kListFilterRoute { kFilterRouteKeys, kFilterRouteLabels, 2 };
+inline const ChoiceList kListDsSync      { kDsSyncKeys, kDsSyncLabels, 3 };
+inline const ChoiceList kListDsRestart   { kDsRestartKeys, kDsRestartLabels, 4 };
+inline const ChoiceList kListDsGrid      { kDsGridKeys, kDsGridKeys, 2 };
+inline const ChoiceList kListDsDir       { kDsDirKeys, kDsDirLabels, 4 };
+inline const ChoiceList kListDsPattern   { kDsPatKeys, kDsPatKeys, 4 };
+inline const ChoiceList kListDsMidi      { kDsMidiKeys, kDsMidiLabels, 4 };
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 enum FilterType { FT_LP, FT_HP, FT_BP, FT_NOTCH, FT_PEAK, FT_AP, FT_TYPE_COUNT };
@@ -587,7 +603,20 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(filter2EnvAmt, "Filter 2 Env Amount", -10000, 10000, 0, 1, 0) \
     F(filter2KeyTrack, "Filter 2 Key Tracking", 0, 1, 0, 0.01, 0) \
     F(filter2LfoAmt, "Filter 2 LFO Amount", -1, 1, 0, 0.001, 0) \
-    C(filter2LfoSrc, "Filter 2 LFO Source", kListFilterLfo, 0)
+    C(filter2LfoSrc, "Filter 2 LFO Source", kListFilterLfo, 0) \
+    C(dsSync,      "DNA Sequencer Sync", kListDsSync, 0) \
+    C(dsRestart,   "DNA Sequencer Restart", kListDsRestart, 0) \
+    F(dsOffset,    "DNA Sequencer Start Offset", 0, 31, 0, 1, 0) \
+    F(dsSwing,     "DNA Sequencer Swing", 0, 0.75, 0, 0.01, 0) \
+    C(dsSwingGrid, "DNA Sequencer Swing Grid", kListDsGrid, 0) \
+    C(dsDirection, "DNA Sequencer Direction", kListDsDir, 0) \
+    B(dsLane2On,   "DNA Sequencer Lane 2 On", false) \
+    F(dsLane2Steps, "DNA Sequencer Lane 2 Steps", 1, 32, 12, 1, 0) \
+    C(dsPattern,   "DNA Sequencer Pattern", kListDsPattern, 0) \
+    B(dsChainOn,   "DNA Sequencer Chain", false) \
+    F(dsDensity,   "DNA Sequencer Density", 0, 1, 1, 0.01, 0) \
+    F(dsProbScale, "DNA Sequencer Probability Scale", 0, 2, 1, 0.01, 0) \
+    C(dsMidiSelect, "DNA Sequencer MIDI Pattern Select", kListDsMidi, 0)
 
 enum ParamIndex
 {

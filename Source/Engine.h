@@ -73,7 +73,7 @@ struct ModContext
     bool morph = false;      // scene morph on: routes onto Scene X/Y re-morph this voice's parameters
     const MutationTable* mut = nullptr;   // set when routes move the Mutate amount: each voice mutates itself
     uint32_t lockMask = 0;
-    float dnaSeq = 0.0f;                   // the DNA Sequencer's current value (a Mod Matrix source)
+    float dnaSeq = 0.0f, dnaSeq2 = 0.0f, dnaGate = 0.0f;   // the DNA Sequencer's lanes and step gate (Mod Matrix sources)
     bool any() const { return routes != nullptr && routes->n > 0; }
 };
 
@@ -316,10 +316,10 @@ public:
 
     FxBus& fx() { return fxBus; }
     const Granular& granular() const { return gran; }
-    // DNA Sequencer: the step store, and its position (in steps) at the start of the next render call
+    // DNA Sequencer: the step store, and its position (in steps) at the middle of the next render call
     void setDnaSequencer (const DnaSeqStore* st) { dnaStore = st; }
-    void setDnaSeqClock (double posAtStart, double stepsPerSample) { dsPos = posAtStart; dsInc = stepsPerSample; }
-    std::atomic<int> dnaSeqStep { -1 };
+    void setDnaPosition (double steps) { dsPos = steps; }
+    std::atomic<int> dnaSeqStep { -1 }, dnaSeqStep2 { -1 }, dnaPatternPlaying { 0 };
     void loadGranular (const float* l, const float* r, int n) { gran.load (l, r, n); }
     // the bus signal just before the effects, for Capture ("before effects")
     bool keepPreFx = false;
@@ -346,8 +346,11 @@ private:
     RouteState globalRouteState;
     Snapshot fxSnap, mutSnap, noteSnap, dsSnap;
     const DnaSeqStore* dnaStore = nullptr;
-    double dsPos = 0.0, dsInc = 0.0;
-    float dsValue = 0.0f;
+    double dsPos = 0.0;
+    float dsValue = 0.0f, dsValue2 = 0.0f, dsGate = 0.0f;
+    Snapshot dnaModSnap;            // the DNA Sequencer's own settings with any Mod Matrix routes applied
+    RouteState dnaRouteState;
+    float lastSrc[MS_COUNT] {};     // last block's global sources (for routes onto the DNA settings)
     MutationTable mutTab;
     uint32_t mutLockMask (const Snapshot& s) const
     {

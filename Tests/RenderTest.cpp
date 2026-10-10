@@ -480,8 +480,55 @@ int main()
         }
 
     };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_DNASHOT", {}).isNotEmpty())
+    {
+        auto p = make();
+        setP (*p, P_dsOn, 1.0f); setP (*p, P_dsLane2On, 1.0f); setP (*p, P_dsSwing, 0.3f);
+        p->dnaSteps.gen.extras = 0.5f;
+        p->dnaEdit (MegaSynthProcessor::DE_SeedUp, 0);
+        auto st = p->dnaSteps.get (0, 0, 3); st.lock = true; p->dnaSteps.set (0, 0, 3, st);
+        render (*p, 0.3, chord (0.0, 0.2, { 48 }));
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+        ed->setSize (1200, 860);
+        std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
+        {
+            if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
+            for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
+            return nullptr;
+        };
+        if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (12);
+        auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 640), true, 1.0f);
+        auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+        auto f = dir.getChildFile ("dna_ui.png"); f.deleteFile();
+        juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        return 0;
+    }
+
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_DIAG", {}).isNotEmpty())
     {
+        {
+            // does the output depend on the host's buffer size?
+            juce::AudioBuffer<float> out[2];
+            for (int k = 0; k < 2; ++k)
+            {
+                const int bs = k == 0 ? 512 : 64;
+                auto p = std::make_unique<MegaSynthProcessor>();
+                p->setPlayConfigDetails (0, 2, sr, bs); p->prepareToPlay (sr, bs);
+                for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain }) setP (*p, i, 0.0f);
+                const int total = (int) (0.5 * sr);
+                out[k].setSize (2, total);
+                juce::AudioBuffer<float> buf (2, bs);
+                for (int pos = 0; pos < total; pos += bs)
+                {
+                    juce::MidiBuffer midi; if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100), 0);
+                    buf.clear(); p->processBlock (buf, midi);
+                    for (int c = 0; c < 2; ++c) out[k].copyFrom (c, pos, buf, c, 0, std::min (bs, total - pos));
+                }
+            }
+            double d = 0, e = 0;
+            for (int i = 0; i < out[0].getNumSamples(); ++i) { d += std::pow (out[0].getSample (0, i) - out[1].getSample (0, i), 2); e += std::pow (out[0].getSample (0, i), 2); }
+            std::cout << "  buffer 512 vs 64: difference " << 10 * std::log10 (d / e + 1e-30) << " dB" << std::endl;
+        }
         // filter "clean" check: filter wide open, Mix 100% vs 0%; the difference is what the filter adds
         auto cleanTest = [&] (const juce::String& name, std::function<void (MegaSynthProcessor&)> setup, std::initializer_list<int> notes)
         {
@@ -573,6 +620,244 @@ int main()
             }
         }
         std::cout << (failures == 0 ? "FILTER TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
+    // ---- DNA Sequencer update: clock, swing, restart, generator, probability, ratchets, lanes, chain, MIDI, undo
+    auto dnaTests = [&]
+    {
+        std::cout << "DNA Sequencer update" << std::endl;
+        const double fs = 48000.0;
+        auto block = [&] (int sync, int restart, bool playing, double ppq, double bpm)
+        {
+            DnaClock::Block b {};
+            b.on = true; b.sync = sync; b.rate = 2; b.restart = restart; b.freeHz = 4.0; b.offset = 0; b.swing = 0; b.swingGrid = 0; b.barSteps = 16;
+            b.hostPlaying = playing; b.ppq = ppq; b.bpm = bpm; b.barStartPpq = 0; b.hasBar = false; b.beatsPerBar = 4.0; b.fallbackTempo = 120.0; b.sampleRate = fs;
+            return b;
+        };
+        // host sync: the step follows the DAW's beat position at any tempo, including starting mid-bar
+        {
+            bool ok = true;
+            for (double bpm : { 90.0, 140.0, 174.0, 87.5 })
+                for (double ppq : { 0.0, 5.37, 13.999, 101.26 })
+                {
+                    DnaClock c; c.beginBlock (block (DS_Host, DR_Never, true, ppq, bpm));
+                    for (double smp : { 0.0, 100.0, 511.0 })
+                    {
+                        const double expect = (ppq + smp * bpm / 60.0 / fs) / 0.25;
+                        if (std::abs (c.stepsAt (smp) - expect) > 1e-6) ok = false;
+                    }
+                }
+            CHECK (ok, "host sync: position = DAW beat position / step length");
+            DnaClock c; c.beginBlock (block (DS_Host, DR_Never, true, 5.37, 174.0));
+            CHECK ((int) std::floor (c.stepsAt (0)) % 16 == 5, "starting mid-bar (beat 5.37) lands on step 6 of 16");
+            // Internal ignores the DAW; Host falls back to the tempo when the DAW stops, carrying on
+            DnaClock d; auto bi = block (DS_Internal, DR_Never, true, 33.0, 174.0); bi.hostPlaying = false; bi.bpm = 0; d.beginBlock (bi);
+            CHECK (std::abs (d.stepsAt (0)) < 1e-9 && std::abs (d.stepsAt (fs) - 120.0 / 60.0 / 0.25) < 1e-6, "internal: runs from the start at the synth's tempo");
+            DnaClock h; h.beginBlock (block (DS_Host, DR_Never, true, 8.0, 120.0)); h.endBlock (480);
+            h.beginBlock (block (DS_Host, DR_Never, false, 0.0, 120.0));
+            CHECK (std::abs (h.stepsAt (0) - (8.0 + 480 * 2.0 / fs) / 0.25) < 1e-6, "host stopped: carries on from where the DAW was");
+        }
+        // swing: 50% on 1/16 delays every second 16th by half a 16th; downbeats don't move
+        {
+            DnaClock c; auto b = block (DS_Host, DR_Never, true, 0.0, 120.0); b.swing = 0.5; c.beginBlock (b);
+            auto stepAtBeat = [&] (double beat) { return (int) std::floor (c.stepsAt (beat * 60.0 / 120.0 * fs)); };
+            CHECK (stepAtBeat (0.30) == 0 && stepAtBeat (0.37) == 0 && stepAtBeat (0.38) == 1 && stepAtBeat (0.49) == 1 && stepAtBeat (0.501) == 2 && stepAtBeat (0.874) == 2 && stepAtBeat (0.876) == 3,
+                   "swing 50%: off-beat 16ths start at 0.375 beat, downbeats on the beat");
+            b.swingGrid = 1; c.beginBlock (b);   // on 1/8: the off-beat eighth (beat 0.5) moves to 0.75
+            CHECK (stepAtBeat (0.74) == 1 && stepAtBeat (0.76) == 2, "swing on 1/8");
+        }
+        // restart / offset
+        {
+            DnaClock c; auto b = block (DS_Host, DR_Bar, true, 0.0, 120.0); b.hasBar = true; b.barStartPpq = 3.0; b.beatsPerBar = 3.0;   // 3/4
+            b.ppq = 4.1; c.beginBlock (b);
+            CHECK ((int) std::floor (c.stepsAt (0)) == 4, "each bar: restarts at the bar line (3/4)");
+            b.restart = DR_Note; b.ppq = 10.0; c.beginBlock (b); c.noteOn (100.0);
+            CHECK (std::abs (c.stepsAt (100.0)) < 1e-9 && std::abs (c.stepsAt (100.0 + fs * 0.125)) - 1.0 < 1e-6, "each note: restarts at the note");
+            b.restart = DR_Never; b.offset = 3; b.ppq = 0.0; c.beginBlock (b);
+            CHECK (std::abs (c.stepsAt (0) - 3.0) < 1e-9, "start offset");
+            DnaClock f; auto bf = block (DS_Free, DR_Never, true, 7.0, 120.0); f.beginBlock (bf);
+            CHECK (std::abs (f.stepsAt (fs) - 4.0) < 1e-6, "free: Free Rate in steps per second");
+        }
+        // generator: same seed = same pattern; locks survive; Euclidean spreads hits evenly
+        {
+            DnaSeqStore a, b2;
+            DnaGenSettings g; g.seed = 4242; g.extras = 0.4f;
+            dnaGenerate (a, 0, 0, 16, g); dnaGenerate (b2, 0, 0, 16, g);
+            bool same = true; for (int i = 0; i < 32; ++i) same &= a.get (0, 0, i) == b2.get (0, 0, i);
+            CHECK (same, "same seed, same pattern");
+            g.seed = 4243; dnaGenerate (b2, 0, 0, 16, g);
+            bool diff = false; for (int i = 0; i < 16; ++i) diff |= ! (a.get (0, 0, i) == b2.get (0, 0, i));
+            CHECK (diff, "another seed, another pattern");
+            DnaStep keep { DT_Octave, 0.33f, 0.4f, 3, 2, true };
+            a.set (0, 0, 5, keep);
+            for (int s : { 1, 2, 3 }) { g.seed = s; for (int st : { DG_Random, DG_Euclid, DG_Variation }) { g.style = st; dnaGenerate (a, 0, 0, 16, g); } }
+            CHECK (a.get (0, 0, 5) == keep, "locked steps survive every generator style");
+            DnaSeqStore e; DnaGenSettings ge; ge.style = DG_Euclid; ge.fill = 5.0f / 16.0f; ge.extras = 0;
+            dnaGenerate (e, 0, 0, 16, ge);
+            juce::String hits; int count = 0;
+            for (int i = 0; i < 16; ++i) { const bool h = e.get (0, 0, i).type != DT_Off; hits << (h ? "x" : "."); count += h ? 1 : 0; }
+            std::cout << "  euclidean 5 of 16: " << hits << std::endl;
+            CHECK (count == 5, "euclidean: 5 hits");
+            // generating with the same seed after a variation gives the variation again (undo aside)
+        }
+        // probability, density, ratchets, direction, lanes, chain (the evaluator)
+        {
+            DnaSeqStore st;
+            for (int i = 0; i < 16; ++i) st.set (0, 0, i, DnaStep { DT_Fold, 1.0f, 0.5f, 1, 2, false });
+            DnaPlayParams pp; pp.len[0] = 16; pp.glide = 0;
+            int fired = 0; const int N = 4000;
+            for (int k = 0; k < N; ++k) { DnaFrame f; dnaEvaluate (st, k + 0.1, pp, f); fired += f.w[DT_Fold] > 0.5f ? 1 : 0; }
+            std::cout << "  probability 50%: played " << (100.0 * fired / N) << "% of steps" << std::endl;
+            CHECK (std::abs ((double) fired / N - 0.5) < 0.03, "probability 50% plays about half the time");
+            auto rate = [&] (float scale, float density)
+            {
+                DnaPlayParams q = pp; q.probScale = scale; q.density = density; int n = 0;
+                for (int k = 0; k < N; ++k) { DnaFrame f; dnaEvaluate (st, k + 0.1, q, f); n += f.w[DT_Fold] > 0.5f ? 1 : 0; }
+                return (double) n / N;
+            };
+            CHECK (rate (0.0f, 1.0f) == 0.0 && rate (2.0f, 1.0f) == 1.0 && std::abs (rate (1.5f, 1.0f) - 0.75) < 0.03, "probability scale: 0 = none, 200% = all");
+            for (int i = 0; i < 16; ++i) st.set (0, 0, i, DnaStep { DT_Fold, 1.0f, 1.0f, 1, 2, false });
+            CHECK (std::abs (rate (1.0f, 0.5f) - 0.5) < 0.2 && rate (1.0f, 0.0f) == 0.0, "density thins the pattern");
+            // ratchet 3: three hits inside the step, each with a gate pulse
+            st.set (0, 0, 2, DnaStep { DT_Crush, 1.0f, 1.0f, 3, 2, false });
+            bool rok = true;
+            for (int j = 0; j < 3; ++j)
+            {
+                DnaFrame on, off;
+                dnaEvaluate (st, 2.0 + (j + 0.3) / 3.0, pp, on);
+                dnaEvaluate (st, 2.0 + (j + 0.9) / 3.0, pp, off);
+                DnaFrame hit; dnaEvaluate (st, 2.0 + (j + 0.001) / 3.0, pp, hit);
+                rok &= on.w[DT_Crush] > 0.99f && off.w[DT_Crush] < 0.01f && hit.gate > 0.95f;
+            }
+            CHECK (rok, "ratchet x3: three hits per step at 0, 1/3 and 2/3, each with a gate pulse");
+            // direction
+            juce::String fwd, rev, png;
+            for (int k = 0; k < 8; ++k) { fwd << dnaIndex (k, 4, DD_Forward, 1); rev << dnaIndex (k, 4, DD_Reverse, 1); png << dnaIndex (k, 4, DD_PingPong, 1); }
+            CHECK (fwd == "01230123" && rev == "32103210" && png == "01232101", "directions (" + png + ")");
+            std::set<int> seen; for (int k = 0; k < 200; ++k) seen.insert (dnaIndex (k, 8, DD_Random, 7));
+            CHECK (seen.size() == 8, "random direction visits every step");
+            // lane 2: its own length (polymeter), its own steps
+            pp.lane2 = true; pp.len[1] = 12;
+            st.set (0, 1, 7, DnaStep { DT_Ring, 0.8f, 1.0f, 1, 2, false });
+            DnaFrame f; dnaEvaluate (st, 19.5, pp, f);
+            CHECK (f.step[0] == 3 && f.step[1] == 7 && std::abs (f.w[DT_Ring] - 0.8f) < 1e-5f && std::abs (f.value[1] - 0.8f) < 1e-5f, "lane 2 runs its own 12 steps");
+            // chain AB with 4-step patterns
+            st.setChain ("AB"); pp.chain = true; pp.len[0] = 4; pp.lane2 = false;
+            st.set (1, 0, 0, DnaStep { DT_Octave, 1.0f, 1.0f, 1, 2, false });
+            DnaFrame c0, c1, c2; dnaEvaluate (st, 0.5, pp, c0); dnaEvaluate (st, 4.5, pp, c1); dnaEvaluate (st, 8.5, pp, c2);
+            CHECK (c0.pattern == 0 && c1.pattern == 1 && c2.pattern == 0 && c1.w[DT_Octave] > 0.99f, "chain A B A ...");
+        }
+        // in the synth, with a simulated DAW transport: the playing step follows the song position
+        {
+            struct FakeHead : juce::AudioPlayHead
+            {
+                PositionInfo info;
+                juce::Optional<PositionInfo> getPosition() const override { return info; }
+            } head;
+            bool ok = true; juce::String where;
+            for (double bpm : { 90.0, 140.0, 174.0 })
+            {
+                auto p = std::make_unique<MegaSynthProcessor>();
+                p->setPlayConfigDetails (0, 2, sr, 64); p->prepareToPlay (sr, 64);
+                p->setPlayHead (&head);
+                for (int i = 0; i < 16; ++i) p->dnaSteps.set (i, DT_Fold, 0.5f);
+                setP (*p, P_dsOn, 1.0f);
+                juce::AudioBuffer<float> buf (2, 64);
+                double ppq = 5.37;   // press play mid-bar
+                for (int b = 0; b < 400; ++b)
+                {
+                    head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+                    juce::MidiBuffer midi; buf.clear(); p->processBlock (buf, midi);
+                    const int expect = (int) std::floor ((ppq + 32.0 * bpm / 60.0 / sr) / 0.25) % 16;
+                    if (p->getDnaSeqStep() != expect) { ok = false; where = juce::String (bpm) + " BPM block " + juce::String (b); }
+                    ppq += 64.0 * bpm / 60.0 / sr;
+                }
+            }
+            CHECK (ok, "plugin follows the DAW's song position (" + where + ")");
+        }
+
+        // in the synth: MIDI pattern select, undo, gate source, routed density, old projects
+        {
+            auto p = make();
+            setP (*p, P_dsOn, 1.0f); setP (*p, P_dsMidiSelect, 2.0f);   // MIDI 12-15
+            auto s = render (*p, 0.3, { { 0.0, juce::MidiMessage::noteOn (1, 14, (juce::uint8) 100) } });
+            CHECK (std::lround (p->param (P_dsPattern)->convertFrom0to1 (p->param (P_dsPattern)->getValue())) == 2 && s.peak < 1e-6f,
+                   "MIDI note 14 selects pattern C and plays nothing");
+
+            auto q = make();
+            const juce::String before = q->dnaSteps.toJson();
+            q->dnaEdit (MegaSynthProcessor::DE_Generate, 0);
+            const juce::String after = q->dnaSteps.toJson();
+            q->undo();
+            CHECK (after != before && q->dnaSteps.toJson() == before, "generating is undoable");
+            q->redo();
+            CHECK (q->dnaSteps.toJson() == after, "...and redoable");
+
+            // the gate source pulses with the steps
+            auto r = make();
+            for (int i = 0; i < 16; ++i) r->dnaSteps.set (i, DT_Fold, 0.5f);
+            setP (*r, P_dsOn, 1.0f); setP (*r, P_dsSync, (float) DS_Internal); setP (*r, P_seqTempo, 120.0f);
+            r->addRoute (MS_DnaGate, P_osc1Gain, 0.3f);
+            float gmax = 0, gmin = 1;
+            for (int b = 0; b < 40; ++b)
+            {
+                render (*r, 512.0 / sr, b == 0 ? chord (0.0, 5.0, { 48 }) : std::vector<std::pair<double, juce::MidiMessage>> {});
+                const float g = r->getEngine().liveSrc[(size_t) MS_DnaGate].load();
+                gmax = std::max (gmax, g); gmin = std::min (gmin, g);
+            }
+            CHECK (gmax > 0.5f && gmin < 0.2f, "DNA step gate source pulses");
+
+            // a route onto Density really thins it: Macro 1 -> Density -100% leaves the sound as with the sequencer off
+            auto withSeq = [&] (bool routed, bool on)
+            {
+                auto m = make();
+                for (int i = 0; i < 16; ++i) m->dnaSteps.set (i, DT_Crush, 1.0f);
+                setP (*m, P_dsOn, on ? 1.0f : 0.0f); setP (*m, P_dsSync, (float) DS_Internal);
+                if (routed) { m->addRoute (MS_Macro1, P_dsDensity, -1.0f); setP (*m, P_macro1, 1.0f); }
+                for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain }) setP (*m, i, 0.0f);   // no random start phases
+                juce::AudioBuffer<float> cap; render (*m, 0.5, chord (0.0, 0.45, { 48 }), &cap);
+                return cap;
+            };
+            auto a1 = withSeq (true, true), a2 = withSeq (true, false), a3 = withSeq (false, true);   // a2: same route, sequencer off
+            double d12 = 0, d32 = 0;
+            for (int i = (int) (0.1 * sr); i < (int) (0.4 * sr); ++i) { d12 += std::abs (a1.getSample (0, i) - a2.getSample (0, i)); d32 += std::abs (a3.getSample (0, i) - a2.getSample (0, i)); }
+            std::cout << "  density route: diff vs off " << d12 << ", unrouted " << d32 << std::endl;
+            CHECK (d12 < d32 * 0.05, "Mod Matrix route onto Density works");
+
+            // a project from before the update (state version 4) on the old Free rate: comes back free-running, pattern A, one lane
+            auto o = make();
+            setP (*o, P_dsOn, 1.0f); setP (*o, P_dsRate, 8.0f); o->dnaSteps.set (2, DT_Ring, 0.6f);
+            juce::MemoryBlock mb; o->getStateInformation (mb);
+            auto xml = juce::parseXML (getXmlFromBinaryForTest (mb));
+            if (xml != nullptr)
+            {
+                xml->setAttribute ("stateVersion", 4);
+                xml->removeAttribute ("dnaSeq2");
+                for (auto* id : { "dsSync", "dsRestart", "dsOffset", "dsSwing", "dsSwingGrid", "dsDirection", "dsLane2On", "dsLane2Steps", "dsPattern", "dsChainOn", "dsDensity", "dsProbScale", "dsMidiSelect" })
+                    if (auto* e = xml->getChildByAttribute ("id", id)) xml->removeChildElement (e, true);
+                juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*xml, old);
+                auto q2 = make();
+                setP (*q2, P_dsLane2On, 1.0f); setP (*q2, P_dsSwing, 0.4f); setP (*q2, P_dsPattern, 3.0f);
+                q2->setStateInformation (old.getData(), (int) old.getSize());
+                auto pl = [&] (int i) { return q2->param (i)->convertFrom0to1 (q2->param (i)->getValue()); };
+                CHECK (std::lround (pl (P_dsSync)) == DS_Free && pl (P_dsLane2On) < 0.5f && pl (P_dsSwing) == 0.0f && std::lround (pl (P_dsPattern)) == 0
+                       && q2->dnaSteps.getType (2) == DT_Ring, "old project: free rate kept, new settings at their defaults, steps in pattern A");
+            }
+            // round trip of everything
+            auto t = make();
+            t->dnaSteps.set (2, 1, 9, DnaStep { DT_Blur, 0.25f, 0.6f, 4, 1, true }); t->dnaSteps.setChain ("ABCD"); t->dnaSteps.gen.seed = 77;
+            juce::MemoryBlock m2; t->getStateInformation (m2);
+            auto u = make(); u->setStateInformation (m2.getData(), (int) m2.getSize());
+            CHECK (u->dnaSteps.toJson() == t->dnaSteps.toJson(), "project round trip (patterns, lanes, chain, generator)");
+            auto v = make();
+            CHECK (v->importBrowserPatch (t->exportBrowserPatch()).isEmpty() && v->dnaSteps.toJson() == t->dnaSteps.toJson(), "patch round trip");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_DNAONLY", {}).isNotEmpty())
+    {
+        dnaTests();
+        std::cout << (failures == 0 ? "DNA TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
 
@@ -802,9 +1087,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 4"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 5"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"4\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"5\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -1892,6 +2177,8 @@ int main()
     }
 
     filterUnitTests();
+
+    dnaTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {

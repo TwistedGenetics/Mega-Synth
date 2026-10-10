@@ -40,6 +40,7 @@ set(MEGASYNTH_SOURCES
     Source/PluginEditor.cpp
     Source/UI/Overview.cpp
     Source/UI/FilterPanel.cpp
+    Source/UI/DnaSeqPage.cpp
     Source/Filter/Filter.cpp)
 
 set(MEGASYNTH_DEFINES

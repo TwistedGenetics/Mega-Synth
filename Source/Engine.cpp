@@ -583,7 +583,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         if (routed)
         {
             computeSources (s, mc.in, lastDt);
-            srcV[MS_DnaSeq] = mc.dnaSeq;
+            srcV[MS_DnaSeq] = mc.dnaSeq; srcV[MS_DnaSeq2] = mc.dnaSeq2; srcV[MS_DnaGate] = mc.dnaGate;
             modSnap = s;
             if (mc.morph && mc.scenes != nullptr && mc.routes->anySceneXY)
             {
@@ -1279,19 +1279,39 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
 {
     // ---- DNA Sequencer: the running step's transform moves its destinations (before Mutate)
     const Snapshot* seqBase = &sDry;
-    dsValue = 0.0f;
+    dsValue = dsValue2 = dsGate = 0.0f;
     if (dnaStore != nullptr && sDry.v[P_dsOn] > 0.5f)
     {
-        const int steps = clampv ((int) std::lround (sDry.v[P_dsSteps]), 1, 32);
-        const double mid = dsPos + dsInc * numSamples * 0.5;
-        float w[DT_COUNT];
-        dsValue = dnaSeqWeights (*dnaStore, mid, steps, sDry.v[P_dsGlide], w);
+        // its playback settings (glide, depth, density, probability) can be Mod Matrix destinations:
+        // they follow last block's global sources
+        const float* dv = sDry.v;
+        if (routeStore != nullptr && routeSet.n > 0 && routeSet.anyGlobal)
+        {
+            dnaModSnap = sDry;
+            applyRoutes (routeSet, sDry.v, dnaModSnap.v, lastSrc, dnaRouteState, (float) (numSamples / sr), RF_Global);
+            dv = dnaModSnap.v;
+        }
+        DnaPlayParams pp;
+        pp.len[0] = clampv ((int) std::lround (sDry.v[P_dsSteps]), 1, 32);
+        pp.len[1] = clampv ((int) std::lround (sDry.v[P_dsLane2Steps]), 1, 32);
+        pp.lane2 = sDry.v[P_dsLane2On] > 0.5f;
+        pp.glide = clampv (dv[P_dsGlide], 0.0f, 1.0f);
+        pp.direction = clampv ((int) std::lround (sDry.v[P_dsDirection]), 0, 3);
+        pp.density = clampv (dv[P_dsDensity], 0.0f, 1.0f);
+        pp.probScale = clampv (dv[P_dsProbScale], 0.0f, 2.0f);
+        pp.pattern = clampv ((int) std::lround (sDry.v[P_dsPattern]), 0, 3);
+        pp.chain = sDry.v[P_dsChainOn] > 0.5f;
+        DnaFrame fr;
+        dnaEvaluate (*dnaStore, dsPos, pp, fr);
+        dsValue = fr.value[0]; dsValue2 = fr.value[1]; dsGate = fr.gate;
         dsSnap = sDry;
-        applyDnaSeq (w, sDry.v[P_dsDepth], dsSnap.v);
+        applyDnaSeq (fr.w, clampv (dv[P_dsDepth], 0.0f, 1.0f), dsSnap.v);
         seqBase = &dsSnap;
-        dnaSeqStep.store ((int) (((int64_t) std::floor (mid) % steps + steps) % steps), std::memory_order_relaxed);
+        dnaSeqStep.store (fr.step[0], std::memory_order_relaxed);
+        dnaSeqStep2.store (fr.step[1], std::memory_order_relaxed);
+        dnaPatternPlaying.store (fr.pattern, std::memory_order_relaxed);
     }
-    else dnaSeqStep.store (-1, std::memory_order_relaxed);
+    else { dnaSeqStep.store (-1, std::memory_order_relaxed); dnaSeqStep2.store (-1, std::memory_order_relaxed); }
     const Snapshot& sIn = *seqBase;
 
     // ---- Master Mutate: seeded offsets on top of the patch (the knobs are never changed)
@@ -1317,7 +1337,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         routeSet.build (*routeStore);
         mc.routes = &routeSet; mc.in = modIn; mc.scenes = scenes; mc.morph = s.v[P_sceneMorph] > 0.5f;
         if (mutRouted) { mc.mut = &mutTab; mc.lockMask = lockMask; }
-        mc.dnaSeq = dsValue;
+        mc.dnaSeq = dsValue; mc.dnaSeq2 = dsValue2; mc.dnaGate = dsGate;
     }
     std::fill (std::begin (liveScratch), std::end (liveScratch), 0.0f);
 
@@ -1339,7 +1359,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             globalSrc[MS_Aftertouch] = modIn->aftertouch; globalSrc[MS_CcA] = modIn->ccA; globalSrc[MS_CcB] = modIn->ccB;
         }
         for (int k = 0; k < 8; ++k) globalSrc[MS_Macro1 + k] = s.v[P_macro1 + k];
-        globalSrc[MS_DnaSeq] = dsValue;
+        globalSrc[MS_DnaSeq] = dsValue; globalSrc[MS_DnaSeq2] = dsValue2; globalSrc[MS_DnaGate] = dsGate;
     }
     float* srcW = newest != nullptr ? newest->srcV : globalSrc;
     if (mc.any() && (routeSet.anyGlobal || (mc.morph && scenes != nullptr && routeSet.anySceneXY)))
@@ -1400,7 +1420,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     }
 
     for (int i = 0; i < P_COUNT; ++i) liveOffset[(size_t) i].store (liveScratch[i], std::memory_order_relaxed);
-    for (int i = 0; i < MS_COUNT; ++i) liveSrc[(size_t) i].store (src[i], std::memory_order_relaxed);
+    for (int i = 0; i < MS_COUNT; ++i) { liveSrc[(size_t) i].store (src[i], std::memory_order_relaxed); lastSrc[i] = src[i]; }
 }
 
 } // namespace tg

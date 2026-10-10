@@ -45,7 +45,7 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
   - **Vintage Sampler**: SP-1200 (12-bit, 26.04 kHz, no anti-alias filter: it aliases), Akai S950 (12-bit at Rate, a steep anti-alias filter and the resonant Filter), E-mu (12-bit, 27.8 kHz, gentle filters) or Free (Bits, Rate, Anti-Alias), with Noise and an input clip. Quality High oversamples the clip.
   - **Multiband** (OTT style): three bands with adjustable crossovers, upward (up to 4:1 below -36 dB) and downward (up to 20:1 above -18 dB) compression per band, input and output gain per band, Depth, Time, Output and gain meters. The bands are split so that with nothing compressing they add back to exactly the input. Quality Eco updates the gains every 8 samples.
 - **Motion**:
-  - **Beat Repeat**: repeats the last 1/4-1/32 (tempo synced). Shrink shortens each repeat (rolls), Pitch Drop lowers each one (tape-stop style), Reverse, Gate. Triggers: hold the pad (or automate Repeat Trigger), a MIDI note (that note doesn't play), Chance per beat (decided on the beat line), or each DNA Sequencer step. Duration sets how long a Chance / DNA repeat lasts. Short fades at every edge.
+  - **Beat Repeat**: records the 1/4-1/32 starting at the trigger (you hear it live the first time), then repeats it (tempo synced). Shrink shortens each repeat (rolls), Pitch Drop lowers each one (tape-stop style), Reverse, Gate. Triggers: hold the pad (or automate Repeat Trigger), a MIDI note (that note doesn't play), Chance per beat (decided on the beat line), or each DNA Sequencer step. Duration sets how long a Chance / DNA repeat lasts. Short fades at every edge.
   - **Flanger / Phaser**: flanger 0.3-10 ms with through-zero and +/- feedback; phaser 4 / 8 / 12 stages; free or synced rate, stereo spread, and an envelope mode where the sweep follows the input level.
   - **Volume Shaper**: a drawn volume curve over 1/4, 1/2 or 1 bar, locked to the DAW's beat position, or restarted by each note or each DNA step, with presets (Pump, Gate, 1/8 Pump, Triplet), Depth and Smooth.
 - **Rack**: every effect is a slot with On and Mix (Return for the send effects); drag rows to change the order. Tape Delay, Juno Chorus and the Reverbs are send effects: next to each other they all hear the same signal, exactly as before; with another effect between them each one hears what comes before it. Moving a slot dips the output for a few milliseconds instead of clicking. The order and the shaper curve are saved with patches and projects, and moves can be undone.
@@ -125,11 +125,26 @@ The first tab shows the whole synth at a glance: the **signal flow** (each note'
 
 ## Factory presets
 
-The patch menu now starts with 18 built-in presets (Init Genome, Reese Mutation, Sub Helix, Neuro Splice, Folded Acid,
-Ring Mutant Bell, Frequency Shift Pad, Spectral Freeze Choir, Granular Cloud, Marimba Cell, Membrane Drum, Chaos Engine,
-Breeding Pad, Sequenced DNA, Feedback Organism, Jungle Stab, Mutant Lead, FM Helix Bass), followed by your saved patches.
-The arrows step through both. Each preset is an ordinary patch - routes, macros (named), scenes and DNA steps included -
-so it can be edited, saved, mutated or bred. Loading one can be undone.
+The patch menu (and *Browse*) starts with 28 built-in presets, followed by your saved patches. The arrows step through both.
+Each preset is an ordinary patch - routes, macros (named), scenes, DNA steps and the effects rack included - so it can be
+edited, saved, mutated or bred. Loading one can be undone.
+
+- **Original 18**: Init Genome, Reese Mutation, Sub Helix, Neuro Splice, Folded Acid, Ring Mutant Bell, Frequency Shift Pad,
+  Spectral Freeze Choir, Granular Cloud, Marimba Cell, Membrane Drum, Chaos Engine, Breeding Pad, Sequenced DNA,
+  Feedback Organism, Jungle Stab, Mutant Lead, FM Helix Bass.
+- **Jungle / DnB bank** (built around Filter 2, the DNA Sequencer update and the effects rack):
+  - *Amen Reese*: a ladder, then a slow notch sweep on Filter 2.
+  - *Neuro Rollers*: two DNA lanes (16 and 12 steps) with ratchets and an AAAB chain, moving parallel filters.
+  - *Hoover 93*: a pitch scoop into each note and a flanger.
+  - *Ragga Siren Stab*: an S950, then Beat Repeat. Hold E0 to stutter.
+  - *Sub Pressure*: a clean sine sub.
+  - *Liquid Pad*: a stereo split between the two filters, a phaser and a quarter-note pump.
+  - *Dread Wobble*: a DNA-synced wobble with a triplet pump.
+  - *Pirate Radio Lead*: SP-1200 crunch.
+  - *Stutter Pluck*: random Beat Repeats.
+  - *Jungle Atmos*: a reverb wash resampled by the E-mu, which is moved to the end of the rack.
+
+  The sequenced and repeating presets follow your DAW's tempo, so set it to 160-175 BPM.
 
 ## Quality (header)
 

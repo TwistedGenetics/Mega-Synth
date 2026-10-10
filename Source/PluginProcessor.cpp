@@ -1174,6 +1174,10 @@ bool MegaSynthProcessor::loadFactoryPreset (int index)
     for (int k = 0; k < 4; ++k)
         if (b.scenes[k]) scenes.store (k, b.scene[(size_t) k].data());
     dnaSteps.fromString (b.dnaString());
+    for (auto& d : b.dnaSteps2) dnaSteps.set (d.pat, d.lane, d.i, d.s);
+    if (b.dnaChain.isNotEmpty()) dnaSteps.setChain (b.dnaChain);
+    if (b.rackSet) fxRack.setOrder (b.rack);
+    if (b.shaperCurve != 0) fxRack.setCurvePreset (b.shaperCurve);
     for (int k = 0; k < 8; ++k) setMacroName (k, b.macroNames[k]);
 
     for (int i = 0; i < tg::P_COUNT; ++i)

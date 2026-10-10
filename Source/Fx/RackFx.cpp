@@ -145,7 +145,7 @@ void VintageSampler::process (float* L, float* R, int n, const float* v, const F
 }
 
 //==============================================================================
-// Beat Repeat: keeps the last 4 seconds; a trigger plays the last 1/4 .. 1/32 over and over.
+// Beat Repeat: a trigger records the next 1/4 .. 1/32 (passing it through) and then plays it over and over.
 void BeatRepeat::prepare (double s)
 {
     sr = s;
@@ -161,7 +161,7 @@ void BeatRepeat::reset()
 void BeatRepeat::start (double len, double duration)
 {
     segLen = curLen = std::max (16.0, std::min (len, (double) buf[0].size() - 8.0));
-    capStart = (double) w - segLen;
+    capStart = (double) w;   // captures from the trigger onwards: the first pass is the live input, then it loops
     pos = 0.0; rate = 1.0; repeatNo = 1;
     remaining = duration;
     active = true;
@@ -213,7 +213,7 @@ void BeatRepeat::process (float* L, float* R, int n, const float* v, const FxCon
         const double gateEnd = gate * curLen;
         const double fade = std::min (64.0, curLen * 0.1);
         float e = (float) std::min ({ 1.0, pos / fade, std::max (0.0, (gateEnd - pos) / fade) });
-        const double rp = reverse ? curLen - 1.0 - pos : pos;
+        const double rp = (reverse && repeatNo > 1) ? curLen - 1.0 - pos : pos;   // the live first pass always plays forwards
         for (int c = 0; c < 2; ++c)
         {
             const float r = readBuf (c, capStart + rp) * e;

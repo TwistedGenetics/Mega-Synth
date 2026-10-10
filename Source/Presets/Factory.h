@@ -1,5 +1,5 @@
 #pragma once
-// Factory presets: the 18 demo patches that ship inside the plugin.
+// Factory presets: the 28 demo patches that ship inside the plugin.
 //
 // Each preset is written as code against the parameter table (so it can never refer to a
 // control that doesn't exist) and is built on top of a clean starting point: every parameter
@@ -29,6 +29,14 @@ struct PresetBuilder
     bool scenes[4] { false, false, false, false };
     std::array<std::array<float, P_COUNT>, 4> scene {};
     juce::String macroNames[8];
+    // DNA Sequencer v2 steps (any pattern / lane, with probability, ratchet and glide), the chain,
+    // and the effects rack order and Volume Shaper curve. Older presets don't use these.
+    struct DnaStepAt { int pat, lane, i; DnaStep s; };
+    std::vector<DnaStepAt> dnaSteps2;
+    juce::String dnaChain;
+    std::array<int, FS_COUNT> rack {};
+    bool rackSet = false;
+    int shaperCurve = 0;
 
     PresetBuilder()
     {
@@ -70,6 +78,43 @@ struct PresetBuilder
     {
         int i = 0;
         for (auto& s : steps) { dnaType[(size_t) i] = s.first; dnaAmt[(size_t) i] = s.second; ++i; }
+        return *this;
+    }
+
+    // One DNA step: pattern 0-3 (A-D), lane 0/1, step 0-31
+    PresetBuilder& dnaStep (int pat, int lane, int i, int type, float amount, float prob = 1.0f, int ratchet = 1, int glide = 0)
+    {
+        DnaStep st; st.type = type; st.amount = amount; st.prob = prob; st.ratchet = ratchet; st.glide = glide;
+        dnaSteps2.push_back ({ pat, lane, i, st });
+        return *this;
+    }
+    // A whole lane from a string, one character per step: '.' off, 'f' Fold, 'c' Crush, 'd' Decimate, 's' Shift,
+    // 'r' Ring, 'm' FM, 'p' Splice, 'o' Resonate (res), 'F' Filter, 'g' Grain, 'b' Blur, 'u' Mutate, 'O' Octave.
+    // Upper-case letters other than F and O aren't used; amounts come from the matching entry of amts (cycled).
+    PresetBuilder& dnaLane (int pat, int lane, const char* pattern, std::initializer_list<float> amts = { 0.8f })
+    {
+        std::vector<float> a (amts);
+        int k = 0;
+        for (int i = 0; pattern[i] != 0 && i < DnaSeqStore::kSteps; ++i)
+        {
+            int t = DT_Off;
+            switch (pattern[i])
+            {
+                case 'f': t = DT_Fold; break;      case 'c': t = DT_Crush; break;   case 'd': t = DT_Decimate; break;
+                case 's': t = DT_Shift; break;     case 'r': t = DT_Ring; break;    case 'm': t = DT_Fm; break;
+                case 'p': t = DT_Splice; break;    case 'o': t = DT_Resonate; break; case 'F': t = DT_Filter; break;
+                case 'g': t = DT_Grain; break;     case 'b': t = DT_Blur; break;    case 'u': t = DT_Mutate; break;
+                case 'O': t = DT_Octave; break;    default: break;
+            }
+            dnaStep (pat, lane, i, t, t == DT_Off ? 0.7f : a[(size_t) (k++ % (int) a.size())]);
+        }
+        return *this;
+    }
+    PresetBuilder& rackOrder (std::initializer_list<int> order)
+    {
+        int i = 0; for (int s : order) if (i < FS_COUNT) rack[(size_t) i++] = s;
+        rackSet = i == FS_COUNT;
+        jassert (rackSet);
         return *this;
     }
 
@@ -405,12 +450,210 @@ namespace factory_detail
         b.macro (0, "FM", { { P_complexFm, 0.4f } });
         b.macro (1, "Fold", { { P_complexShape, 0.3f } });
     }
+
+    //==============================================================================================
+    // Jungle / DnB bank: built around Filter 2, the DNA Sequencer update and the effects rack
+
+    // 19 -----------------------------------------------------------------------------------------
+    inline void amenReese (B& b)
+    {
+        monoBass (b, 0.03f);
+        b.set (P_osc1Wave, 0).set (P_osc1Gain, 0.62f).set (P_osc1Detune, -18)
+         .set (P_osc2Wave, 0).set (P_osc2Gain, 0.62f).set (P_osc2Detune, 18)
+         .set (P_subWave, 1).set (P_subGain, 0.5f).set (P_subOct, -1)
+         .set (P_filterMode, 2).set (P_filterCutoff, 750).set (P_filterRes, 2.5f).set (P_filterDrive, 4.0f)
+         .set (P_fEnvAmt, 900).set (P_fEnvD, 0.35f).set (P_fEnvS, 0.3f)
+         // Filter 2: a slowly sweeping notch after the ladder (serial) for the phasey reese movement
+         .set (P_filter2On, 1).set (P_filterRouting, 0).set (P_filter2Mode, 4).set (P_filter2Type, FT_NOTCH).set (P_filter2Slope, 1)
+         .set (P_filter2Cutoff, 520).set (P_filter2Res, 2.0f).set (P_filter2LfoAmt, 0.45f).set (P_filter2LfoSrc, 1)
+         .set (P_lfo2Wave, 0).set (P_lfo2Rate, 0.12f).set (P_lfo2Depth, 1.0f)
+         .set (P_wmMix, 0.25f).set (P_wmDrive, 0.4f).set (P_ciAmount, 0.15f).set (P_ciRate, 0.3f)
+         .set (P_fxOnMultiband, 1).set (P_fxMixMultiband, 0.6f).set (P_mbcDepth, 0.4f)
+         .set (P_fxOnStereo, 1).set (P_sttMono, 1).set (P_sttMonoFreq, 140).set (P_sttWidth, 1.3f);
+        b.macro (0, "Growl", { { P_wmMix, 0.5f }, { P_wmFold, 0.4f } });
+        b.macro (1, "Notch", { { P_filter2Cutoff, 0.35f } });
+        b.macro (2, "OTT", { { P_mbcDepth, 0.5f } });
+        b.macro (3, "Open", { { P_filterCutoff, 0.3f } });
+    }
+
+    // 20 -----------------------------------------------------------------------------------------
+    inline void neuroRollers (B& b)
+    {
+        monoBass (b);
+        b.set (P_osc1Wave, 0).set (P_osc1Gain, 0.65f)
+         .set (P_osc2Wave, 1).set (P_osc2Gain, 0.5f).set (P_osc2Oct, -1)
+         .set (P_subWave, 1).set (P_subGain, 0.4f)
+         .set (P_filterMode, 0).set (P_filterType, FT_BP).set (P_filterSlope, 1).set (P_filterCutoff, 900).set (P_filterRes, 5.0f).set (P_filterDrive, 3.0f)
+         // Filter 2 in parallel: a low pass that the second DNA lane moves on its own 12-step loop
+         .set (P_filter2On, 1).set (P_filterRouting, 1).set (P_filter2Mode, 0).set (P_filter2Type, FT_LP).set (P_filter2Slope, 3)
+         .set (P_filter2Cutoff, 400).set (P_filter2Res, 3.0f).set (P_filterBalance, 0.5f)
+         .set (P_wmMix, 0.4f).set (P_wmFold, 0.35f)
+         .set (P_dsOn, 1).set (P_dsSteps, 16).set (P_dsRate, 2).set (P_dsSwing, 0.12f).set (P_dsGlide, 0.15f).set (P_dsDepth, 0.9f)
+         .set (P_dsLane2On, 1).set (P_dsLane2Steps, 12).set (P_dsChainOn, 1)
+         .set (P_fxOnMultiband, 1).set (P_mbcDepth, 0.55f)
+         .set (P_fxOnStereo, 1).set (P_sttMono, 1);
+        b.dnaLane (0, 0, "F.f.F.cFf.F.p.Fr", { 0.8f, 0.6f, 0.9f, 0.5f });
+        b.dnaLane (0, 1, "f..s..f..m..", { 0.6f, 0.4f });
+        b.dnaLane (1, 0, "FFf.c.FFrFf.ppFF", { 0.9f, 0.5f, 0.7f });
+        b.dnaLane (1, 1, "s.f.s.f.mmf.", { 0.5f, 0.7f });
+        b.dnaStep (0, 0, 14, DT_Filter, 0.9f, 1.0f, 3);   // a ratchet into the bar line
+        b.dnaStep (0, 0, 10, DT_Filter, 0.8f, 0.6f);      // sometimes
+        b.dnaStep (1, 0, 15, DT_Filter, 1.0f, 1.0f, 4);
+        b.dnaChain = "AAAB";
+        b.route (MS_DnaSeq, P_filterCutoff, 0.3f);
+        b.route (MS_DnaSeq2, P_filter2Cutoff, 0.35f);
+        b.route (MS_DnaGate, P_wmFold, 0.2f);
+        b.macro (0, "Growl", { { P_wmFold, 0.45f }, { P_wmMix, 0.3f } });
+        b.macro (1, "Balance", { { P_filterBalance, 0.5f } });
+        b.macro (2, "OTT", { { P_mbcDepth, 0.45f } });
+    }
+
+    // 21 -----------------------------------------------------------------------------------------
+    inline void hoover93 (B& b)
+    {
+        b.set (P_polyphony, 1).set (P_porta, 0.07f)
+         .set (P_supersawGain, 0.7f).set (P_supersawVoices, 9).set (P_supersawSpread, 35)
+         .set (P_osc1Wave, 4).set (P_osc1Gain, 0.5f).set (P_osc1Oct, -1)
+         .set (P_ampA, 0.01f).set (P_ampD, 0.3f).set (P_ampS, 0.9f).set (P_ampR, 0.25f)
+         .set (P_filterMode, 0).set (P_filterCutoff, 3800).set (P_filterRes, 1.5f).set (P_filterDrive, 2.0f)
+         .set (P_mEnv1A, 0.001f).set (P_mEnv1D, 0.25f).set (P_mEnv1S, 0.0f)
+         .set (P_fxOnFlanger, 1).set (P_fxMixFlanger, 0.55f).set (P_flpMode, 0).set (P_flpRate, 0.15f)
+         .set (P_flpDepth, 0.8f).set (P_flpFeedback, 0.55f).set (P_flpSpread, 0.7f)
+         .set (P_reverbMix, 0.25f).set (P_delayMix, 0.2f).set (P_delaySync, 6).set (P_chorusMix, 0.0f);
+        b.route (MS_ModEnv1, P_supersawSemi, -0.15f);   // the scoop up into each note
+        b.route (MS_ModEnv1, P_osc1Semi, -0.15f);
+        b.route (MS_ModWheel, P_flpDepth, 0.2f);
+        b.macro (0, "Scoop", { { P_mEnv1D, 0.2f } });
+        b.macro (1, "Bright", { { P_filterCutoff, 0.25f } });
+    }
+
+    // 22 -----------------------------------------------------------------------------------------
+    inline void raggaSirenStab (B& b)
+    {
+        b.set (P_osc1Wave, 0).set (P_osc1Gain, 0.5f).set (P_osc2Wave, 1).set (P_osc2Gain, 0.38f).set (P_osc2Semi, 3)
+         .set (P_osc3Wave, 0).set (P_osc3Gain, 0.38f).set (P_osc3Semi, 10)
+         .set (P_ampA, 0.001f).set (P_ampD, 0.4f).set (P_ampS, 0.0f).set (P_ampR, 0.3f)
+         .set (P_filterMode, 9).set (P_filterCutoff, 1800).set (P_filterRes, 3.0f)
+         .set (P_fEnvAmt, 3500).set (P_fEnvA, 0.001f).set (P_fEnvD, 0.18f).set (P_fEnvS, 0.0f)
+         // S950 crunch first, then Beat Repeat (hold E0 to stutter the stab)
+         .set (P_fxOnSampler, 1).set (P_smpModel, 1).set (P_smpBits, 12).set (P_smpRate, 22050).set (P_smpDrive, 0.35f).set (P_smpNoise, 0.15f)
+         .set (P_fxOnStutter, 1).set (P_rptMidi, 3).set (P_rptLength, 2).set (P_rptShrink, 0.35f).set (P_rptPitch, 3).set (P_rptDuration, 1)
+         .set (P_delayMix, 0.3f).set (P_delaySync, 6).set (P_reverbMix, 0.25f).set (P_chorusMix, 0.15f);
+        b.rackOrder ({ FS_Sampler, FS_Stutter, FS_Flanger, FS_Delay, FS_Chorus, FS_Reverb, FS_Shaper, FS_Multiband, FS_Stereo });
+        b.route (MS_Velocity, P_filterCutoff, 0.12f);
+        b.macro (0, "Crunch", { { P_smpDrive, 0.5f }, { P_smpNoise, 0.2f } });
+        b.macro (1, "Snap", { { P_fEnvAmt, 0.2f } });
+    }
+
+    // 23 -----------------------------------------------------------------------------------------
+    inline void subPressure (B& b)
+    {
+        monoBass (b);
+        b.set (P_osc1Wave, 3).set (P_osc1Gain, 0.85f).set (P_osc1Oct, -1)
+         .set (P_osc2Wave, 2).set (P_osc2Gain, 0.22f)
+         .set (P_filterMode, 0).set (P_filterSlope, 0).set (P_filterCutoff, 600).set (P_filterRes, 0.7f).set (P_filterKeyTrack, 0.8f)
+         .set (P_fEnvAmt, 400).set (P_fEnvD, 0.15f).set (P_fEnvS, 0.0f)
+         .set (P_fxOnMultiband, 1).set (P_mbcDepth, 0.3f)
+         .set (P_fxOnStereo, 1).set (P_sttMono, 1).set (P_sttMonoFreq, 150).set (P_warmth, 0.5f);
+        b.route (MS_Velocity, P_filterCutoff, 0.1f);
+        b.macro (0, "Drive", { { P_wmMix, 0.4f }, { P_wmDrive, 0.5f } });
+        b.macro (1, "Harmonics", { { P_filterCutoff, 0.3f } });
+    }
+
+    // 24 -----------------------------------------------------------------------------------------
+    inline void liquidPad (B& b)
+    {
+        b.set (P_supersawGain, 0.45f).set (P_supersawVoices, 7).set (P_supersawSpread, 25)
+         .set (P_osc1Wave, 2).set (P_osc1Gain, 0.22f).set (P_osc1Oct, 1)
+         .set (P_ampA, 0.6f).set (P_ampD, 1.0f).set (P_ampS, 0.8f).set (P_ampR, 1.8f)
+         .set (P_filterMode, 0).set (P_filterSlope, 2).set (P_filterCutoff, 2400).set (P_filterRes, 1.2f)
+         .set (P_filterLfoAmt, 0.2f).set (P_filterLfoSrc, 1).set (P_lfo2Rate, 0.11f).set (P_lfo2Depth, 1.0f)
+         // Filter 1 on the left, a drifting band pass on the right
+         .set (P_filter2On, 1).set (P_filterRouting, 1).set (P_filterStereoSplit, 1)
+         .set (P_filter2Type, FT_BP).set (P_filter2Slope, 1).set (P_filter2Cutoff, 1200).set (P_filter2Res, 2.5f)
+         .set (P_filter2LfoAmt, 0.35f).set (P_filter2LfoSrc, 2).set (P_lfo3Rate, 0.08f).set (P_lfo3Depth, 1.0f)
+         .set (P_fxOnFlanger, 1).set (P_flpMode, 1).set (P_flpStages, 1).set (P_flpRate, 0.1f).set (P_flpDepth, 0.6f)
+         .set (P_flpFeedback, 0.4f).set (P_fxMixFlanger, 0.5f)
+         .set (P_fxOnShaper, 1).set (P_vshRate, 0).set (P_vshDepth, 0.45f).set (P_vshSmooth, 0.5f)
+         .set (P_reverbMix, 0.45f).set (P_reverbSize, 3.5f).set (P_chorusMix, 0.35f).set (P_delayMix, 0.15f);
+        b.macro (0, "Pump", { { P_vshDepth, 0.5f } });
+        b.macro (1, "Bright", { { P_filterCutoff, 0.3f }, { P_filter2Cutoff, 0.3f } });
+    }
+
+    // 25 -----------------------------------------------------------------------------------------
+    inline void dreadWobble (B& b)
+    {
+        monoBass (b, 0.02f);
+        b.set (P_osc1Wave, 0).set (P_osc1Gain, 0.6f)
+         .set (P_osc2Wave, 1).set (P_osc2Gain, 0.5f).set (P_osc2Oct, -1)
+         .set (P_subWave, 1).set (P_subGain, 0.45f)
+         .set (P_filterMode, 0).set (P_filterSlope, 3).set (P_filterCutoff, 220).set (P_filterRes, 5.5f).set (P_filterDrive, 3.0f)
+         // the DNA Sequencer as a tempo-synced wobble: its value moves the cutoff, a little fold rides along
+         .set (P_dsOn, 1).set (P_dsRate, 3).set (P_dsSteps, 6).set (P_dsGlide, 0.6f).set (P_dsDepth, 0.2f)
+         .set (P_fxOnShaper, 1).set (P_vshDepth, 0.35f).set (P_vshSmooth, 0.4f)
+         .set (P_fxOnMultiband, 1).set (P_mbcDepth, 0.35f)
+         .set (P_fxOnStereo, 1).set (P_sttMono, 1);
+        b.dnaLane (0, 0, "ffffff", { 0.2f, 1.0f, 0.5f, 1.0f, 0.3f, 0.8f });
+        b.dnaLane (1, 0, "ffffff", { 1.0f, 0.2f, 1.0f, 0.2f, 0.6f, 0.6f });
+        b.shaperCurve = 3;   // triplet pump
+        b.route (MS_DnaSeq, P_filterCutoff, 0.4f);
+        b.macro (0, "Wobble", { { P_dsDepth, 0.4f } });
+        b.macro (1, "Res", { { P_filterRes, 0.3f } });
+    }
+
+    // 26 -----------------------------------------------------------------------------------------
+    inline void pirateRadioLead (B& b)
+    {
+        b.set (P_polyphony, 1).set (P_porta, 0.04f)
+         .set (P_osc1Wave, 1).set (P_osc1Gain, 0.55f).set (P_osc2Wave, 0).set (P_osc2Gain, 0.4f).set (P_osc2Detune, 8)
+         .set (P_ampA, 0.004f).set (P_ampS, 0.85f).set (P_ampR, 0.2f)
+         .set (P_filterMode, 11).set (P_filterCutoff, 2600).set (P_filterRes, 2.0f)
+         .set (P_fxOnSampler, 1).set (P_smpModel, 0).set (P_smpDrive, 0.3f)
+         .set (P_fxOnFlanger, 1).set (P_flpMode, 1).set (P_flpStages, 0).set (P_flpRate, 0.3f).set (P_fxMixFlanger, 0.4f)
+         .set (P_delayMix, 0.3f).set (P_delaySync, 6).set (P_reverbMix, 0.2f).set (P_chorusMix, 0.0f);
+        b.route (MS_ModWheel, P_flpDepth, 0.3f);
+        b.macro (0, "Grit", { { P_smpDrive, 0.5f }, { P_wmMix, 0.3f } });
+        b.macro (1, "Bright", { { P_filterCutoff, 0.25f } });
+    }
+
+    // 27 -----------------------------------------------------------------------------------------
+    inline void stutterPluck (B& b)
+    {
+        b.set (P_osc1Wave, 0).set (P_osc1Gain, 0.5f).set (P_osc2Wave, 4).set (P_osc2Gain, 0.35f).set (P_osc2Oct, 1)
+         .set (P_ampA, 0.001f).set (P_ampD, 0.25f).set (P_ampS, 0.0f).set (P_ampR, 0.2f)
+         .set (P_filterMode, 0).set (P_filterCutoff, 1200).set (P_filterRes, 3.0f)
+         .set (P_fEnvAmt, 5000).set (P_fEnvA, 0.001f).set (P_fEnvD, 0.12f).set (P_fEnvS, 0.0f)
+         .set (P_fxOnStutter, 1).set (P_rptChance, 0.35f).set (P_rptLength, 2).set (P_rptDuration, 1)
+         .set (P_rptShrink, 0.5f).set (P_rptPitch, 5).set (P_rptGate, 0.7f)
+         .set (P_fxOnFlanger, 1).set (P_flpTZ, 1).set (P_flpRate, 0.25f).set (P_fxMixFlanger, 0.35f)
+         .set (P_delayMix, 0.35f).set (P_delaySync, 7).set (P_reverbMix, 0.3f);
+        b.macro (0, "Chaos", { { P_rptChance, 0.5f } });
+        b.macro (1, "Snap", { { P_fEnvAmt, 0.2f } });
+    }
+
+    // 28 -----------------------------------------------------------------------------------------
+    inline void jungleAtmos (B& b)
+    {
+        b.set (P_osc1Wave, 2).set (P_osc1Gain, 0.4f).set (P_osc3Wave, 3).set (P_osc3Gain, 0.3f).set (P_osc3Oct, 1)
+         .set (P_supersawGain, 0.25f)
+         .set (P_ampA, 1.2f).set (P_ampD, 1.0f).set (P_ampS, 0.9f).set (P_ampR, 2.5f)
+         .set (P_filterCutoff, 3000).set (P_filterRes, 1.0f)
+         .set (P_grMix, 0.35f).set (P_grSize, 150).set (P_grDensity, 20)
+         .set (P_fxOnSampler, 1).set (P_smpModel, 2).set (P_smpDrive, 0.1f).set (P_smpNoise, 0.2f).set (P_fxMixSampler, 0.7f)
+         .set (P_reverbMix, 0.55f).set (P_reverbSize, 4.0f).set (P_chorusMix, 0.4f).set (P_delayMix, 0.2f)
+         .set (P_fxOnStereo, 1).set (P_sttMono, 1).set (P_sttWidth, 1.5f).set (P_sttHaas, 8);
+        // the E-mu samples the whole reverb wash, like resampling a pad from a hardware sampler
+        b.rackOrder ({ FS_Stutter, FS_Flanger, FS_Delay, FS_Chorus, FS_Reverb, FS_Sampler, FS_Shaper, FS_Multiband, FS_Stereo });
+        b.route (MS_ModWheel, P_grMix, 0.4f);
+        b.macro (0, "Grain", { { P_grMix, 0.5f } });
+        b.macro (1, "Space", { { P_reverbMix, 0.4f } });
+    }
 }
 
-inline const std::array<FactoryPreset, 18>& factoryPresets()
+inline const std::array<FactoryPreset, 28>& factoryPresets()
 {
     using namespace factory_detail;
-    static const std::array<FactoryPreset, 18> list { {
+    static const std::array<FactoryPreset, 28> list { {
         { "Init Genome",           "Init",   "Two saws and a sub, with the eight macros wired to the main mutation engines.", initGenome },
         { "Reese Mutation",        "Bass",   "Detuned reese with slow wave-fold and filter drift plus Cell Instability.", reeseMutation },
         { "Sub Helix",             "Bass",   "Sine sub with an audio-rate FM blip at the front of each note.", subHelix },
@@ -429,6 +672,16 @@ inline const std::array<FactoryPreset, 18>& factoryPresets()
         { "Jungle Stab",           "Keys",   "Minor chord stab with MS-20 filter snap, dotted delay and a touch of plate.", jungleStab },
         { "Mutant Lead",           "Lead",   "Mono supersaw lead with a fixed mutation seed; mod wheel adds FM, aftertouch folds.", mutantLead },
         { "FM Helix Bass",         "Bass",   "Complex-oscillator FM bass with an envelope on the index.", fmHelixBass },
+        { "Amen Reese",            "Jungle / DnB", "Bass: detuned reese through a ladder, then a slow notch sweep (Filter 2 serial), OTT and bass mono.", amenReese },
+        { "Neuro Rollers",         "Jungle / DnB", "Bass: two DNA lanes (16 and 12 steps) with ratchets, swing and an AAAB chain move parallel band and low pass filters.", neuroRollers },
+        { "Hoover 93",             "Jungle / DnB", "Lead: 9-voice hoover with a pitch scoop into each note and a slow flanger; mod wheel deepens it.", hoover93 },
+        { "Ragga Siren Stab",      "Jungle / DnB", "Stab: minor 7 stab through an S950, then Beat Repeat (hold E0 to stutter).", raggaSirenStab },
+        { "Sub Pressure",          "Jungle / DnB", "Bass: clean sine sub, 6 dB filter with key tracking, gentle OTT, mono below 150 Hz.", subPressure },
+        { "Liquid Pad",            "Jungle / DnB", "Pad: supersaw with Filter 1 left and a drifting band pass right, phaser and a quarter-note pump.", liquidPad },
+        { "Dread Wobble",          "Jungle / DnB", "Bass: tempo-synced wobble from the DNA Sequencer (1/8 triplets) plus a triplet volume pump.", dreadWobble },
+        { "Pirate Radio Lead",     "Jungle / DnB", "Lead: square lead crunched by the SP-1200 with a 4-stage phaser; mod wheel adds depth.", pirateRadioLead },
+        { "Stutter Pluck",         "Jungle / DnB", "Pluck: random Beat Repeats (35% chance per beat), through-zero flanger and triplet delay.", stutterPluck },
+        { "Jungle Atmos",          "Jungle / DnB", "Pad: soft grains and a big reverb, then resampled by the E-mu at the end of the rack.", jungleAtmos },
     } };
     return list;
 }

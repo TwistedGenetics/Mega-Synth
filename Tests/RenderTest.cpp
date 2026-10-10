@@ -519,6 +519,23 @@ int main()
         return 0;
     }
 
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PDIAG", {}).isNotEmpty())
+    {
+        const int idx = juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PDIAG", {}).getIntValue();
+        for (int variant = 0; variant < 6; ++variant)
+        {
+            auto p = make(); p->loadFactoryPreset (idx);
+            if (variant == 1) setP (*p, P_filterCutoff, 20000);
+            if (variant == 2) setP (*p, P_fxOnFlanger, 0);
+            if (variant == 3) setP (*p, P_supersawGain, 0);
+            if (variant == 4) setP (*p, P_osc1Gain, 0);
+            if (variant == 5) setP (*p, P_filterMode, 0);
+            auto st = render (*p, 2.0, chord (0.05, 1.8, { 48, 55, 60 }));
+            std::cout << "variant " << variant << " peak " << st.peak << " rms " << st.rms << std::endl;
+        }
+        return 0;
+    }
+
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BROWSERSHOT", {}).isNotEmpty())
     {
         auto p = make();
@@ -1055,7 +1072,29 @@ int main()
             CHECK (s40 < -20.0 && std::abs (s2k) < 0.5, "bass mono below 150 Hz only");
         }
 
-        // in the synth, with a simulated DAW transport: Beat Repeat starts on the beat and repeats the last 1/8
+        // Beat Repeat on its own: it records from the trigger (the first pass is the live input), then loops that slice
+        {
+            BeatRepeat br; br.prepare (sr);
+            std::array<float, P_COUNT> v {}; for (int i = 0; i < P_COUNT; ++i) v[(size_t) i] = meta (i).def;
+            v[P_rptLength] = 2; v[P_rptGate] = 1; v[P_rptShrink] = 0; v[P_rptPitch] = 0;   // 1/16 at 120 BPM = 6000 samples
+            FxContext ctx; ctx.sr = sr; ctx.tempo = 120.0;
+            const int seg = 6000, n = 64;
+            std::vector<float> in, out;
+            for (int b = 0; b < 400; ++b)
+            {
+                float L[64], R[64];
+                for (int i = 0; i < n; ++i) { const int t = b * n + i; L[i] = R[i] = std::sin (0.0123f * t) * (0.2f + 0.8f * (float) ((t / 997) % 7) / 7.0f); in.push_back (L[i]); }
+                br.process (L, R, n, v.data(), ctx, b >= 100);
+                for (int i = 0; i < n; ++i) out.push_back (L[i]);
+            }
+            const int t0 = 100 * n;
+            double e1 = 0, e2 = 0;
+            for (int i = 200; i < seg - 200; ++i) e1 = std::max (e1, (double) std::abs (out[(size_t) (t0 + i)] - in[(size_t) (t0 + i)]));
+            for (int i = 200; i < seg - 200; ++i) e2 = std::max (e2, (double) std::abs (out[(size_t) (t0 + seg + i)] - in[(size_t) (t0 + i)]));
+            CHECK (e1 < 1e-3 && e2 < 1e-3, "Beat Repeat: first pass is live, then the slice from the trigger repeats (" + juce::String (e1) + ", " + juce::String (e2) + ")");
+        }
+
+        // in the synth, with a simulated DAW transport: Beat Repeat starts on the beat and repeats the 1/8 after it
         {
             struct FakeHead : juce::AudioPlayHead
             {
@@ -1090,7 +1129,7 @@ int main()
                 double num = 0, d1 = 0, d2 = 0;
                 for (int i = st; i < st + seg / 2; ++i) { num += out[(size_t) i] * out[(size_t) (i - seg)]; d1 += out[(size_t) i] * out[(size_t) i]; d2 += out[(size_t) (i - seg)] * out[(size_t) (i - seg)]; }
                 const double corr = num / std::sqrt (d1 * d2 + 1e-30);
-                CHECK (corr > 0.98, "beat repeat repeats the last 1/8 (correlation " + juce::String (corr, 3) + ")");
+                CHECK (corr > 0.98, "beat repeat repeats the 1/8 (correlation " + juce::String (corr, 3) + ")");
             }
         }
 
@@ -2642,7 +2681,7 @@ int main()
     {
         std::cout << "Stage 17: factory presets" << std::endl;
         const auto& list = factoryPresets();
-        CHECK (list.size() == 18, "18 factory presets");
+        CHECK (list.size() == 28, "28 factory presets");
         std::set<juce::String> names;
         for (auto& fp : list) names.insert (fp.name);
         CHECK (names.size() == list.size(), "factory preset names are unique");
@@ -2700,6 +2739,8 @@ int main()
             for (int k = 0; k < P_COUNT; ++k) same &= std::abs (q->param (k)->getValue() - p->param (k)->getValue()) < 1e-6f;
             for (int r = 0; r < kNumRoutes; ++r) same &= q->routes.get (r).src == p->routes.get (r).src && q->routes.get (r).dst == p->routes.get (r).dst;
             same &= q->dnaSteps.toString() == p->dnaSteps.toString();
+            same &= q->dnaSteps.toJson() == p->dnaSteps.toJson();
+            same &= q->fxRack.getOrder() == p->fxRack.getOrder();
             for (int k = 0; k < 4; ++k) same &= q->scenes.stored[k].load() == p->scenes.stored[k].load();
             CHECK (same, juce::String (list[(size_t) i].name) + ": state round trip");
         }
@@ -2718,6 +2759,27 @@ int main()
             CHECK (steps >= 10, "Sequenced DNA has a step pattern");
             CHECK (p->param (P_dsOn)->getValue() > 0.5f, "Sequenced DNA runs the DNA Sequencer");
             CHECK (p->getMacroName (0) == "Sequence Depth", "preset macro names");
+            // the Jungle / DnB bank uses the newer features for real
+            auto byName = [&] (const char* n) { for (int i = 0; i < (int) list.size(); ++i) if (juce::String (list[(size_t) i].name) == n) return i; return -1; };
+            p->loadFactoryPreset (byName ("Amen Reese"));
+            CHECK (p->param (P_filter2On)->getValue() > 0.5f && juce::roundToInt (p->param (P_filter2Type)->convertFrom0to1 (p->param (P_filter2Type)->getValue())) == FT_NOTCH, "Amen Reese: notch on Filter 2");
+            p->loadFactoryPreset (byName ("Neuro Rollers"));
+            CHECK (p->dnaSteps.getChain() == "AAAB" && p->param (P_dsLane2On)->getValue() > 0.5f, "Neuro Rollers: chain and lane 2");
+            CHECK (p->dnaSteps.get (0, 0, 14).ratchet == 3 && p->dnaSteps.get (0, 0, 10).prob < 0.7f && p->dnaSteps.get (1, 1, 0).type == DT_Shift, "Neuro Rollers: ratchet, probability, pattern B lane 2");
+            CHECK (! p->dnaSteps.legacyOnly(), "Neuro Rollers is a v2 DNA pattern");
+            p->loadFactoryPreset (byName ("Ragga Siren Stab"));
+            CHECK (p->fxRack.getOrder()[0] == FS_Sampler && p->fxRack.getOrder()[1] == FS_Stutter, "Ragga Siren Stab: rack order");
+            {
+                // holding E0 (MIDI 28) repeats
+                std::vector<std::pair<double, juce::MidiMessage>> ev { { 0.0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
+                                                                       { 0.1, juce::MidiMessage::noteOn (1, 28, (juce::uint8) 100) } };
+                render (*p, 0.4, ev);
+                CHECK (p->getEngine().fx().stutter.activity.load() > 0, "Ragga Siren Stab: E0 triggers Beat Repeat");
+            }
+            p->loadFactoryPreset (byName ("Dread Wobble"));
+            CHECK (p->fxRack.curve (0) < 0.05f && p->fxRack.curve (22) < 0.25f && p->fxRack.curve (10) > 0.9f, "Dread Wobble: triplet pump curve");
+            p->loadFactoryPreset (byName ("Init Genome"));
+            { FxRackStore ref; CHECK (p->fxRack.getOrder() == ref.getOrder() && std::abs (p->fxRack.curve (10) - ref.curve (10)) < 1e-6f, "older presets get the default rack"); }
             p->loadFactoryPreset (0);
             CHECK (p->getMacroName (0) == "Mutate" && p->getMacroName (7) == "Space", "Init Genome macro names");
         }

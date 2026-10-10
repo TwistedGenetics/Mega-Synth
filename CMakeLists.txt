@@ -44,7 +44,8 @@ set(MEGASYNTH_SOURCES
     Source/UI/FxPages.cpp
     Source/UI/PatchBrowser.cpp
     Source/Filter/Filter.cpp
-    Source/Fx/RackFx.cpp)
+    Source/Fx/RackFx.cpp
+    Source/Fx/FxBus.cpp)
 
 set(MEGASYNTH_DEFINES
     JUCE_WEB_BROWSER=0

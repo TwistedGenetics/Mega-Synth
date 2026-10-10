@@ -1,6 +1,6 @@
 // Deterministic "golden" renders used to prove a change leaves the sound untouched.
-// Convolution reverbs are off (their impulse loads on a background thread) and the
-// sequence is fixed, so two builds can be compared sample for sample.
+// Convolution reverbs are off except in the "Wet" renders (which wait for the impulse to load),
+// and the sequence is fixed, so two builds can be compared sample for sample.
 if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_GOLDEN", {}).isNotEmpty())
 {
     auto golden = [&] (const juce::String& name, std::function<void (MegaSynthProcessor&)> setup,
@@ -16,6 +16,28 @@ if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_GOLDEN", {}).isNotEmpt
         writeWav (cap, sr, "golden_" + name + ".wav");
     };
     golden ("default", [] (MegaSynthProcessor&) {}, chord (0.05, 1.2, { 48, 52, 55, 60 }), 2.0);
+    // The convolution reverbs load their impulse on a background thread, so these renders first run
+    // silence (with the wall clock moving) until it's in place and any crossfade has finished.
+    auto goldenWet = [&] (const juce::String& name, std::function<void (MegaSynthProcessor&)> setup,
+                          std::vector<std::pair<double, juce::MidiMessage>> ev, double secs)
+    {
+        auto p = make();
+        setup (*p);
+        setP (*p, P_filterSlope, (float) nativeFilterSlope ((int) std::lround (p->param (P_filterMode)->convertFrom0to1 (p->param (P_filterMode)->getValue()))));
+        juce::AudioBuffer<float> blk (2, 512);
+        for (int b = 0; b < 300; ++b)
+        {
+            blk.clear(); juce::MidiBuffer none; p->processBlock (blk, none);
+            juce::Thread::sleep (3);
+        }
+        juce::AudioBuffer<float> cap;
+        render (*p, secs, ev, &cap);
+        writeWav (cap, sr, "golden_" + name + ".wav");
+    };
+    goldenWet ("reverb", [] (MegaSynthProcessor& p) { setP (p, P_reverbMix, 0.6f); setP (p, P_shimmerMix, 0.0f); setP (p, P_reverseMix, 0.0f); setP (p, P_reverbSize, 2.0f); },
+               chord (0.05, 0.6, { 48, 55, 63 }), 3.0);
+    goldenWet ("shimmer_reverse", [] (MegaSynthProcessor& p) { setP (p, P_reverbMix, 0.0f); setP (p, P_shimmerMix, 0.5f); setP (p, P_reverseMix, 0.5f); },
+               chord (0.05, 0.6, { 52, 59, 64 }), 3.0);
     for (int mode = 0; mode < 17; ++mode)
         golden ("filter" + juce::String (mode), [mode] (MegaSynthProcessor& p) { setP (p, P_filterMode, (float) mode); setP (p, P_filterRes, 12.0f); },
                 chord (0.02, 0.6, { 36, 43 }), 0.9);

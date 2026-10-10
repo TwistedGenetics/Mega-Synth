@@ -296,6 +296,11 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
         else if (cc == 7) setParamFromAudio (P_masterVolume, v);   // volume -> master volume
         else if (cc == 120 || cc == 123) engine.allNotesOff();
     }
+    else if (m.isProgramChange())
+    {
+        const int prog = m.getProgramChangeNumber();
+        if (prog < (int) tg::factoryPresets().size()) pendingProgram.store (prog);   // loads on the message thread
+    }
     else if (m.isChannelPressure())
     {
         const float v = m.getChannelPressureValue() / 127.0f;
@@ -448,8 +453,12 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     {
         tg::DnaClock::Block b;
         b.on = dsOn; b.sync = juce::jlimit (0, 2, snap.i (P_dsSync)); b.rate = juce::jlimit (0, 8, snap.i (P_dsRate));
-        b.restart = juce::jlimit (0, 3, snap.i (P_dsRestart)); b.freeHz = snap.f (P_dsFreeHz);
-        b.offset = std::round (snap.f (P_dsOffset)); b.swing = snap.f (P_dsSwing); b.swingGrid = snap.i (P_dsSwingGrid);
+        // Swing, Start Offset and Free Rate can be Mod Matrix destinations (previous block's modulation)
+        b.restart = juce::jlimit (0, 3, snap.i (P_dsRestart));
+        b.freeHz = juce::jlimit (0.1, 20.0, (double) (snap.f (P_dsFreeHz) + engine.dnaClockModOffset (tg::Engine::DCM_FreeHz)));
+        b.offset = juce::jlimit (0.0, 31.0, (double) std::round (snap.f (P_dsOffset) + engine.dnaClockModOffset (tg::Engine::DCM_Offset)));
+        b.swing = juce::jlimit (0.0, 0.75, (double) (snap.f (P_dsSwing) + engine.dnaClockModOffset (tg::Engine::DCM_Swing)));
+        b.swingGrid = snap.i (P_dsSwingGrid);
         b.barSteps = juce::jlimit (1, 32, snap.i (P_dsSteps));
         b.hostPlaying = hostPlaying; b.ppq = ppq; b.bpm = bpm; b.barStartPpq = barStart; b.hasBar = hasBar; b.beatsPerBar = beatsPerBar;
         b.fallbackTempo = b.sync == tg::DS_Internal ? (double) snap.f (P_seqTempo) : (bpm > 0.0 ? bpm : (double) snap.f (P_seqTempo));
@@ -580,6 +589,10 @@ void MegaSynthProcessor::updateLatency()
 
 void MegaSynthProcessor::timerCallback()
 {
+    {
+        const int prog = pendingProgram.exchange (-1);
+        if (prog >= 0) loadFactoryPreset (prog);
+    }
     updateLatency();
     pollCapture();
     // history: record a snapshot shortly after an edit finishes (knob released, step changed)
@@ -709,6 +722,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("fxRack", juce::JSON::toString (fxRack.toVar(), true), nullptr);
     state.setProperty ("midiMap", midiMapToString(), nullptr);        // MIDI learn belongs to the project, not the patch
     state.setProperty ("uiWidth", uiWidth.load(), nullptr);
+    state.setProperty ("program", curProgram.load(), nullptr);
     state.setProperty ("scenes", juce::JSON::toString (scenes.toVar(), true), nullptr);
     state.setProperty ("sceneEdit", getEditScene(), nullptr);
     state.setProperty ("macroNames", macroNamesJoined(), nullptr);
@@ -746,6 +760,8 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     midiMapFromString (tree.getProperty ("midiMap").toString());
     if (tree.hasProperty ("uiWidth")) uiWidth.store ((int) tree.getProperty ("uiWidth"));
+    pendingProgram.store (-1);   // a program change still waiting must not replace the restored state
+    curProgram.store (juce::jlimit (0, (int) tg::factoryPresets().size() - 1, (int) tree.getProperty ("program", 0)));
 
     if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
@@ -1149,10 +1165,31 @@ void MegaSynthProcessor::setFilterDefaultsForOldPatch()
     setPlain (P_filterLfoSrc, 0.0f);
 }
 
+// VST3 turns programs into an automatable "Program" parameter; a host or validator that sets it along
+// with everything else would load a preset over the values it just set. So VST3 shows one program and
+// uses the patch browser (and MIDI Program Change); AU, standalone and the rest list the factory presets.
+int MegaSynthProcessor::getNumPrograms() { return wrapperType == wrapperType_VST3 ? 1 : (int) tg::factoryPresets().size(); }
+
+const juce::String MegaSynthProcessor::getProgramName (int i)
+{
+    const auto& list = tg::factoryPresets();
+    if (getNumPrograms() == 1) return i == 0 ? juce::String ("Mega Synth") : juce::String();
+    return i >= 0 && i < (int) list.size() ? juce::String (list[(size_t) i].name) : juce::String();
+}
+
+void MegaSynthProcessor::setCurrentProgram (int i)
+{
+    if (i < 0 || i >= getNumPrograms() || i == curProgram.load()) return;
+    curProgram.store (i);
+    if (juce::MessageManager::existsAndIsCurrentThread()) { pendingProgram.store (-1); loadFactoryPreset (i); }
+    else pendingProgram.store (i);   // picked up by the timer
+}
+
 bool MegaSynthProcessor::loadFactoryPreset (int index)
 {
     const auto& list = tg::factoryPresets();
     if (index < 0 || index >= (int) list.size()) return false;
+    curProgram.store (index);
     tg::PresetBuilder b;
     list[(size_t) index].build (b);
 

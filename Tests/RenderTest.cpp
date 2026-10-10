@@ -1,6 +1,7 @@
 // Offline test: renders the synth without a host and checks the output is sane.
 #include <JuceHeader.h>
 #include <set>
+#include <thread>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "ParamFormat.h"
@@ -515,23 +516,6 @@ int main()
             auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 640), true, 1.0f);
             auto f = dir.getChildFile ("fx_ui_" + juce::String (k) + ".png"); f.deleteFile();
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
-        }
-        return 0;
-    }
-
-    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PDIAG", {}).isNotEmpty())
-    {
-        const int idx = juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PDIAG", {}).getIntValue();
-        for (int variant = 0; variant < 6; ++variant)
-        {
-            auto p = make(); p->loadFactoryPreset (idx);
-            if (variant == 1) setP (*p, P_filterCutoff, 20000);
-            if (variant == 2) setP (*p, P_fxOnFlanger, 0);
-            if (variant == 3) setP (*p, P_supersawGain, 0);
-            if (variant == 4) setP (*p, P_osc1Gain, 0);
-            if (variant == 5) setP (*p, P_filterMode, 0);
-            auto st = render (*p, 2.0, chord (0.05, 1.8, { 48, 55, 60 }));
-            std::cout << "variant " << variant << " peak " << st.peak << " rms " << st.rms << std::endl;
         }
         return 0;
     }
@@ -1334,7 +1318,6 @@ int main()
             // window size memory
             auto p = make(); p->uiWidth = 1500;
             std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
-            std::cout << "  editor " << ed->getWidth() << "x" << ed->getHeight() << std::endl;
             CHECK (ed->getWidth() == 1500 && std::abs (ed->getHeight() - 1075) <= 1, "editor opens at the project's size");
             ed->setSize (900, 645);
             CHECK (p->uiWidth.load() == 900, "resizing is remembered");
@@ -1343,6 +1326,175 @@ int main()
             CHECK (e2->getWidth() == 1080, "new projects open at 90%");
         }
     };
+    // everything on at once: 16 voices, every oscillator and engine, both filters, every effect, Quality High
+    auto worst = [&] (int quality)
+    {
+        auto p = make();
+        setP (*p, P_polyphony, 16); setP (*p, P_quality, (float) quality);
+        for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain, P_complexGain, P_supersawGain }) setP (*p, i, 0.3f);
+        setP (*p, P_supersawVoices, 9);
+        for (int i : { P_wmMix, P_arRing, P_arFm, P_arShiftMix, P_dnaMix, P_resMix, P_grMix, P_ciAmount, P_mutAmount }) setP (*p, i, 0.5f);
+        setP (*p, P_spOn, 1); setP (*p, P_spMix, 0.5f); setP (*p, P_fbDlGr, 0.3f);
+        setP (*p, P_filter2On, 1); setP (*p, P_filterRouting, 1); setP (*p, P_filterType, (float) FT_BP); setP (*p, P_filterSlope, 3);
+        setP (*p, P_filter2Type, (float) FT_LP); setP (*p, P_filter2Slope, 3);
+        for (int k = 0; k < FS_COUNT; ++k) setP (*p, P_fxOnStutter + 2 * k, 1.0f);
+        setP (*p, P_reverbMix, 0.4f); setP (*p, P_shimmerMix, 0.3f); setP (*p, P_reverseMix, 0.3f);
+        setP (*p, P_rptChance, 0.5f); setP (*p, P_flpTZ, 1);
+        setP (*p, P_dsOn, 1); setP (*p, P_dsLane2On, 1); setP (*p, P_dsSwing, 0.2f);
+        p->dnaEdit (MegaSynthProcessor::DE_Generate, 0); p->dnaEdit (MegaSynthProcessor::DE_Generate, 1);
+        std::vector<std::pair<double, juce::MidiMessage>> ev;
+        for (int n = 0; n < 16; ++n) ev.push_back ({ 0.01 * n, juce::MidiMessage::noteOn (1, 36 + n * 3, (juce::uint8) 100) });
+        render (*p, 0.5, {});   // let the reverbs load
+        double cpu = 0;
+        auto st = render (*p, 3.0, ev, nullptr, &cpu);
+        const double pct = cpu / 3.0 * 100.0;
+        std::cout << "  worst case (" << kQualityLabels[quality] << "): " << pct << "% of one core, peak " << st.peak << std::endl;
+        CHECK (st.finite && st.peak < 8.0f, "worst case stays finite and bounded");
+        return pct;
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_WORST", {}).isNotEmpty()) { worst (1); return 0; }
+
+    // ---- Hardening: worst-case CPU, host programs, DNA clock settings as Mod Matrix destinations
+    auto hardTests = [&]
+    {
+        std::cout << "Hardening" << std::endl;
+        const double eco = worst (0), normal = worst (1), high = worst (2);
+        CHECK (eco <= normal * 1.15, "Eco is no heavier than Normal");
+        CHECK (high < 200.0, "worst case at High runs in real time with headroom on one core (here: under 2x)");
+
+        // host programs = factory presets
+        {
+            auto p = make();
+            const auto& list = factoryPresets();
+            CHECK (p->getNumPrograms() == (int) list.size(), "one host program per factory preset");
+            CHECK (p->getProgramName (3) == list[3].name && p->getProgramName (-1).isEmpty() && p->getProgramName (999).isEmpty(), "program names");
+            p->setCurrentProgram (5);   // the test runs on the message thread: loads straight away
+            CHECK (p->getCurrentProgram() == 5 && p->getPatchName() == list[5].name, "setCurrentProgram loads the preset");
+            setP (*p, P_filterCutoff, 123.0f);
+            p->setCurrentProgram (5);
+            CHECK (std::abs (p->param (P_filterCutoff)->convertFrom0to1 (p->param (P_filterCutoff)->getValue()) - 123.0f) < 1.0f, "re-selecting the current program keeps your edits");
+            p->setCurrentProgram (999);
+            CHECK (p->getCurrentProgram() == 5, "out-of-range programs are ignored");
+            // a project saved after editing restores its patch even if the host re-sends the program number
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            q->setCurrentProgram (5);
+            CHECK (q->getCurrentProgram() == 5 && std::abs (q->param (P_filterCutoff)->convertFrom0to1 (q->param (P_filterCutoff)->getValue()) - 123.0f) < 1.0f, "host restoring the program number doesn't overwrite the project");
+            // an old project (no program saved) and a host that sets program 0 on load
+            auto o = make(); setP (*o, P_filterCutoff, 456.0f);
+            juce::MemoryBlock m0; o->getStateInformation (m0);
+            auto xml = juce::String::fromUTF8 ((const char*) m0.getData() + 8, (int) m0.getSize() - 8);
+            CHECK (xml.contains ("program=\"0\""), "program saved");
+            auto o2 = make(); o2->setStateInformation (m0.getData(), (int) m0.getSize()); o2->setCurrentProgram (0);
+            CHECK (std::abs (o2->param (P_filterCutoff)->convertFrom0to1 (o2->param (P_filterCutoff)->getValue()) - 456.0f) < 1.0f, "program 0 on load keeps the project");
+            // from another thread: queued for the message thread
+            auto t = make();
+            std::thread th ([&] { t->setCurrentProgram (7); });
+            th.join();
+            CHECK (t->getCurrentProgram() == 7 && t->getPatchName() != list[7].name, "off the message thread the load waits");
+            t->timerCallback();
+            CHECK (t->getPatchName() == list[7].name, "... and happens on the message thread");
+            // VST3: one program (no automatable Program parameter), but MIDI Program Change still works
+            {
+                juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_VST3);
+                auto v3 = make();
+                juce::AudioProcessor::setTypeOfNextNewPlugin (juce::AudioProcessor::wrapperType_Undefined);
+                CHECK (v3->getNumPrograms() == 1 && v3->getCurrentProgram() == 0, "VST3 has a single program");
+                v3->setCurrentProgram (4);
+                CHECK (v3->getPatchName() != list[4].name, "VST3 ignores host program changes");
+                render (*v3, 0.02, { { 0.0, juce::MidiMessage::programChange (1, 4) } });
+                v3->timerCallback();
+                CHECK (v3->getPatchName() == list[4].name, "VST3 still takes MIDI Program Change");
+            }
+            // MIDI Program Change
+            render (*t, 0.02, { { 0.0, juce::MidiMessage::programChange (1, 9) } });
+            t->timerCallback();
+            CHECK (t->getPatchName() == list[9].name && t->getCurrentProgram() == 9, "MIDI Program Change loads a preset");
+            // a pending program change doesn't overwrite a project the host restores afterwards
+            render (*t, 0.02, { { 0.0, juce::MidiMessage::programChange (1, 2) } });
+            t->setStateInformation (mb.getData(), (int) mb.getSize());
+            t->timerCallback();
+            CHECK (t->getPatchName() == p->getPatchName(), "restoring state cancels a pending program change");
+        }
+
+        // DNA clock settings can be modulated (Swing, Start Offset, Free Rate, Lane 2 Steps)
+        {
+            for (int id : { P_dsSwing, P_dsOffset, P_dsFreeHz, P_dsLane2Steps }) CHECK (meta (id).modulatable, juce::String ("modulatable: ") + meta (id).id);
+            auto routeTo = [] (MegaSynthProcessor& p, int slot, int src, int dst, float amt)
+            {
+                RouteConfig c; c.on = true; c.src = src; c.dst = dst; p.routes.set (slot, c); setP (p, P_mod1Amt + slot, amt);
+            };
+            auto stepsIn = [&] (MegaSynthProcessor& p, double secs, int lane)
+            {
+                juce::AudioBuffer<float> b (2, 64); int changes = 0, last = -2;
+                for (int k = 0; k < (int) (secs * sr / 64); ++k)
+                {
+                    b.clear(); juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100), 0);
+                    p.processBlock (b, m);
+                    const int s2 = lane == 0 ? p.getEngine().dnaSeqStep.load() : p.getEngine().dnaSeqStep2.load();
+                    if (s2 != last) { ++changes; last = s2; }
+                }
+                return changes;
+            };
+            auto base = [&] (float macro)
+            {
+                auto p = make();
+                setP (*p, P_dsOn, 1); setP (*p, P_dsSync, 2); setP (*p, P_dsFreeHz, 4.0f); setP (*p, P_dsSteps, 16);
+                for (int i = 0; i < 16; ++i) p->dnaSteps.set (i, DT_Fold, 0.5f);
+                setP (*p, P_macro1, macro);
+                return p;
+            };
+            auto a = base (0.0f), b = base (1.0f);
+            routeTo (*a, 0, MS_Macro1, P_dsFreeHz, 0.5f); routeTo (*b, 0, MS_Macro1, P_dsFreeHz, 0.5f);
+            const int sa = stepsIn (*a, 2.0, 0), sb = stepsIn (*b, 2.0, 0);
+            std::cout << "  free rate: " << sa << " steps unmodulated, " << sb << " with Macro 1 up" << std::endl;
+            CHECK (sa >= 7 && sa <= 9 && sb > sa * 2, "Macro 1 speeds up the Free rate");
+            // Start Offset: the step that plays first moves
+            auto c = base (1.0f); routeTo (*c, 0, MS_Macro1, P_dsOffset, 0.25f);   // 0.25 of 0..31 = ~8 steps
+            setP (*c, P_dsSync, 1); setP (*c, P_dsRestart, 1);   // internal clock, restart on each note
+            juce::AudioBuffer<float> blk (2, 64);
+            for (int k = 0; k < 4; ++k) { blk.clear(); juce::MidiBuffer m; c->processBlock (blk, m); }   // the route settles
+            { blk.clear(); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100), 0); c->processBlock (blk, m); }
+            const int first = c->getEngine().dnaSeqStep.load();
+            std::cout << "  offset route: first step " << first << std::endl;
+            CHECK (first >= 6 && first <= 9, "Macro 1 moves the Start Offset");
+            // Lane 2 length
+            auto d = base (1.0f); setP (*d, P_dsLane2On, 1); setP (*d, P_dsLane2Steps, 4);
+            for (int i = 0; i < 32; ++i) d->dnaSteps.set (0, 1, i, DnaStep { DT_Crush, 0.5f });
+            routeTo (*d, 0, MS_Macro1, P_dsLane2Steps, 0.25f);   // 4 + ~8 = 12
+            int maxStep = 0;
+            for (int k = 0; k < (int) (4.0 * sr / 64); ++k)
+            {
+                blk.clear(); juce::MidiBuffer m; d->processBlock (blk, m);
+                maxStep = std::max (maxStep, d->getEngine().dnaSeqStep2.load());
+            }
+            CHECK (maxStep >= 9, "Macro 1 lengthens Lane 2");
+            // Swing: off-beat steps arrive later
+            auto sw = [&] (float macro)
+            {
+                auto p = make();
+                setP (*p, P_dsOn, 1); setP (*p, P_dsSync, 1); setP (*p, P_dsRate, 2); setP (*p, P_macro1, macro);
+                for (int i = 0; i < 16; ++i) p->dnaSteps.set (i, DT_Fold, 0.5f);
+                routeTo (*p, 0, MS_Macro1, P_dsSwing, 0.5f);
+                juce::AudioBuffer<float> bb (2, 32); int when = -1;
+                for (int k = 0; k < (int) (1.0 * sr / 32) && when < 0; ++k)
+                {
+                    bb.clear(); juce::MidiBuffer m; p->processBlock (bb, m);
+                    if (p->getEngine().dnaSeqStep.load() == 1) when = k;
+                }
+                return when;
+            };
+            const int w0 = sw (0.0f), w1 = sw (1.0f);
+            std::cout << "  swing route: step 2 at block " << w0 << " vs " << w1 << std::endl;
+            CHECK (w1 > w0 + 3, "Macro 1 adds Swing");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_HARDONLY", {}).isNotEmpty())
+    {
+        hardTests();
+        std::cout << (failures == 0 ? "HARD TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PLAYONLY", {}).isNotEmpty())
     {
         playTests();
@@ -2676,6 +2828,7 @@ int main()
     dnaTests();
     fxTests();
     playTests();
+    hardTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {

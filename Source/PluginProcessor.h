@@ -31,10 +31,13 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 5.0; }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return "Default"; }
+    // Host programs = the factory presets. A program change from the host (or a MIDI Program Change)
+    // loads on the message thread; asking for the program that's already current does nothing, so a
+    // host restoring its program number after a project loads never overwrites the restored patch.
+    int getNumPrograms() override;
+    int getCurrentProgram() override { return getNumPrograms() == 1 ? 0 : curProgram.load(); }
+    void setCurrentProgram (int) override;
+    const juce::String getProgramName (int) override;
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock&) override;
@@ -123,7 +126,8 @@ public:
     uint32_t getMidiMapVersion() const { return midiMapVersion.load(); }
     juce::String midiMapToString() const;
     void midiMapFromString (const juce::String&);
-    std::atomic<int> uiWidth { 0 };          // editor width the project was saved with (0 = default)
+    std::atomic<int> uiWidth { 0 };
+    std::atomic<int> curProgram { 0 }, pendingProgram { -1 };          // editor width the project was saved with (0 = default)
     // DNA Sequencer editing (message thread, undoable). lane 0/1; acts on the selected pattern.
     enum DnaEdit { DE_Generate, DE_SeedDown, DE_SeedUp, DE_Copy, DE_Paste, DE_ShiftLeft, DE_ShiftRight, DE_Reverse, DE_Clear };
     void dnaEdit (DnaEdit, int lane);
@@ -157,9 +161,9 @@ public:
     void abCopyToOther();                             // the other slot becomes a copy of this one
     juce::String lastHistoryLabel() const { return historyPos >= 0 ? history[(size_t) historyPos].label : juce::String(); }
 
+    void timerCallback() override;   // message thread housekeeping (20 Hz); public so tests can run it
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout (MegaSynthProcessor&);
-    void timerCallback() override;
     void fillSnapshot (int numSamples);
 public:
     void updateLatency();   // message thread (timer) and prepareToPlay

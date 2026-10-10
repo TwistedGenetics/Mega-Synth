@@ -33,6 +33,7 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 - **Window size**: drag the bottom-right corner, or use *Size* in the header (75 / 90 / 100 / 125 / 150%). The size is saved with the project.
 - **A / B compare** (header): both slots start as the loaded patch. Edit one, switch to the other to hear the difference; *Copy* copies the slot you're playing to the other one. Switching can be undone; loading a patch resets A/B.
 - **Browse** (header): search (every word must match the name, category or description), categories (factory categories, *Your patches* and each subfolder of your patch folder), favourites (click the star; stored in `favourites.txt` in the patch folder) and *Load as you browse* so the arrow keys audition patches. Enter or double-click closes, Esc closes.
+- **Host presets**: in AU hosts (Logic's preset menu) and the standalone app, the factory presets are also listed as programs. VST3 shows a single program, because VST3 makes programs an automatable parameter that could load a preset over your settings; use *Browse* instead. A MIDI Program Change (0-27) loads that factory preset in every format.
 - **Patches**: *Save* writes a `.megasynth` file to `Music/Mega Synth/Patches` (subfolders work too). The patch menu lists everything in that folder, `<` / `>` step through them, and the menu can also open a patch file from anywhere. A patch includes the sequence and the Osc 4 sample.
 - **Copy Patch / Paste Patch** use the same JSON as the browser's Save Patch / Load Patch, including the wavetable sample.
 - Every control is automatable. Double-click a knob to reset it.
@@ -117,6 +118,7 @@ Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (W
 - **Generator**: Random, Euclidean (Fill's hits spread evenly, Rotate moves them) or Variation (small changes to the current pattern), with Fill, Min / Max amount, Extras (chance of ratchets and probabilities) and the transforms it may use. **Generate** picks a new seed; **<** / **>** step through seeds, and the same seed always gives the same pattern. Locked steps are never changed. Every edit can be undone.
 - **Density** thins the pattern and **Probability** scales every step's probability (0% = nothing plays, 100% = as written, 200% = everything plays); with Glide and Depth they can be automated or driven from the Mod Matrix. Probability decisions follow the song position, so a bounce plays the same way twice.
 - **Mod Matrix sources**: DNA Sequencer (lane 1's step amount), DNA Sequencer Lane 2, and DNA Step Gate (a pulse at every step and ratchet hit).
+- **Mod Matrix destinations**: Glide, Depth, Density and Probability, plus Swing, Start Offset, Free Rate and Lane 2 Steps. The clock settings (Swing, Start Offset, Free Rate) follow the modulation with one audio block of delay.
 - Patches and projects from before this version load with these settings off and their steps in pattern A, and play exactly as they did.
 
 ## Overview tab

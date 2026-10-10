@@ -173,8 +173,7 @@ namespace
 
             // ---- modulation capability: continuous sound parameters yes; administrative ones no
             const bool admin = isAny (id, { "polyphony", "keyboardOctave", "bendRange", "seqLength", "seqEuclidPulses",
-                                            "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum", "mutSeed", "dsSteps",
-                                            "dsFreeHz", "dsOffset", "dsSwing", "dsLane2Steps" });
+                                            "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum", "mutSeed", "dsSteps" });
             m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin;
             float adScale;
             m.audioRate = m.modulatable && audioDestFor (i, adScale) >= 0;   // what the voice can drive per sample

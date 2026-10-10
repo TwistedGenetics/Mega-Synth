@@ -30,7 +30,7 @@ inline const std::vector<DnaTarget>& dnaTransformTargets (int t)
         a[DT_Fm]       = { { P_arFm, 0.5f } };
         a[DT_Splice]   = { { P_dnaMix, 0.9f }, { P_dnaAmount, 0.3f } };
         a[DT_Resonate] = { { P_resMix, 0.8f } };
-        a[DT_Filter]   = { { P_filterCutoff, -0.45f }, { P_filterRes, 0.2f } };
+        a[DT_Filter]   = { { P_filterCutoff, -0.45f }, { P_filterRes, 0.2f }, { P_filter2Cutoff, -0.45f }, { P_filter2Res, 0.2f } };   // both filters
         a[DT_Grain]    = { { P_grMix, 0.9f } };
         a[DT_Blur]     = { { P_spBlur, 0.9f } };
         a[DT_Mutate]   = { { P_mutAmount, 0.6f } };

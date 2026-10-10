@@ -257,8 +257,8 @@ void Voice::applyInstability (Snapshot& sn, bool noteOn) const
         { CI_Pitch, P_osc1Semi, 0.5f / 24.0f, false }, { CI_Pitch, P_osc2Semi, 0.5f / 24.0f, false }, { CI_Pitch, P_osc3Semi, 0.5f / 24.0f, false },
         { CI_Pitch, P_subSemi, 0.5f / 24.0f, false }, { CI_Pitch, P_osc4Semi, 0.5f / 24.0f, false }, { CI_Pitch, P_wt2Semi, 0.5f / 24.0f, false },
         { CI_Pitch, P_complexSemi, 0.5f / 24.0f, false }, { CI_Pitch, P_supersawSemi, 0.5f / 24.0f, false },
-        { CI_Cutoff, P_filterCutoff, 0.25f, false },
-        { CI_Res, P_filterRes, 0.2f, false },
+        { CI_Cutoff, P_filterCutoff, 0.25f, false }, { CI_Cutoff, P_filter2Cutoff, 0.25f, false },
+        { CI_Res, P_filterRes, 0.2f, false }, { CI_Res, P_filter2Res, 0.2f, false },
         // levels move against each other, so the balance shifts rather than the volume
         { CI_Level, P_osc1Gain, 0.15f, true }, { CI_Level, P_osc2Gain, -0.15f, true }, { CI_Level, P_osc3Gain, 0.15f, true },
         { CI_Level, P_subGain, -0.15f, true }, { CI_Level, P_osc4Gain, 0.15f, true }, { CI_Level, P_wt2Gain, -0.15f, true },
@@ -418,16 +418,22 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     // Cutoff: knob (with any matrix routes), accent, the filter envelope (Env Amt, 100% = +10 kHz
     // at the envelope's peak) and the classic LFO/Env slots, all in Hz as before; then key tracking
     // and the filter LFO as octave offsets, so they act the same at every cutoff.
-    float cut = clampv (s.f (P_filterCutoff) + filterAccent + s.f (P_fEnvAmt) * fe + mod[MT_cutoff], 20.0f, 20000.0f);
-    double octs = 0.0;
-    const float kt = s.f (P_filterKeyTrack);
-    if (kt > 0.0f) octs += kt * std::log2 (std::max (1.0, baseFreq) / 261.6256);        // 100%: follows the keyboard from middle C
-    const float la = s.f (P_filterLfoAmt);
-    if (la != 0.0f)
+    // Key tracking and the filter LFO as octave offsets
+    auto octaves = [&] (int pKt, int pLfoAmt, int pLfoSrc)
     {
-        const int src = clampv (s.i (P_filterLfoSrc), 0, 3);
-        octs += la * 4.0 * lfoShape (clampv (s.i (P_lfo1Wave + 3 * src), 0, 3), lfoPh[src]) * lfoDepthNow[src];   // 100% = +-4 octaves
-    }
+        double octs = 0.0;
+        const float kt = s.f (pKt);
+        if (kt > 0.0f) octs += kt * std::log2 (std::max (1.0, baseFreq) / 261.6256);        // 100%: follows the keyboard from middle C
+        const float la = s.f (pLfoAmt);
+        if (la != 0.0f)
+        {
+            const int src = clampv (s.i (pLfoSrc), 0, 3);
+            octs += la * 4.0 * lfoShape (clampv (s.i (P_lfo1Wave + 3 * src), 0, 3), lfoPh[src]) * lfoDepthNow[src];   // 100% = +-4 octaves
+        }
+        return octs;
+    };
+    float cut = clampv (s.f (P_filterCutoff) + filterAccent + s.f (P_fEnvAmt) * fe + mod[MT_cutoff], 20.0f, 20000.0f);
+    double octs = octaves (P_filterKeyTrack, P_filterLfoAmt, P_filterLfoSrc);
     if (octs != 0.0) cut = clampv ((float) (cut * pow2 (octs)), 20.0f, 20000.0f);
     cutoff.target = cut;
     res.target = clampv (s.f (P_filterRes) + mod[MT_resonance], 0.1f, 30.0f);
@@ -437,6 +443,42 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     filter.setDrive (filtDrive.v);
     filter.setMix (filtMix.v);
     filter.update (cutoff.v, res.v, sr);
+
+    // --- Filter 2: off, after Filter 1 (serial), beside it (parallel), or beside it in stereo (split)
+    const int mode = s.i (P_filter2On) == 0 ? R_Off : (s.i (P_filterRouting) == 0 ? R_Serial : (s.i (P_filterStereoSplit) != 0 ? R_Split : R_Parallel));
+    if (first) { routeMode = mode; routeFade = 0; }
+    else if (mode != routeMode)
+    {
+        // crossfade from the old routing to the new; a Filter 2 that was off starts from silence
+        f2old = filter2;
+        oldRouteMode = routeMode;
+        if (routeMode == R_Off) filter2.reset();
+        routeMode = mode;
+        routeFade = FilterUnit::kFadeLen;
+    }
+    balS.target = clampv (s.f (P_filterBalance), 0.0f, 1.0f);
+    balS.step (c10);
+    if (routeMode != R_Off || routeFade > 0)
+    {
+        filter2.configure (s.i (P_filter2Mode), s.i (P_filter2Type), s.i (P_filter2Slope), first || filter2Fresh);
+        filter2Fresh = false;
+        filter2.setAnalog (s.f (P_warmth), s.f (P_bassKeep));
+        float c2 = clampv (s.f (P_filter2Cutoff) + filterAccent + s.f (P_filter2EnvAmt) * fe, 20.0f, 20000.0f);
+        const double o2 = octaves (P_filter2KeyTrack, P_filter2LfoAmt, P_filter2LfoSrc);
+        if (o2 != 0.0) c2 = clampv ((float) (c2 * pow2 (o2)), 20.0f, 20000.0f);
+        cutoff2.target = c2;
+        res2.target = clampv (s.f (P_filter2Res), 0.1f, 30.0f);
+        filtDrive2.target = clampv (s.f (P_filter2Drive), 1.0f, 30.0f);
+        filtMix2.target = clampv (s.f (P_filter2Mix), 0.0f, 1.0f);
+        const float k2 = first || jumpF2 ? 1.0f : c10;
+        jumpF2 = false;
+        cutoff2.step (k2); res2.step (k2); filtDrive2.step (k2); filtMix2.step (k2);
+        filter2.setDrive (filtDrive2.v);
+        filter2.setMix (filtMix2.v);
+        filter2.update (cutoff2.v, res2.v, sr);
+        if (routeFade > 0) { f2old.setDrive (filtDrive2.v); f2old.setMix (filtMix2.v); f2old.update (cutoff2.v, res2.v, sr); }
+    }
+    else { filter2Fresh = true; jumpF2 = true; }   // configure and settle at once when it comes back on
 
     // --- FM matrix
     for (int k = 0; k < 4; ++k)
@@ -513,7 +555,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     if (! stereo && ((lSS.target > 0 && width > 0.001f) || stereoWt))
     {
         stereo = true;
-        filter.copyChannel (0, 1);
+        filter.copyChannel (0, 1); filter2.copyChannel (0, 1); f2old.copyChannel (0, 1);
         for (auto& r : ringSlots) { r.hp.copyState (0, 1); r.lp.copyState (0, 1); }
     }
 }
@@ -570,7 +612,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         // ---- audio-rate routes: an oscillator's raw output driving a destination per sample
         struct ARoute { int ad, src, curve; float k; bool uni; };
         ARoute ar[kNumRoutes]; int nar = 0;
-        bool arCut = false, arFmSlot = false;
+        bool arCut = false, arCut2 = false, arFmSlot = false;
         if (routed && mc.routes->anyAudio)
         {
             for (int i = 0; i < mc.routes->n; ++i)
@@ -590,6 +632,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 if (std::abs (k) < 1.0e-9f) continue;
                 ar[nar++] = { ad, r.src - MS_Osc1Audio, r.curve, k, r.unipolar };
                 arCut |= ad == AD_Cut || ad == AD_Res;
+                arCut2 |= ad == AD_Cut2 || ad == AD_Res2;
                 arFmSlot |= ad >= AD_Fm1 && ad <= AD_Fm4;
             }
         }
@@ -673,7 +716,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         const double rotInc = 2.0 * kPi * arp.shiftHz / sr;
         const bool shifting = arFxOn && arp.shiftMix > 0.0f;
         const double rotCos = shifting ? std::cos (rotInc) : 1.0, rotSin = shifting ? std::sin (rotInc) : 0.0;
-        float xb[2][kCtrl], mb[kCtrl], cutB[kCtrl], resB[kCtrl];
+        float xb[2][kCtrl], mb[kCtrl], cutB[kCtrl], resB[kCtrl], cutB2[kCtrl], resB2[kCtrl];
 
         // ---- Resonator (after the filter and amp envelope; it rings on after the note)
         ResonatorParams rsp;
@@ -732,6 +775,11 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 {
                     cutB[i] = clampv (cutoff.v * (float) pow2 (ad[AD_Cut]), 20.0f, 20000.0f);
                     resB[i] = clampv (res.v + ad[AD_Res], 0.1f, 30.0f);
+                }
+                if (arCut2)
+                {
+                    cutB2[i] = clampv (cutoff2.v * (float) pow2 (ad[AD_Cut2]), 20.0f, 20000.0f);
+                    resB2[i] = clampv (res2.v + ad[AD_Res2], 0.1f, 30.0f);
                 }
             }
             const double fmMul = 1.0 + (double) fmIndex * m;   // through-zero linear FM
@@ -900,6 +948,22 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             const float xL = xb[0][i], xR = xb[1][i];
             float yL, yR;
             filter.processFrame (xL, xR, stereo, yL, yR);
+            if (routeMode != R_Off || routeFade > 0)
+            {
+                if (arCut2 && routeMode != R_Off) filter2.update (cutB2[i], resB2[i], sr);
+                float nL, nR;
+                route (routeMode, filter2, xL, xR, yL, yR, nL, nR);
+                if (routeFade > 0)
+                {
+                    float pL, pR;
+                    route (oldRouteMode, f2old, xL, xR, yL, yR, pL, pR);
+                    const float f = 1.0f - (float) routeFade / (float) FilterUnit::kFadeLen;
+                    nL = pL + (nL - pL) * f;
+                    nR = pR + (nR - pR) * f;
+                    --routeFade;
+                }
+                yL = nL; yR = nR;
+            }
 
             const float g = srcMute.v * (float) ampEnv.eval (t) * vGain.v;
             float oL = yL * g, oR = yR * g;

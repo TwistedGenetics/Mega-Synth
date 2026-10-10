@@ -173,6 +173,7 @@ private:
     S legacyFm, ringMix, dry, ringGainS, srcMute, vGain;
     S cFm, cMixS;
     S cutoff, res, filtDrive, filtMix;
+    S cutoff2, res2, filtDrive2, filtMix2, balS;
     S fmAmt[4], ringDepth[2], ringOut[2];
     S ssCents[9], ssGain[9];
     float cShapeK = 4.5f;
@@ -194,7 +195,24 @@ private:
     RingSlot ringSlots[2];
 
     float srcVals[6] {};    // latest raw/FM-source outputs: osc1, osc2, osc3, osc4(mono), complex, supersaw
-    FilterUnit filter;      // one complete filter (a second unit can sit beside it later)
+    FilterUnit filter;      // Filter 1
+    FilterUnit filter2;     // Filter 2
+    FilterUnit f2old;       // Filter 2 as it was, while a routing change crossfades
+    enum { R_Off, R_Serial, R_Parallel, R_Split };
+    int routeMode = R_Off, oldRouteMode = R_Off, routeFade = 0;
+    bool filter2Fresh = true, jumpF2 = true;
+    // Filter 2's place: after Filter 1 (serial) or beside it (parallel / stereo split, weighted by Balance)
+    inline void route (int m, FilterUnit& f2, float xL, float xR, float y1L, float y1R, float& oL, float& oR)
+    {
+        if (m == R_Off) { oL = y1L; oR = y1R; return; }
+        if (m == R_Serial) { f2.processFrame (y1L, y1R, stereo, oL, oR); return; }
+        float bL, bR;
+        f2.processFrame (xL, xR, stereo, bL, bR);
+        const float b = balS.v;
+        const float gA = std::min (1.0f, 2.0f * (1.0f - b)), gB = std::min (1.0f, 2.0f * b);   // centre: both at full
+        if (m == R_Split) { oL = y1L * gA; oR = bR * gB; return; }
+        oL = y1L * gA + bL * gB; oR = y1R * gA + bR * gB;
+    }
     bool stereo = false;
 
     // ---- modulation matrix state

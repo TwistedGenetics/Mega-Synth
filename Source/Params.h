@@ -73,6 +73,8 @@ inline const char* const kFilterTypeKeys[]   = { "lp","hp","bp","notch","peak","
 inline const char* const kFilterTypeLabels[] = { "Low Pass","High Pass","Band Pass","Notch","Peak / Bell","All Pass" };
 inline const char* const kFilterSlopeKeys[]   = { "6","12","18","24" };
 inline const char* const kFilterSlopeLabels[] = { "6 dB/oct","12 dB/oct","18 dB/oct","24 dB/oct" };
+inline const char* const kFilterRouteKeys[]   = { "serial","parallel" };
+inline const char* const kFilterRouteLabels[] = { "Serial (1 > 2)","Parallel (1 + 2)" };
 inline const char* const kFilterLfoKeys[]   = { "lfo1","lfo2","lfo3","lfo4" };
 inline const char* const kFilterLfoLabels[] = { "LFO 1","LFO 2","LFO 3","LFO 4" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
@@ -196,6 +198,7 @@ inline const ChoiceList kListQuality     { kQualityKeys, kQualityLabels, 3 };
 inline const ChoiceList kListFilterType  { kFilterTypeKeys, kFilterTypeLabels, 6 };
 inline const ChoiceList kListFilterSlope { kFilterSlopeKeys, kFilterSlopeLabels, 4 };
 inline const ChoiceList kListFilterLfo   { kFilterLfoKeys, kFilterLfoLabels, 4 };
+inline const ChoiceList kListFilterRoute { kFilterRouteKeys, kFilterRouteLabels, 2 };
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 enum FilterType { FT_LP, FT_HP, FT_BP, FT_NOTCH, FT_PEAK, FT_AP, FT_TYPE_COUNT };
@@ -569,7 +572,22 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(filterMix,   "Filter Mix", 0, 1, 1, 0.01, 0) \
     F(filterKeyTrack, "Filter Key Tracking", 0, 1, 0, 0.01, 0) \
     F(filterLfoAmt, "Filter LFO Amount", -1, 1, 0, 0.001, 0) \
-    C(filterLfoSrc, "Filter LFO Source", kListFilterLfo, 0)
+    C(filterLfoSrc, "Filter LFO Source", kListFilterLfo, 0) \
+    B(filter2On,   "Filter 2 On", false) \
+    C(filterRouting, "Filter Routing", kListFilterRoute, 0) \
+    F(filterBalance, "Filter Balance", 0, 1, 0.5, 0.01, 0) \
+    B(filterStereoSplit, "Filter Stereo Split", false) \
+    C(filter2Mode, "Filter 2 Model", kListFilter, 0) \
+    C(filter2Type, "Filter 2 Type", kListFilterType, 1) \
+    C(filter2Slope, "Filter 2 Slope", kListFilterSlope, 1) \
+    F(filter2Cutoff, "Filter 2 Cutoff", 20, 20000, 400, 0.1, -1) \
+    F(filter2Res,  "Filter 2 Resonance", 0.1, 25, 1.5, 0.1, 0) \
+    F(filter2Drive, "Filter 2 Drive", 1, 25, 1, 0.1, 0) \
+    F(filter2Mix,  "Filter 2 Mix", 0, 1, 1, 0.01, 0) \
+    F(filter2EnvAmt, "Filter 2 Env Amount", -10000, 10000, 0, 1, 0) \
+    F(filter2KeyTrack, "Filter 2 Key Tracking", 0, 1, 0, 0.01, 0) \
+    F(filter2LfoAmt, "Filter 2 LFO Amount", -1, 1, 0, 0.001, 0) \
+    C(filter2LfoSrc, "Filter 2 LFO Source", kListFilterLfo, 0)
 
 enum ParamIndex
 {

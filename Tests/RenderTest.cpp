@@ -377,18 +377,95 @@ int main()
             CHECK (std::lround (q->param (P_filterSlope)->convertFrom0to1 (q->param (P_filterSlope)->getValue())) == 3, "old patch: TB-303 at its own 24 dB slope");
             CHECK (std::abs (q->param (P_filterCutoff)->convertFrom0to1 (q->param (P_filterCutoff)->getValue()) - 900.0f) < 0.5f, "old patch cutoff kept in Hz");
         }
+        // ---- Filter 2: serial, parallel, balance, stereo split, click-free routing changes
+        std::cout << "Filter 2" << std::endl;
+        {
+            // a 220 Hz sine; Filter 1 wide open, Filter 2 a steep high pass at 2 kHz
+            auto setup = [&] (MegaSynthProcessor& p)
+            {
+                basic (p);
+                setP (p, P_osc1Wave, 3.0f); setP (p, P_warmth, 0.0f);
+                setP (p, P_filterCutoff, 20000.0f); setP (p, P_filterRes, 0.1f);
+                setP (p, P_filter2Type, (float) FT_HP); setP (p, P_filter2Slope, 3.0f); setP (p, P_filter2Cutoff, 2000.0f);
+            };
+            auto lr = [&] (std::function<void (MegaSynthProcessor&)> extra)
+            {
+                auto p = make(); setup (*p); extra (*p);
+                juce::AudioBuffer<float> cap;
+                render (*p, 0.5, { { 0.0, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) } }, &cap);
+                double l = 0, r = 0;
+                for (int i = (int) (0.25 * sr); i < cap.getNumSamples(); ++i) { l += cap.getSample (0, i) * cap.getSample (0, i); r += cap.getSample (1, i) * cap.getSample (1, i); }
+                return std::make_pair (10 * std::log10 (l + 1e-20), 10 * std::log10 (r + 1e-20));
+            };
+            const auto off = lr ([] (MegaSynthProcessor&) {});
+            const auto ser = lr ([&] (MegaSynthProcessor& p) { setP (p, P_filter2On, 1.0f); });
+            const auto par = lr ([&] (MegaSynthProcessor& p) { setP (p, P_filter2On, 1.0f); setP (p, P_filterRouting, 1.0f); });
+            const auto parB = lr ([&] (MegaSynthProcessor& p) { setP (p, P_filter2On, 1.0f); setP (p, P_filterRouting, 1.0f); setP (p, P_filterBalance, 1.0f); });
+            const auto spl = lr ([&] (MegaSynthProcessor& p) { setP (p, P_filter2On, 1.0f); setP (p, P_filterRouting, 1.0f); setP (p, P_filterStereoSplit, 1.0f); });
+            std::cout << "  220 Hz through (Filter 1 open, Filter 2 HP 2 kHz): off " << off.first << " dB, serial " << ser.first << ", parallel " << par.first
+                      << ", parallel balance->2 " << parB.first << ", split L " << spl.first << " R " << spl.second << std::endl;
+            CHECK (ser.first < off.first - 40, "serial: Filter 2 filters Filter 1's output");
+            CHECK (std::abs (par.first - off.first) < 1.0, "parallel: Filter 1's path at full level with Balance centred");
+            CHECK (parB.first < off.first - 40, "Balance fully to Filter 2 leaves only Filter 2");
+            CHECK (std::abs (spl.first - off.first) < 1.0 && spl.second < off.second - 40, "stereo split: Filter 1 left, Filter 2 right");
+
+            // switching routing while a note plays doesn't click
+            auto p = make(); setup (*p);
+            setP (*p, P_filter2On, 1.0f);
+            juce::AudioBuffer<float> a, b;
+            render (*p, 0.3, { { 0.0, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) } }, &a);
+            setP (*p, P_filterRouting, 1.0f);   // serial (silent) -> parallel (full)
+            render (*p, 0.3, {}, &b);
+            float steady = 0, sw = 0;
+            for (int i = 1; i < b.getNumSamples(); ++i)
+            {
+                const float d = std::abs (b.getSample (0, i) - b.getSample (0, i - 1));
+                if (i > (int) (0.2 * sr)) steady = std::max (steady, d); else if (i < 2048) sw = std::max (sw, d);
+            }
+            std::cout << "  routing change: largest step " << sw << " (steady " << steady << ")" << std::endl;
+            CHECK (sw < steady * 1.3f + 0.003f, "routing changes crossfade");
+        }
+        {
+            auto p = make();
+            setP (*p, P_filterMode, 9.0f); setP (*p, P_filterType, (float) FT_BP); setP (*p, P_filterCutoff, 777.0f); setP (*p, P_filterLfoAmt, -0.3f);
+            p->copyFilter1To2();
+            auto pl = [&] (int i) { return p->param (i)->convertFrom0to1 (p->param (i)->getValue()); };
+            CHECK (std::lround (pl (P_filter2Mode)) == 9 && std::lround (pl (P_filter2Type)) == FT_BP && std::abs (pl (P_filter2Cutoff) - 777.0f) < 0.5f
+                   && std::abs (pl (P_filter2LfoAmt) + 0.3f) < 0.002f, "Copy 1 > 2");
+            for (int prm : { P_filter2Cutoff, P_filter2Res, P_filter2Drive, P_filter2Mix, P_filter2EnvAmt, P_filter2KeyTrack, P_filter2LfoAmt, P_filterBalance })
+                CHECK (meta (prm).modulatable, juce::String ("modulation destination: ") + meta (prm).id);
+            CHECK (meta (P_filter2Cutoff).audioRate && meta (P_filter2Res).audioRate, "Filter 2 cutoff / resonance at audio rate");
+            // a project from before Filter 2 (state version 3): Filter 2 comes back off
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto xml = juce::parseXML (getXmlFromBinaryForTest (mb));
+            if (xml != nullptr)
+            {
+                xml->setAttribute ("stateVersion", 3);
+                for (int i = 0; i < P_COUNT; ++i)
+                    if (juce::String (kParamIds[i]).startsWith ("filter2") || i == P_filterRouting || i == P_filterBalance || i == P_filterStereoSplit)
+                        if (auto* e = xml->getChildByAttribute ("id", kParamIds[i])) xml->removeChildElement (e, true);
+                juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*xml, old);
+                auto q = make();
+                setP (*q, P_filter2On, 1.0f); setP (*q, P_filterRouting, 1.0f);
+                q->setStateInformation (old.getData(), (int) old.getSize());
+                CHECK (q->param (P_filter2On)->getValue() < 0.5f && q->param (P_filterRouting)->getValue() < 0.5f, "old project: Filter 2 off");
+            }
+        }
+
     };
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_FILTERONLY", {}).isNotEmpty())
     {
         filterUnitTests();
         if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_SNAPSHOTS", {}).isNotEmpty())
         {
-            const float looks[][5] = { { 9, FT_HP, 3, 18.0f, 900 }, { 2, FT_LP, 3, 24.0f, 400 }, { 0, FT_BP, 1, 10.0f, 1500 }, { 6, FT_PEAK, 1, 15.0f, 3000 }, { 0, FT_NOTCH, 3, 4.0f, 700 } };
+            const float looks[][8] = { { 9, FT_HP, 3, 18.0f, 900, 0, 0, 0 }, { 2, FT_LP, 3, 24.0f, 400, 1, 0, 0 }, { 0, FT_BP, 1, 10.0f, 1500, 1, 1, 0 },
+                                       { 6, FT_PEAK, 1, 15.0f, 3000, 1, 1, 1 }, { 0, FT_NOTCH, 3, 4.0f, 700, 0, 0, 0 } };   // + Filter 2 on, parallel, split
             int n = 0;
             for (auto& lk : looks)
             {
                 auto p = make();
                 setP (*p, P_filterMode, lk[0]); setP (*p, P_filterType, lk[1]); setP (*p, P_filterSlope, lk[2]); setP (*p, P_filterRes, lk[3]); setP (*p, P_filterCutoff, lk[4]);
+                setP (*p, P_filter2On, lk[5]); setP (*p, P_filterRouting, lk[6]); setP (*p, P_filterStereoSplit, lk[7]); setP (*p, P_filter2Res, 8.0f);
                 std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
                 ed->setSize (1200, 860);
                 std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
@@ -398,7 +475,7 @@ int main()
                     return nullptr;
                 };
                 if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (6);
-                auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 300), true, 1.0f);
+                auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 310), true, 1.0f);
                 auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
                 auto f = dir.getChildFile ("filter_ui_" + juce::String (n++) + ".png"); f.deleteFile();
                 juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
@@ -634,9 +711,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 3"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 4"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"3\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"4\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();

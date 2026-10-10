@@ -85,7 +85,7 @@ namespace
 
     juce::String unitFor (const juce::String& id)
     {
-        if (id == "filterCutoff" || id.endsWith ("Tone") || id == "shimmerBright" || id.endsWith ("Rate")) return "Hz";
+        if (id == "filterCutoff" || id == "filter2Cutoff" || id.endsWith ("Tone") || id == "shimmerBright" || id.endsWith ("Rate")) return "Hz";
         if (id.containsIgnoreCase ("Detune") || id == "supersawSpread" || id == "supersawDrift") return "cents";
         if (id.endsWith ("Semi") || id == "bendRange") return "st";
         if (id.endsWith ("Oct") || id == "keyboardOctave") return "oct";

@@ -93,6 +93,8 @@ int audioDestFor (int p, float& scale)
         // filter: full cutoff travel is log2 (20000 / 20) = 9.97 octaves (the knob is per-octave too)
         case P_filterCutoff: scale = 9.9658f; return AD_Cut;
         case P_filterRes:    scale = 24.9f; return AD_Res;
+        case P_filter2Cutoff: scale = 9.9658f; return AD_Cut2;
+        case P_filter2Res:    scale = 24.9f; return AD_Res2;
         // FM / ring / shape, in their own units
         case P_complexFm:    scale = 1500.0f; return AD_CxFm;
         case P_fmAmount:     scale = 1500.0f; return AD_LegFm;

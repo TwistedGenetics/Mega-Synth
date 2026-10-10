@@ -7,6 +7,17 @@ using namespace tg;
 namespace tgui
 {
 
+const FilterParams& filterParams (int w)
+{
+    static const FilterParams f[2] = {
+        { P_filterMode, P_filterType, P_filterSlope, P_filterCutoff, P_filterRes, P_filterDrive, P_filterMix, P_fEnvAmt, P_filterLfoAmt, P_filterLfoSrc, P_filterKeyTrack },
+        { P_filter2Mode, P_filter2Type, P_filter2Slope, P_filter2Cutoff, P_filter2Res, P_filter2Drive, P_filter2Mix, P_filter2EnvAmt, P_filter2LfoAmt, P_filter2LfoSrc, P_filter2KeyTrack } };
+    return f[w & 1];
+}
+
+static const juce::Colour kF1 = col::filter;   // Filter 1: violet
+static const juce::Colour kF2 = col::fm;       // Filter 2: cyan
+
 //==============================================================================
 Segmented::Segmented (MegaSynthProcessor& p, int idx, juce::StringArray l, juce::Colour c)
     : proc (p), param (idx), labels (std::move (l)), colour (c) {}
@@ -21,8 +32,8 @@ void Segmented::paint (juce::Graphics& g)
 {
     const int n = labels.size();
     const float w = (float) getWidth() / (float) n, h = (float) getHeight();
-    auto* prm = proc.param (param);
-    const int sel = juce::roundToInt (prm->convertFrom0to1 (prm->getValue()));
+    int sel = local;
+    if (param >= 0) { auto* prm = proc.param (param); sel = juce::roundToInt (prm->convertFrom0to1 (prm->getValue())); }
     for (int i = 0; i < n; ++i)
     {
         auto r = juce::Rectangle<float> (i * w, 0.0f, w, h).reduced (1.5f, 0.5f);
@@ -51,60 +62,106 @@ void Segmented::mouseMove (const juce::MouseEvent& e)
 {
     const int s = segmentAt (e.getPosition());
     if (s != hover) { hover = s; repaint(); }
-    if (tooltipFor && s >= 0) setTooltip (tooltipFor (s));
 }
 
 void Segmented::mouseDown (const juce::MouseEvent& e)
 {
     const int s = segmentAt (e.getPosition());
     if (s < 0 || (mask >= 0 && (mask & (1 << s)) == 0)) return;
-    auto* prm = proc.param (param);
-    prm->beginChangeGesture();
-    prm->setValueNotifyingHost (prm->convertTo0to1 ((float) s));
-    prm->endChangeGesture();
+    if (param < 0)
+    {
+        local = s;
+        if (onSelect) onSelect (s);
+    }
+    else
+    {
+        auto* prm = proc.param (param);
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->convertTo0to1 ((float) s));
+        prm->endChangeGesture();
+    }
     repaint();
 }
 
 //==============================================================================
-void FilterResponse::update()
+void FilterResponse::update (int selected)
 {
     auto pv = [this] (int i) { auto* p = proc.param (i); return p->convertFrom0to1 (p->getValue()); };
-    const int m = juce::roundToInt (pv (P_filterMode)), t = juce::roundToInt (pv (P_filterType)), s = juce::roundToInt (pv (P_filterSlope));
-    const float c = pv (P_filterCutoff), r = pv (P_filterRes), d = pv (P_filterDrive), mix = pv (P_filterMix), warm = pv (P_warmth), keep = pv (P_bassKeep);
-    const juce::String key = juce::String (m) + "|" + juce::String (t) + "|" + juce::String (s) + "|" + juce::String (c, 1) + "|" + juce::String (r, 2)
-                           + "|" + juce::String (d, 2) + "|" + juce::String (mix, 3) + "|" + juce::String (warm, 2) + "|" + juce::String (keep, 2);
+    juce::String key;
+    for (int w = 0; w < 2; ++w)
+    {
+        const auto& f = filterParams (w);
+        for (int i : { f.mode, f.type, f.slope, f.cutoff, f.res, f.mix }) key << juce::String (pv (i), 2) << "|";
+    }
+    for (int i : { P_filter2On, P_filterRouting, P_filterStereoSplit, P_filterBalance, P_warmth, P_bassKeep }) key << juce::String (pv (i), 2) << "|";
+    key << selected;
     if (key == lastKey) return;
     lastKey = key;
-    cutoff = c;
+    sel = selected;
 
-    // impulse response of the real filter code at a tiny level (so the drive stage stays linear)
+    const bool on2 = pv (P_filter2On) > 0.5f;
+    routing = ! on2 ? 0 : (juce::roundToInt (pv (P_filterRouting)) == 0 ? 1 : (pv (P_filterStereoSplit) > 0.5f ? 3 : 2));
+    const float bal = pv (P_filterBalance);
+    const float gA = std::min (1.0f, 2.0f * (1.0f - bal)), gB = std::min (1.0f, 2.0f * bal);
+
+    // impulse responses of the real filter code at a tiny level (so the drive stages stay linear)
     const double fs = 48000.0;
-    FilterUnit u;
-    u.setPreview (true);
-    u.setAnalog (warm, keep);
-    u.configure (m, t, s, true);
-    u.setDrive (1.0f); u.setMix (mix);   // the curve shows the filter; Drive adds saturation on top
-    juce::ignoreUnused (d);
-    u.update (c, r, fs);
     constexpr int order = 13, N = 1 << order;
-    std::vector<float> buf ((size_t) N * 2, 0.0f);
+    FilterUnit u[2];
+    for (int w = 0; w < 2; ++w)
+    {
+        const auto& f = filterParams (w);
+        u[w].setPreview (true);
+        u[w].setAnalog (pv (P_warmth), pv (P_bassKeep));
+        u[w].configure (juce::roundToInt (pv (f.mode)), juce::roundToInt (pv (f.type)), juce::roundToInt (pv (f.slope)), true);
+        u[w].setDrive (1.0f);   // the curve shows the filter; Drive adds saturation on top
+        u[w].setMix (pv (f.mix));
+        u[w].update (pv (f.cutoff), pv (f.res), fs);
+        cutoff[w] = pv (f.cutoff);
+    }
+    FilterUnit serial2 = u[1];
+    std::vector<float> ir[3];
+    for (auto& v : ir) v.assign ((size_t) N * 2, 0.0f);
     const float amp = 1.0e-4f;
     for (int i = 0; i < N; ++i)
     {
-        float yl, yr;
-        u.processFrame (i == 0 ? amp : 0.0f, 0.0f, false, yl, yr);
-        buf[(size_t) i] = yl / amp;
+        const float x = i == 0 ? amp : 0.0f;
+        float a, b, c, d;
+        u[0].processFrame (x, x, false, a, d);
+        u[1].processFrame (x, x, false, b, d);
+        ir[0][(size_t) i] = a / amp;
+        ir[1][(size_t) i] = b / amp;
+        if (routing == 1) { serial2.processFrame (a, a, false, c, d); ir[2][(size_t) i] = c / amp; }
+        else if (routing == 2) ir[2][(size_t) i] = (gA * a + gB * b) / amp;
+        else ir[2][(size_t) i] = a / amp;
     }
     juce::dsp::FFT fft (order);
-    fft.performFrequencyOnlyForwardTransform (buf.data());
-    magDb.assign ((size_t) N / 2, -100.0f);
-    for (int k = 1; k < N / 2; ++k) magDb[(size_t) k] = juce::Decibels::gainToDecibels (buf[(size_t) k], -100.0f);
+    for (int k = 0; k < 3; ++k)
+    {
+        fft.performFrequencyOnlyForwardTransform (ir[k].data());
+        mag[k].assign ((size_t) N / 2, -100.0f);
+        for (int b = 1; b < N / 2; ++b) mag[k][(size_t) b] = juce::Decibels::gainToDecibels (ir[k][(size_t) b], -100.0f);
+    }
 
-    const int eff = effectiveFilterSlope (t, s);
-    const bool classic = t == FT_LP && eff == nativeFilterSlope (m);
-    caption = juce::String (kFilterTypeLabels[juce::jlimit (0, 5, t)]);
-    if (filterSlopeMask (t) != 0) caption << "  " << kFilterSlopeLabels[eff];
-    caption << "   |   " << kFilterLabels[juce::jlimit (0, 16, m)] << (classic ? "  (classic circuit)" : "  character");
+    auto describe = [&] (int w)
+    {
+        const auto& f = filterParams (w);
+        const int m = juce::roundToInt (pv (f.mode)), t = juce::roundToInt (pv (f.type)), s = juce::roundToInt (pv (f.slope));
+        const int eff = effectiveFilterSlope (t, s);
+        juce::String d = kFilterTypeKeys[juce::jlimit (0, 5, t)];
+        d = d.toUpperCase();
+        if (filterSlopeMask (t) != 0) d << " " << kFilterSlopeKeys[eff];
+        d << " " << kFilterLabels[juce::jlimit (0, 16, m)];
+        if (t == FT_LP && eff == nativeFilterSlope (m)) d << " (classic)";
+        return d;
+    };
+    switch (routing)
+    {
+        case 0:  caption = describe (0) + "   |   Filter 2 off"; break;
+        case 1:  caption = "Serial:  " + describe (0) + "  >  " + describe (1); break;
+        case 2:  caption = "Parallel:  " + describe (0) + "  +  " + describe (1); break;
+        default: caption = "Stereo split:  L " + describe (0) + "   R " + describe (1); break;
+    }
     repaint();
 }
 
@@ -136,47 +193,78 @@ void FilterResponse::paint (juce::Graphics& g)
         g.drawText ((db > 0 ? "+" : "") + juce::String ((int) db), juce::Rectangle<float> (r.getX() + 2, yOf (db) - 7, 28, 14), juce::Justification::centredRight);
     }
 
-    if (! magDb.empty())
+    auto curve = [&] (const std::vector<float>& m)
     {
         juce::Path p;
+        if (m.empty()) return p;
         const double fs = 48000.0;
-        const int N = (int) magDb.size() * 2;
-        bool started = false;
+        const int N = (int) m.size() * 2;
         for (int px = 0; px <= (int) plot.getWidth(); px += 2)
         {
             const float f = lo * std::pow (hi / lo, px / plot.getWidth());
             const float bin = (float) (f * N / fs);
-            const int k = juce::jlimit (1, (int) magDb.size() - 2, (int) bin);
-            const float fr = bin - (float) k;
-            const float db = magDb[(size_t) k] + (magDb[(size_t) k + 1] - magDb[(size_t) k]) * juce::jlimit (0.0f, 1.0f, fr);
-            const float x = plot.getX() + (float) px, y = yOf (db);
-            if (! started) { p.startNewSubPath (x, y); started = true; } else p.lineTo (x, y);
+            const int k = juce::jlimit (1, (int) m.size() - 2, (int) bin);
+            const float fr = juce::jlimit (0.0f, 1.0f, bin - (float) k);
+            const float db = m[(size_t) k] + (m[(size_t) k + 1] - m[(size_t) k]) * fr;
+            if (px == 0) p.startNewSubPath (plot.getX(), yOf (db)); else p.lineTo (plot.getX() + (float) px, yOf (db));
         }
-        juce::Path fill (p);
-        fill.lineTo (plot.getRight(), plot.getBottom()); fill.lineTo (plot.getX(), plot.getBottom()); fill.closeSubPath();
-        g.setColour (col::filter.withAlpha (0.18f));
-        g.fillPath (fill);
-        g.setColour (col::filter.brighter (0.25f));
-        g.strokePath (p, juce::PathStrokeType (2.0f));
+        return p;
+    };
+    auto fillUnder = [&] (const juce::Path& p, juce::Colour c)
+    {
+        juce::Path f (p);
+        f.lineTo (plot.getRight(), plot.getBottom()); f.lineTo (plot.getX(), plot.getBottom()); f.closeSubPath();
+        g.setColour (c.withAlpha (0.16f));
+        g.fillPath (f);
+    };
+    const juce::Colour cols[2] = { kF1, kF2 };
+    if (routing == 0)
+    {
+        auto p = curve (mag[0]);
+        fillUnder (p, kF1);
+        g.setColour (kF1.brighter (0.25f)); g.strokePath (p, juce::PathStrokeType (2.0f));
     }
-    // cutoff marker
-    const float cx = xOf (juce::jlimit (lo, hi, cutoff));
-    g.setColour (col::accent.withAlpha (0.8f));
+    else if (routing == 3)
+    {
+        for (int w = 0; w < 2; ++w)
+        {
+            auto p = curve (mag[w]);
+            fillUnder (p, cols[w]);
+            g.setColour (cols[w].brighter (0.25f)); g.strokePath (p, juce::PathStrokeType (w == sel ? 2.4f : 1.6f));
+        }
+    }
+    else
+    {
+        for (int w = 0; w < 2; ++w)
+        {
+            g.setColour (cols[w].withAlpha (w == sel ? 0.75f : 0.45f));
+            g.strokePath (curve (mag[w]), juce::PathStrokeType (1.2f));
+        }
+        auto p = curve (mag[2]);
+        fillUnder (p, col::text);
+        g.setColour (col::text); g.strokePath (p, juce::PathStrokeType (2.2f));
+    }
+    // cutoff markers
     const float dashes[] = { 4.0f, 3.0f };
-    g.drawDashedLine (juce::Line<float> (cx, plot.getY(), cx, plot.getBottom()), dashes, 2, 1.0f);
-    g.setColour (col::text);
-    g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
-    g.drawText (formatParam (P_filterCutoff, cutoff), juce::Rectangle<float> (juce::jlimit (plot.getX(), plot.getRight() - 70, cx + 4), plot.getY(), 70, 14), juce::Justification::centredLeft);
+    for (int w = 0; w < (routing == 0 ? 1 : 2); ++w)
+    {
+        const float cx = xOf (juce::jlimit (lo, hi, cutoff[w]));
+        g.setColour (cols[w].withAlpha (w == sel ? 0.95f : 0.55f));
+        g.drawDashedLine (juce::Line<float> (cx, plot.getY(), cx, plot.getBottom()), dashes, 2, 1.0f);
+        g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+        g.drawText (juce::String (w + 1) + ": " + formatParam (w == 0 ? P_filterCutoff : P_filter2Cutoff, cutoff[w]),
+                    juce::Rectangle<float> (juce::jlimit (plot.getX(), plot.getRight() - 84, cx + 4), plot.getY() + w * 14.0f, 84, 14), juce::Justification::centredLeft);
+    }
     g.setColour (col::muted);
     g.setFont (juce::Font (juce::FontOptions (11.5f)));
-    g.drawText (caption, juce::Rectangle<float> (r.getX() + 10, r.getY() + 3, r.getWidth() - 20, 16), juce::Justification::centredLeft);
+    g.drawFittedText (caption, juce::Rectangle<int> ((int) r.getX() + 10, (int) r.getY() + 3, (int) r.getWidth() - 20, 16), juce::Justification::centredLeft, 1, 0.8f);
 }
 
 //==============================================================================
 FilterPanel::FilterPanel (MegaSynthProcessor& p)
     : proc (p),
-      type (p, P_filterType, { "LP", "HP", "BP", "NOTCH", "PEAK", "AP" }, col::filter),
-      slope (p, P_filterSlope, { "6", "12", "18", "24" }, col::filter),
+      which (p, -1, { "FILTER 1", "FILTER 2" }, kF1),
+      routing (p, P_filterRouting, { "SERIAL", "PARALLEL" }, col::accent),
       response (p)
 {
     for (auto* l : { &typeCap, &slopeCap, &modelCap, &lfoCap })
@@ -194,11 +282,23 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
     info.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (info);
 
-    type.setTooltip ("Low Pass, High Pass, Band Pass, Notch, Peak / Bell, All Pass");
-    slope.setTooltip ("Steepness. Band Pass and Notch: 12 or 24. Peak / Bell has no slope. "
-                      "Low Pass at the model's own slope runs the classic circuit exactly.");
-    addAndMakeVisible (type);
-    addAndMakeVisible (slope);
+    which.setTooltip ("Which filter the controls below show");
+    which.onSelect = [this] (int w) { show (w); };
+    addAndMakeVisible (which);
+    routing.setTooltip ("Serial: Filter 1 then Filter 2.  Parallel: both get the same sound and are added (Balance sets the mix).");
+    addAndMakeVisible (routing);
+    f2OnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_filter2On], f2On);
+    splitAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_filterStereoSplit], split);
+    f2On.setTooltip ("Switch Filter 2 in. Off, it uses no CPU and the sound is Filter 1 alone.");
+    split.setTooltip ("Parallel only: Filter 1 on the left, Filter 2 on the right (Balance tilts between them)");
+    addAndMakeVisible (f2On);
+    addAndMakeVisible (split);
+    copyBtn.setTooltip ("Filter 2 takes all of Filter 1's settings (undoable)");
+    copyBtn.onClick = [this] { proc.copyFilter1To2(); };
+    addAndMakeVisible (copyBtn);
+    balance = std::make_unique<Knob> (proc, P_filterBalance, "Balance", col::accent);
+    balance->slider.setTooltip ("Parallel / stereo split: Filter 1 <> Filter 2. In the middle both play at full level.");
+    addAndMakeVisible (*balance);
 
     for (int i = 0; i < kListFilter.size; ++i) model.addItem (kListFilter.labels[i], i + 1);
     model.setTooltip ("The analogue model: as a Low Pass at its own slope it is the original circuit; "
@@ -208,32 +308,46 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
     {
         const int m = model.getSelectedId() - 1;
         if (m < 0) return;
-        setParam (P_filterMode, (float) m);
-        setParam (P_filterSlope, (float) nativeFilterSlope (m));
+        const auto& f = filterParams (sel);
+        setParam (f.mode, (float) m);
+        setParam (f.slope, (float) nativeFilterSlope (m));
     };
     addAndMakeVisible (model);
 
-    for (int i = 0; i < kListFilterLfo.size; ++i) lfoSrc.addItem (kListFilterLfo.labels[i], i + 1);
-    lfoAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, kParamIds[P_filterLfoSrc], lfoSrc);
-    lfoSrc.setTooltip ("Which LFO LFO Amt uses (rate, shape and depth are on the Modulation tab)");
-    addAndMakeVisible (lfoSrc);
-
-    const std::pair<int, const char*> ks[] = { { P_filterCutoff, "Cutoff" }, { P_filterRes, "Resonance" }, { P_filterDrive, "Drive" }, { P_filterMix, "Mix" },
-                                               { P_fEnvAmt, "Env Amt" }, { P_filterLfoAmt, "LFO Amt" }, { P_filterKeyTrack, "Key Track" } };
-    for (auto& [idx, cap] : ks)
+    for (int w = 0; w < 2; ++w)
     {
-        auto* k = knobs.add (new Knob (proc, idx, cap, col::filter));
-        addAndMakeVisible (k);
+        const auto& f = filterParams (w);
+        const auto c = w == 0 ? kF1 : kF2;
+        auto* t = type.add (new Segmented (proc, f.type, { "LP", "HP", "BP", "NOTCH", "PEAK", "AP" }, c));
+        t->setTooltip ("Low Pass, High Pass, Band Pass, Notch, Peak / Bell, All Pass");
+        auto* s = slope.add (new Segmented (proc, f.slope, { "6", "12", "18", "24" }, c));
+        s->setTooltip ("Steepness. Band Pass and Notch: 12 or 24. Peak / Bell has no slope. "
+                       "Low Pass at the model's own slope runs the classic circuit exactly.");
+        addChildComponent (t);
+        addChildComponent (s);
+        auto* box = lfoSrc.add (new juce::ComboBox());
+        for (int i = 0; i < kListFilterLfo.size; ++i) box->addItem (kListFilterLfo.labels[i], i + 1);
+        lfoAtt.add (new juce::AudioProcessorValueTreeState::ComboBoxAttachment (proc.apvts, kParamIds[f.lfoSrc], *box));
+        box->setTooltip ("Which LFO LFO Amt uses (rate, shape and depth are on the Modulation tab)");
+        addChildComponent (box);
+
+        const std::pair<int, const char*> ks[] = { { f.cutoff, "Cutoff" }, { f.res, "Resonance" }, { f.drive, "Drive" }, { f.mix, "Mix" },
+                                                   { f.env, "Env Amt" }, { f.lfoAmt, "LFO Amt" }, { f.keyTrack, "Key Track" } };
+        for (auto& [idx, cap] : ks)
+        {
+            auto* k = knobs[w].add (new Knob (proc, idx, cap, c));
+            addChildComponent (k);
+        }
+        knobs[w][0]->slider.setTooltip ("Cutoff, 20 Hz - 20 kHz (equal travel per octave)");
+        knobs[w][2]->slider.setTooltip ("Pushes the signal into the filter: saturation, thicker bass, more bite. Level is compensated.");
+        knobs[w][3]->slider.setTooltip ("Mix: 0% = unfiltered, 100% = fully filtered (parallel filtering in between)");
+        knobs[w][4]->slider.setTooltip ("Filter envelope amount, -100% .. +100% (100% = +10 kHz at the envelope's peak). Negative inverts the sweep. Both filters share the Filter Envelope.");
+        knobs[w][5]->slider.setTooltip ("LFO to cutoff, -100% .. +100% (100% = +-4 octaves)");
+        knobs[w][6]->slider.setTooltip ("Key tracking: 0% = cutoff fixed, 100% = cutoff follows the keyboard (from middle C)");
     }
-    knobs[0]->slider.setTooltip ("Cutoff, 20 Hz - 20 kHz (equal travel per octave)");
-    knobs[2]->slider.setTooltip ("Pushes the signal into the filter: saturation, thicker bass, more bite. Level is compensated.");
-    knobs[3]->slider.setTooltip ("Filter Mix: 0% = unfiltered, 100% = fully filtered (parallel filtering in between)");
-    knobs[4]->slider.setTooltip ("Filter envelope amount, -100% .. +100% (100% = +10 kHz at the envelope's peak). Negative inverts the sweep.");
-    knobs[5]->slider.setTooltip ("LFO to cutoff, -100% .. +100% (100% = +-4 octaves)");
-    knobs[6]->slider.setTooltip ("Key tracking: 0% = cutoff fixed, 100% = cutoff follows the keyboard (from middle C)");
 
     addAndMakeVisible (response);
-    sync();
+    show (0);
     startTimerHz (20);
 }
 
@@ -249,6 +363,19 @@ void FilterPanel::setParam (int idx, float v)
     p->endChangeGesture();
 }
 
+void FilterPanel::show (int w)
+{
+    sel = w & 1;
+    which.setColour (sel == 0 ? kF1 : kF2);
+    for (int i = 0; i < 2; ++i)
+    {
+        const bool v = i == sel;
+        type[i]->setVisible (v); slope[i]->setVisible (v); lfoSrc[i]->setVisible (v);
+        for (auto* k : knobs[i]) k->setVisible (v);
+    }
+    sync();
+}
+
 void FilterPanel::timerCallback()
 {
     if (isShowing()) sync();
@@ -256,19 +383,32 @@ void FilterPanel::timerCallback()
 
 void FilterPanel::sync()
 {
-    const int t = juce::roundToInt (plain (P_filterType)), s = juce::roundToInt (plain (P_filterSlope)), m = juce::roundToInt (plain (P_filterMode));
-    slope.setMask (filterSlopeMask (t));
-    slope.setShown (filterSlopeMask (t) == 0 ? -2 : effectiveFilterSlope (t, s));
-    type.repaint(); slope.repaint();
+    const auto& f = filterParams (sel);
+    const int t = juce::roundToInt (plain (f.type)), s = juce::roundToInt (plain (f.slope)), m = juce::roundToInt (plain (f.mode));
+    slope[sel]->setMask (filterSlopeMask (t));
+    slope[sel]->setShown (filterSlopeMask (t) == 0 ? -2 : effectiveFilterSlope (t, s));
+    type[sel]->repaint(); slope[sel]->repaint(); routing.repaint();
     if (model.getSelectedId() != m + 1) model.setSelectedId (m + 1, juce::dontSendNotification);
+
+    const bool on2 = plain (P_filter2On) > 0.5f, parallel = juce::roundToInt (plain (P_filterRouting)) == 1;
+    routing.setAlpha (on2 ? 1.0f : 0.45f);
+    split.setEnabled (parallel);
+    split.setAlpha (on2 && parallel ? 1.0f : 0.45f);
+    balance->setAlpha (on2 && parallel ? 1.0f : 0.45f);
+    // the controls of a filter that's switched off are dimmed (they still work)
+    const float a = sel == 1 && ! on2 ? 0.5f : 1.0f;
+    for (auto* k : knobs[sel]) k->setAlpha (a);
+    type[sel]->setAlpha (a); slope[sel]->setAlpha (a); model.setAlpha (a);
+
     const bool classic = t == FT_LP && effectiveFilterSlope (t, s) == nativeFilterSlope (m);
     juce::String txt;
-    if (t == FT_PEAK) txt = "Peak / Bell: Resonance sets the boost (+2 to +18 dB) and its width.";
-    else if (classic) txt = "Classic circuit: the original model, exactly.";
-    else txt = "Multimode filter with the model's character.";
-    if (t == FT_LP && effectiveFilterSlope (t, s) == 3 && ! classic) txt << "\nSelf-oscillates at full Resonance.";
+    if (sel == 1 && ! on2) txt = "Filter 2 is off: switch it on above.\n";
+    if (t == FT_PEAK) txt << "Peak / Bell: Resonance sets the boost (+2 to +18 dB) and its width.";
+    else if (classic) txt << "Classic circuit: the original model, exactly.";
+    else txt << "Multimode filter with the model's character.";
+    if (t == FT_LP && effectiveFilterSlope (t, s) == 3 && ! classic && ! (sel == 1 && ! on2)) txt << "\nSelf-oscillates at full Resonance.";
     info.setText (txt, juce::dontSendNotification);
-    response.update();
+    response.update (sel);
 }
 
 void FilterPanel::paint (juce::Graphics& g)
@@ -278,38 +418,50 @@ void FilterPanel::paint (juce::Graphics& g)
     g.fillRoundedRectangle (r, 12.0f);
     g.setColour (col::border);
     g.drawRoundedRectangle (r, 12.0f, 1.0f);
-    g.setColour (col::filter);
+    g.setColour (sel == 0 ? kF1 : kF2);
     g.fillRoundedRectangle (juce::Rectangle<float> (r.getX() + 12, r.getY() + 9, 4, 16), 2.0f);
     g.setColour (col::text);
     g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
-    g.drawText ("Filter", juce::Rectangle<float> (r.getX() + 22, r.getY() + 6, 200, 22), juce::Justification::centredLeft);
-    // divider between the main knobs and the modulation knobs
+    g.drawText ("Filter", juce::Rectangle<float> (r.getX() + 22, r.getY() + 6, 60, 22), juce::Justification::centredLeft);
     g.setColour (col::border);
-    g.drawVerticalLine (330, 150.0f, 230.0f);
+    g.drawVerticalLine (330, 168.0f, 246.0f);
+    g.drawVerticalLine (676, 168.0f, 246.0f);
     g.setColour (col::muted);
     g.setFont (juce::Font (juce::FontOptions (10.5f, juce::Font::bold)));
-    g.drawText ("MAIN", juce::Rectangle<float> (16, 136, 120, 12), juce::Justification::centredLeft);
-    g.drawText ("MODULATION", juce::Rectangle<float> (340, 136, 160, 12), juce::Justification::centredLeft);
+    g.drawText ("MAIN", juce::Rectangle<float> (16, 154, 120, 12), juce::Justification::centredLeft);
+    g.drawText ("MODULATION", juce::Rectangle<float> (340, 154, 160, 12), juce::Justification::centredLeft);
+    g.drawText ("ROUTING", juce::Rectangle<float> (686, 154, 80, 12), juce::Justification::centredLeft);
 }
 
 void FilterPanel::resized()
 {
-    typeCap.setBounds (14, 30, 200, 16);
-    type.setBounds (14, 47, 390, 30);
-    slopeCap.setBounds (418, 30, 200, 16);
-    slope.setBounds (418, 47, 240, 30);
-    modelCap.setBounds (14, 84, 200, 16);
-    model.setBounds (14, 101, 240, 26);
-    info.setBounds (266, 98, 400, 34);
-    int x = 14;
-    for (int i = 0; i < 4; ++i) { knobs[i]->setBounds (x, 150, 72, 84); x += 76; }
-    x = 340;
-    knobs[4]->setBounds (x, 150, 72, 84); x += 76;
-    knobs[5]->setBounds (x, 150, 72, 84); x += 76;
-    lfoCap.setBounds (x, 150, 80, 16);
-    lfoSrc.setBounds (x, 168, 80, 26); x += 86;
-    knobs[6]->setBounds (x, 150, 72, 84);
-    response.setBounds (680, 30, getWidth() - 694, getHeight() - 44);
+    // header: which filter, Filter 2 On, routing, stereo split, copy
+    which.setBounds (80, 6, 210, 26);
+    f2On.setBounds (304, 7, 110, 24);
+    routing.setBounds (420, 6, 200, 26);
+    split.setBounds (630, 7, 112, 24);
+    copyBtn.setBounds (750, 6, 96, 26);
+
+    typeCap.setBounds (14, 40, 200, 16);
+    slopeCap.setBounds (418, 40, 200, 16);
+    modelCap.setBounds (14, 98, 200, 16);
+    model.setBounds (14, 115, 240, 26);
+    info.setBounds (266, 104, 404, 40);
+    for (int w = 0; w < 2; ++w)
+    {
+        type[w]->setBounds (14, 57, 390, 30);
+        slope[w]->setBounds (418, 57, 252, 30);
+        int x = 14;
+        for (int i = 0; i < 4; ++i) { knobs[w][i]->setBounds (x, 168, 72, 84); x += 76; }
+        x = 340;
+        knobs[w][4]->setBounds (x, 168, 72, 84); x += 76;
+        knobs[w][5]->setBounds (x, 168, 72, 84); x += 76;
+        lfoSrc[w]->setBounds (x, 186, 80, 26);
+        knobs[w][6]->setBounds (x + 86, 168, 72, 84);
+    }
+    lfoCap.setBounds (492, 168, 80, 16);
+    balance->setBounds (684, 168, 72, 84);
+    response.setBounds (770, 40, getWidth() - 784, getHeight() - 54);
 }
 
 } // namespace tgui

@@ -109,7 +109,8 @@ public:
     juce::String exportBrowserPatch() const;
     juce::String importBrowserPatch (const juce::String& json);   // returns an error message, or empty on success
     void resetToDefaults();
-    bool loadFactoryPreset (int index);   // tg::factoryPresets() index; false when out of range
+    bool loadFactoryPreset (int index);
+    void copyFilter1To2();                // Filter 2 takes all of Filter 1's settings (undoable)   // tg::factoryPresets() index; false when out of range
 
     // Patch files (.megasynth = the browser patch JSON plus a name and the plugin-only settings)
     static juce::File getPatchFolder();
@@ -123,7 +124,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 3;   // 3: filter overhaul (type, slope, mix, key tracking, LFO amount)
+    static constexpr int kStateVersion = 4;   // 3: filter overhaul; 4: Filter 2
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -141,7 +142,8 @@ public:
     void updateLatency();   // message thread (timer) and prepareToPlay
 private:
     void resetPatchState();
-    void setFilterDefaultsForOldPatch();   // patches / projects from before the filter overhaul   // every parameter, route, scene, step and sample back to the defaults
+    void setFilterDefaultsForOldPatch();   // patches / projects from before the filter overhaul
+    void setFilter2DefaultsForOldPatch();  // ... and from before Filter 2   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();

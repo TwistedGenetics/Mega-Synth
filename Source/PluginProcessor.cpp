@@ -13,7 +13,8 @@ namespace
     // Parameters added with the filter overhaul (state version 3)
     bool isFilterV2Param (const juce::String& id)
     {
-        return id == "filterType" || id == "filterSlope" || id == "filterMix" || id == "filterKeyTrack" || id == "filterLfoAmt" || id == "filterLfoSrc";
+        return id == "filterType" || id == "filterSlope" || id == "filterMix" || id == "filterKeyTrack" || id == "filterLfoAmt" || id == "filterLfoSrc"
+            || id.startsWith ("filter2") || id == "filterRouting" || id == "filterBalance" || id == "filterStereoSplit";
     }
 
     bool isNewPluginParam (const juce::String& id)
@@ -626,6 +627,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     const int version = (int) tree.getProperty ("stateVersion", 1);
     apvts.replaceState (tree);
     if (version < 3) setFilterDefaultsForOldPatch();
+    if (version < 4) setFilter2DefaultsForOldPatch();
 
     if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
@@ -815,6 +817,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
             else setPlain (i, meta (i).def);
         }
         if (extra == nullptr || ! extra->hasProperty ("filterSlope")) setFilterDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("filter2On")) setFilter2DefaultsForOldPatch();
         routes.fromVar (patch["modMatrix"]);
         dnaSteps.fromString (patch["dnaSequence"].toString());
         scenes.fromVar (patch["scenes"]);
@@ -915,6 +918,35 @@ void MegaSynthProcessor::resetPatchState()
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
+}
+
+void MegaSynthProcessor::setFilter2DefaultsForOldPatch()
+{
+    // Before Filter 2 existed: it's off, so the patch sounds as it did
+    for (int i : { P_filter2On, P_filterRouting, P_filterBalance, P_filterStereoSplit, P_filter2Mode, P_filter2Type, P_filter2Slope, P_filter2Cutoff,
+                   P_filter2Res, P_filter2Drive, P_filter2Mix, P_filter2EnvAmt, P_filter2KeyTrack, P_filter2LfoAmt, P_filter2LfoSrc })
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::copyFilter1To2()
+{
+    const std::pair<int, int> map[] = { { P_filterMode, P_filter2Mode }, { P_filterType, P_filter2Type }, { P_filterSlope, P_filter2Slope },
+                                        { P_filterCutoff, P_filter2Cutoff }, { P_filterRes, P_filter2Res }, { P_filterDrive, P_filter2Drive },
+                                        { P_filterMix, P_filter2Mix }, { P_fEnvAmt, P_filter2EnvAmt }, { P_filterKeyTrack, P_filter2KeyTrack },
+                                        { P_filterLfoAmt, P_filter2LfoAmt }, { P_filterLfoSrc, P_filter2LfoSrc } };
+    for (auto [from, to] : map)
+    {
+        auto* prm = params[(size_t) to];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->convertTo0to1 (params[(size_t) from]->convertFrom0to1 (params[(size_t) from]->getValue())));
+        prm->endChangeGesture();
+    }
+    pushHistory ("Copy filter 1 to 2");
 }
 
 void MegaSynthProcessor::setFilterDefaultsForOldPatch()

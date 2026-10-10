@@ -1576,10 +1576,10 @@ void MegaSynthEditor::buildPages()
         page->onResize = [page, f, a, fe, w]
         {
             const int g = 10, W = page->getWidth();
-            f->setBounds (g, g, W - 2 * g, 248);
-            a->setBounds (g, 268, 330, 140);
-            fe->setBounds (350, 268, 330, 140);
-            w->setBounds (g, 418, 840, 130);
+            f->setBounds (g, g, W - 2 * g, 262);
+            a->setBounds (g, 282, 330, 140);
+            fe->setBounds (350, 282, 330, 140);
+            w->setBounds (g, 432, 840, 130);
         };
     }
 

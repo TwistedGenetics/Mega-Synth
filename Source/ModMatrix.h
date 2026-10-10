@@ -251,6 +251,7 @@ enum AudioDest
     AD_L1, AD_L2, AD_L3, AD_LSub, AD_LWt1, AD_LWt2, AD_LCx, AD_LSs,     // level (amplitude modulation)
     AD_Cut,                                                            // filter cutoff, in octaves
     AD_Res, AD_CxFm, AD_LegFm, AD_Fm1, AD_Fm2, AD_Fm3, AD_Fm4, AD_Ring, AD_CxShape,
+    AD_Cut2, AD_Res2,                                                  // filter 2
     AD_COUNT
 };
 // Returns the AudioDest for a parameter (or -1) and the factor that turns a normalised

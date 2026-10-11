@@ -246,7 +246,7 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
         v[MS_ArpPos]      = in->arpPos;
         v[MS_ArpGate]     = in->arpGate;
         v[MS_Sidechain]   = in->sidechain;
-        v[MS_BsStep] = in->bsStep; v[MS_BsPattern] = in->bsPattern; v[MS_BsSlice] = in->bsSlice;
+        v[MS_BsStep] = in->bsStep; v[MS_BsPattern] = in->bsPattern; v[MS_BsSlice] = in->bsSlice; v[MS_BsBreak] = in->bsBreak;
     }
     v[MS_RandNote] = randNote;
     v[MS_CellNoise] = inst.value (CI_Source);
@@ -1362,7 +1362,13 @@ BreakChopper::Settings Engine::breakSettings (const Snapshot& s) const
     BreakChopper::Settings st;
     st.level = s.f (P_bcLevel); st.pitch = s.f (P_bcPitch); st.velSens = s.f (P_bcVelSens);
     st.cycleMs = clampv (s.f (P_bcCycle), 10.0f, 200.0f); st.xfade = s.f (P_bcXfade);
-    st.stretch = clampv (s.i (P_bcStretch), 0, 2); st.colour = clampv (s.i (P_bcColour), 0, 4); st.quality = clampv (s.i (P_quality), 0, 2);
+    st.quality = clampv (s.i (P_quality), 0, 2);
+    for (int k = 0; k < BreakChopper::kBreaks; ++k)
+    {
+        const auto bp = breakParams (k);
+        st.b[k].stretch = clampv (s.i (bp.stretch), 0, 2); st.b[k].colour = clampv (s.i (bp.colour), 0, 4);
+        st.b[k].level = s.f (bp.level); st.b[k].pan = s.f (bp.pan);
+    }
     st.sync = s.v[P_bcSync] > 0.5f; st.thruFilter = s.v[P_bcThruFilter] > 0.5f;
     st.hostTempo = s.fxTempo;
     return st;
@@ -1595,7 +1601,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             globalSrc[MS_ModWheel] = modIn->wheel; globalSrc[MS_PitchBend] = modIn->bend;
             globalSrc[MS_Aftertouch] = modIn->aftertouch; globalSrc[MS_CcA] = modIn->ccA; globalSrc[MS_CcB] = modIn->ccB;
             globalSrc[MS_ArpPos] = modIn->arpPos; globalSrc[MS_ArpGate] = modIn->arpGate; globalSrc[MS_Sidechain] = modIn->sidechain;
-            globalSrc[MS_BsStep] = modIn->bsStep; globalSrc[MS_BsPattern] = modIn->bsPattern; globalSrc[MS_BsSlice] = modIn->bsSlice;
+            globalSrc[MS_BsStep] = modIn->bsStep; globalSrc[MS_BsPattern] = modIn->bsPattern; globalSrc[MS_BsSlice] = modIn->bsSlice; globalSrc[MS_BsBreak] = modIn->bsBreak;
         }
         for (int k = 0; k < 8; ++k) globalSrc[MS_Macro1 + k] = s.v[P_macro1 + k];
         for (int k = 0; k < 4; ++k) globalSrc[MS_PfX1 + k] = 2.0f * s.v[P_pfX1 + k] - 1.0f;
@@ -1627,7 +1633,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         if (fs->v[P_bcOn] > 0.5f)
         {
             if (breakStore != nullptr) breakStore->pull (chopper.data(), breakSeen);
-            chopper.setSample (wavs != nullptr ? wavs[3] : nullptr);
+            for (int k = 0; k < BreakChopper::kBreaks; ++k) chopper.setSample (k, wavs != nullptr ? wavs[3 + k] : nullptr);
         }
         else chopper.stopAll();
         auto st = breakSettings (*fs);
@@ -1647,7 +1653,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         const float pk = chopper.takePeak();
         auto& m = mixerPeak[(size_t) (kMxSources + 1)];
         if (pk > m.load (std::memory_order_relaxed)) m.store (pk, std::memory_order_relaxed);
-        breakPlayheadShown.store (chopper.playheadFrac(), std::memory_order_relaxed);
+        breakPlayheadShown.store (chopper.playheadFrac (clampv (fs->i (P_bcActive) - 1, 0, 2)), std::memory_order_relaxed);
         breakSliceShown.store (chopper.activeVoices() > 0 ? chopper.lastSlicePlayed() : -1, std::memory_order_relaxed);
         breakWasRunning = chopper.activeVoices() > 0;
     }

@@ -164,6 +164,10 @@ inline const char* const kBsSwitchKeys[]   = { "step","beat","bar" };
 inline const char* const kBsSwitchLabels[] = { "Next step","Next beat","Next bar" };
 inline const char* const kBsKeysKeys[]   = { "off","24","72","84","96" };
 inline const char* const kBsKeysLabels[] = { "Off","MIDI 24-31 (C0-G0)","MIDI 72-79 (C4-G4)","MIDI 84-91 (C5-G5)","MIDI 96-103 (C6-G6)" };
+inline const char* const kBsAltKeys[]   = { "off","1bar","2bar","4bar" };
+inline const char* const kBsAltLabels[] = { "Off","Every other bar","Every other 2 bars","Every other 4 bars" };
+inline const char* const kBsAltBreakKeys[]   = { "1","2","3" };
+inline const char* const kBsAltBreakLabels[] = { "Break 1","Break 2","Break 3" };
 inline const char* const kPfKeysKeys[]    = { "off","36","48","60","72","84","96" };
 inline const char* const kPfKeysLabels[]  = { "Off","MIDI 36-48 (C1-C2)","MIDI 48-60 (C2-C3)","MIDI 60-72 (C3-C4)","MIDI 72-84 (C4-C5)","MIDI 84-96 (C5-C6)","MIDI 96-108 (C6-C7)" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
@@ -331,6 +335,8 @@ inline const ChoiceList kListBsPat     = TG_LIST(kBsPat);
 inline const ChoiceList kListBsSteps   = TG_LIST(kBsSteps);
 inline const ChoiceList kListBsSwitch  = TG_LIST(kBsSwitch);
 inline const ChoiceList kListBsKeys    = TG_LIST(kBsKeys);
+inline const ChoiceList kListBsAlt     = TG_LIST(kBsAlt);
+inline const ChoiceList kListBsAltBreak = TG_LIST(kBsAltBreak);
 // Performance FX pads, in the order they're processed: P_pfRoll + k
 constexpr int kPfPads = 13;
 
@@ -1043,7 +1049,31 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(bsSwitch,    "Break Pattern Switch", kListBsSwitch, 2) \
     B(bsChainOn,   "Break Pattern Chain", false) \
     C(bsKeys,      "Break Pattern Keys", kListBsKeys, 0) \
-    F(bsSwing,     "Break Swing", 0, 0.75, 0, 0.01, 0)
+    F(bsSwing,     "Break Swing", 0, 0.75, 0, 0.01, 0) \
+    F(bcActive,    "Active Break", 1, 3, 1, 1, 0) \
+    B(bcSelKeys,   "Break Select Keys", true) \
+    B(bcSelQuant,  "Break Select on the Beat", false) \
+    F(bcLevel1,    "Break 1 Level", 0, 2, 1, 0.01, 0) \
+    F(bcPan1,      "Break 1 Pan", -1, 1, 0, 0.01, 0) \
+    C(bcSliceMode2, "Break 2 Slicing", kListBcSlice, 0) \
+    F(bcSens2,   "Break 2 Transient Sensitivity", 0, 1, 0.5, 0.01, 0) \
+    C(bcBars2,   "Break 2 Bars", kListBcBars, 0) \
+    F(bcTempo2,  "Break 2 Original Tempo", 0, 250, 0, 0.01, 0) \
+    C(bcStretch2,"Break 2 Stretch", kListBcStretch, 1) \
+    C(bcColour2, "Break 2 Colour", kListBcColour, 0) \
+    F(bcLevel2,  "Break 2 Level", 0, 2, 1, 0.01, 0) \
+    F(bcPan2,    "Break 2 Pan", -1, 1, 0, 0.01, 0) \
+    C(bcSliceMode3, "Break 3 Slicing", kListBcSlice, 0) \
+    F(bcSens3,   "Break 3 Transient Sensitivity", 0, 1, 0.5, 0.01, 0) \
+    C(bcBars3,   "Break 3 Bars", kListBcBars, 0) \
+    F(bcTempo3,  "Break 3 Original Tempo", 0, 250, 0, 0.01, 0) \
+    C(bcStretch3,"Break 3 Stretch", kListBcStretch, 1) \
+    C(bcColour3, "Break 3 Colour", kListBcColour, 0) \
+    F(bcLevel3,  "Break 3 Level", 0, 2, 1, 0.01, 0) \
+    F(bcPan3,    "Break 3 Pan", -1, 1, 0, 0.01, 0) \
+    C(bsAlternate, "Break Alternate", kListBsAlt, 0) \
+    C(bsAltBreak,  "Break Alternate With", kListBsAltBreak, 1) \
+    F(bsAmount,    "Break Tool Amount", 0, 1, 0.6, 0.01, 0)
 
 enum ParamIndex
 {
@@ -1073,5 +1103,14 @@ inline const char* const kParamIds[] = {
 
 // a Mixer strip's Pan parameter (Mute and Solo follow it)
 inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : (strip == kMxSources ? P_mxGranPan : P_mxBreakPan); }
+
+// The Break Chopper's per-break parameters (break k = 0, 1, 2)
+struct BreakParamSet { int sliceMode, sens, bars, tempo, stretch, colour, level, pan; };
+inline BreakParamSet breakParams (int k)
+{
+    if (k <= 0) return { P_bcSliceMode, P_bcSens, P_bcBars, P_bcTempo, P_bcStretch, P_bcColour, P_bcLevel1, P_bcPan1 };
+    const int b = k == 1 ? P_bcSliceMode2 : P_bcSliceMode3;
+    return { b, b + 1, b + 2, b + 3, b + 4, b + 5, b + 6, b + 7 };
+}
 
 } // namespace tg

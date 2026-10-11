@@ -374,7 +374,25 @@ private:
     juce::Array<juce::File> patchFiles;
     juce::String lastShownName;
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
-    juce::MidiKeyboardComponent keyboard;
+    // the on-screen keyboard, with the Break Chopper's key zone tinted
+    class ZoneKeyboard : public juce::MidiKeyboardComponent
+    {
+    public:
+        using juce::MidiKeyboardComponent::MidiKeyboardComponent;
+        std::function<juce::Colour (int)> tint;   // transparent: none
+        void drawWhiteNote (int n, juce::Graphics& g, juce::Rectangle<float> area, bool down, bool over, juce::Colour line, juce::Colour text) override
+        {
+            juce::MidiKeyboardComponent::drawWhiteNote (n, g, area, down, over, line, text);
+            if (tint) { const auto c = tint (n); if (! c.isTransparent()) { g.setColour (c.withAlpha (0.55f)); g.fillRect (area.withTrimmedTop (area.getHeight() * 0.78f).reduced (1.0f, 0.0f)); } }
+        }
+        void drawBlackNote (int n, juce::Graphics& g, juce::Rectangle<float> area, bool down, bool over, juce::Colour fill) override
+        {
+            juce::MidiKeyboardComponent::drawBlackNote (n, g, area, down, over, fill);
+            if (tint) { const auto c = tint (n); if (! c.isTransparent()) { g.setColour (c.withAlpha (0.8f)); g.fillRect (area.withTrimmedTop (area.getHeight() * 0.7f).reduced (2.0f, 0.0f)); } }
+        }
+    };
+    ZoneKeyboard keyboard;
+    juce::String lastZoneKey;
     std::unique_ptr<tgui::MidiMonitor> midiMonitor;
     // right-click on any toggle or choice box: MIDI Learn / Forget (knobs have their own menu)
     struct LearnClicks : juce::MouseListener

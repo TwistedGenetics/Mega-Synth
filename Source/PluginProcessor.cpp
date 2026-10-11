@@ -378,16 +378,20 @@ void MegaSynthProcessor::bsTick (double beat)
         int chainLen = 0; while (chainLen < 16 && d.chain[chainLen] != 0) ++chainLen;
         if (snap.v[P_bsChainOn] > 0.5f && chainLen > 0)
         {
-            if (idx == 0 || bsChainIdx < 0) { bsChainIdx = (bsChainIdx + 1) % chainLen; bsPlaying = juce::jlimit (0, 7, d.chain[bsChainIdx] - 'A'); }
+            if (idx == 0 || bsChainIdx < 0)
+            {
+                bsChainIdx = (bsChainIdx + 1) % chainLen; bsPlaying = juce::jlimit (0, 7, d.chain[bsChainIdx] - 'A');
+                bsApplyPatternBreak (d);
+            }
         }
         else
         {
             const int want = juce::jlimit (0, 7, snap.i (P_bsPattern));
             const int sw = juce::jlimit (0, 2, snap.i (P_bsSwitch));
-            if (want != bsPlaying && (sw == 0 || (sw == 1 && (k & 3) == 0) || (sw == 2 && (k & 15) == 0))) bsPlaying = want;
+            if (want != bsPlaying && (sw == 0 || (sw == 1 && (k & 3) == 0) || (sw == 2 && (k & 15) == 0))) { bsPlaying = want; bsApplyPatternBreak (d); }
         }
         const tg::BreakStep& s = d.step[bsPlaying][idx];
-        bool fired = false;
+        bool fired = false; int firedBrk = -1;
         if (s.on && ! s.tie)
         {
             bsRng ^= bsRng << 13; bsRng ^= bsRng >> 17; bsRng ^= bsRng << 5;
@@ -396,36 +400,84 @@ void MegaSynthProcessor::bsTick (double beat)
             {
                 tg::BreakChopper::Trigger t;
                 t.slice = s.slice; t.vel = juce::jlimit (0.0f, 1.25f, s.vel * (s.accent ? 1.25f : 1.0f)); t.pitch = s.pitch; t.reverse = s.reverse;
+                // which break: the step's own, or the Active Break (swapped every other bar or two with Alternate)
+                int brk = s.brk > 0 ? s.brk - 1 : juce::jlimit (0, 2, snap.i (P_bcActive) - 1);
+                if (s.brk == 0)
+                {
+                    static const int altBars[] = { 0, 1, 2, 4 };
+                    const int ab = altBars[juce::jlimit (0, 3, snap.i (P_bsAlternate))];
+                    if (ab > 0 && ((k / 16) / ab) % 2 == 1) brk = juce::jlimit (0, 2, snap.i (P_bsAltBreak));
+                }
+                t.brk = brk;
                 ch.trigger (t, st);
-                fired = true;
+                fired = true; firedBrk = brk;
                 const double sb = bsStepBeat (k, swing);
-                for (int rr = 1; rr < s.roll && bsNumRolls < 16; ++rr) bsRolls[bsNumRolls++] = { sb + 0.25 * rr / s.roll, t };
+                for (int rr = 1; rr < s.roll && bsNumRolls < 15; ++rr) bsRolls[bsNumRolls++] = { sb + 0.25 * rr / s.roll, t };
+                if (s.layer)
+                {
+                    // a second hit stacked on it, from another break (it doesn't choke the first)
+                    tg::BreakChopper::Trigger l = t;
+                    l.brk = juce::jlimit (0, 2, s.layerBrk - 1); l.slice = s.layerSlice; l.level = s.layerLevel; l.noChoke = true;
+                    ch.trigger (l, st);
+                }
             }
         }
-        if (bsLog != nullptr) bsLog->push_back ({ beat, k, bsPlaying, s.slice, fired });
-        const int ns = ch.numSlices();
+        if (bsLog != nullptr) bsLog->push_back ({ beat, k, bsPlaying, s.slice, fired, firedBrk });
+        const int ns = ch.numSlices (ch.lastBreakPlayed());
         modInputs.bsStep = (float) idx / (float) (steps - 1);
         modInputs.bsPattern = (float) bsPlaying / 7.0f;
         modInputs.bsSlice = ns > 1 ? (float) ch.lastSlicePlayed() / (float) (ns - 1) : 0.0f;
+        modInputs.bsBreak = (float) ch.lastBreakPlayed() * 0.5f;
         bsStepShown.store (idx, std::memory_order_relaxed);
         bsPatternShown.store (bsPlaying, std::memory_order_relaxed);
     }
 }
 
+// a new pattern can bring its own break: it becomes the Active Break
+void MegaSynthProcessor::bsApplyPatternBreak (const tg::BreakData& d)
+{
+    const int pb = d.patBreak[juce::jlimit (0, 7, bsPlaying)];
+    if (pb > 0 && snap.i (P_bcActive) != pb) { setParamFromAudio (P_bcActive, (float) pb); snap.v[P_bcActive] = (float) pb; }
+}
+
 void MegaSynthProcessor::refreshBreakAnalysis (bool force)
 {
-    const auto* w = currentWave[kSlotBreak].load();
     const auto d = breakStore.get();
-    const int mode = juce::roundToInt (raw[P_bcSliceMode]->load()), bars = juce::roundToInt (raw[P_bcBars]->load());
-    const float sens = raw[P_bcSens]->load(), typed = raw[P_bcTempo]->load();
-    juce::String key;
-    key << juce::String::toHexString ((juce::pointer_sized_int) w) << "|" << mode << "|" << (mode == 0 ? juce::String (sens, 3) : juce::String()) << "|" << bars << "|" << typed;
-    if (mode == 5) for (int i = 0; i < d.nMarkers; ++i) key << "," << juce::String (d.markers[i], 6);
-    if (key == lastBreakKey && ! force) return;
-    lastBreakKey = key;
-    tg::BreakData tmp = d;
-    tg::breaks::analyse (w, mode, sens, bars, typed, tmp);
-    breakStore.setAnalysis ([&] (tg::BreakData& x) { tg::BreakStore::copyAnalysis (tmp, x); });
+    for (int k = 0; k < tg::BreakData::kBreaks; ++k)
+    {
+        const auto* w = currentWave[breakSlot (k)].load();
+        const auto bp = tg::breakParams (k);
+        const int mode = juce::roundToInt (raw[bp.sliceMode]->load()), bars = juce::roundToInt (raw[bp.bars]->load());
+        const float sens = raw[bp.sens]->load(), typed = raw[bp.tempo]->load();
+        juce::String key;
+        key << juce::String::toHexString ((juce::pointer_sized_int) w) << "|" << mode << "|" << (mode == 0 ? juce::String (sens, 3) : juce::String()) << "|" << bars << "|" << typed;
+        const auto& b = d.brk[k];
+        if (mode == 5) for (int i = 0; i < b.nMarkers; ++i) key << "," << juce::String (b.markers[i], 6);
+        if (key == lastBreakKey[k] && ! force) continue;
+        lastBreakKey[k] = key;
+        tg::BreakSlot tmp = b;
+        tg::breaks::analyse (w, mode, sens, bars, typed, tmp);
+        breakStore.setAnalysis ([&] (tg::BreakData& x) { x.brk[k].copyAnalysisFrom (tmp); });
+    }
+}
+
+bool MegaSynthProcessor::matchBreakLevels()
+{
+    const auto d = breakStore.get();
+    double sum = 0.0; int n = 0;
+    for (int k = 0; k < tg::BreakData::kBreaks; ++k) if (getSample (breakSlot (k)) != nullptr && d.brk[k].rms > 1.0e-5f) { sum += d.brk[k].rms; ++n; }
+    if (n < 2) return false;
+    const double target = sum / n;
+    for (int k = 0; k < tg::BreakData::kBreaks; ++k)
+    {
+        if (getSample (breakSlot (k)) == nullptr || d.brk[k].rms <= 1.0e-5f) continue;
+        auto* prm = params[(size_t) tg::breakParams (k).level];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->convertTo0to1 ((float) juce::jlimit (0.25, 2.0, target / d.brk[k].rms)));
+        prm->endChangeGesture();
+    }
+    pushHistory ("Match break levels");
+    return true;
 }
 
 void MegaSynthProcessor::setParamFromAudio (int index, float plain)
@@ -484,16 +536,30 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
             if (m.isNoteOn()) { setParamFromAudio (P_bsPattern, (float) (nn - pb)); snap.v[P_bsPattern] = (float) (nn - pb); }
             return;
         }
-        const int kb = juce::jlimit (0, 127, snap.i (P_bcKeyBase)), ns = engine.breaks().numSlices();
+        const int kb = juce::jlimit (0, 127, snap.i (P_bcKeyBase));
+        // the three Break Select keys just below the zone choose the Active Break
+        if (snap.v[P_bcSelKeys] > 0.5f && nn >= kb - 3 && nn < kb)
+        {
+            if (m.isNoteOn())
+            {
+                const int k = nn - (kb - 3);
+                if (snap.v[P_bcSelQuant] > 0.5f && fxBeatInc > 0.0) { breakSelPending = k; breakSelBeat = std::floor (fxBeatStart + fxBeatInc * midiPos + 1.0e-6) + 1.0; }
+                else { setParamFromAudio (P_bcActive, (float) (k + 1)); snap.v[P_bcActive] = (float) (k + 1); breakSelPending = -1; }
+            }
+            return;
+        }
+        const int active = juce::jlimit (0, 2, snap.i (P_bcActive) - 1);
+        const int ns = engine.breaks().numSlices (active);
+        if (m.isNoteOff() && nn >= kb && nn < kb + tg::BreakData::kSlices) engine.breaks().release (nn);   // (whichever break that key started)
         if (ns > 0 && nn >= kb && nn < kb + ns)
         {
             if (m.isNoteOn())
             {
-                tg::BreakChopper::Trigger t; t.slice = nn - kb; t.vel = m.getFloatVelocity(); t.fromKey = true;
+                tg::BreakChopper::Trigger t; t.slice = nn - kb; t.vel = m.getFloatVelocity(); t.fromKey = true; t.brk = active; t.key = nn;
                 engine.breaks().trigger (t, engine.breakSettings (snap));
                 modInputs.bsSlice = ns > 1 ? (float) t.slice / (float) (ns - 1) : 0.0f;
+                modInputs.bsBreak = (float) active * 0.5f;
             }
-            else engine.breaks().release (nn - kb);
             return;
         }
     }
@@ -685,15 +751,20 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     hostTempo = bpm;
     fillSnapshot (n);
 
-    const WaveSample* wavs[4] = { currentWave[0].load(), currentWave[1].load(), currentWave[2].load(), currentWave[3].load() };
+    const WaveSample* wavs[6];
+    for (int k = 0; k < 6; ++k) wavs[k] = currentWave[k].load();
     if (capStopReq.load()) { capRecording = false; capStopReq = false; capReady = true; }
     // ---- the Break Chopper: the newest slices and settings; a slice the editor wants auditioned
     const bool bcOn = snap.v[P_bcOn] > 0.5f;
     if (bcOn)
     {
-        engine.pullBreak (wavs[3]);
+        engine.pullBreak (wavs + kSlotBreak);
         const int au = breakAudition.exchange (-1);
-        if (au >= 0) { tg::BreakChopper::Trigger t; t.slice = au; t.vel = 0.9f; engine.breaks().trigger (t, engine.breakSettings (snap)); }
+        if (au >= 0)
+        {
+            tg::BreakChopper::Trigger t; t.slice = au % 100; t.brk = au / 100; t.vel = 0.9f;   // (break * 100 + slice)
+            engine.breaks().trigger (t, engine.breakSettings (snap));
+        }
     }
     else breakAudition.store (-1);
     if (grainLoadReady.load())
@@ -805,7 +876,8 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     // ---- the Break Sequencer: runs with the Break Chopper on and a break loaded, on the beat clock
     {
         // (in a DAW it plays while the song plays; with no transport at all, e.g. standalone, on the synth's own tempo)
-        const bool run = bcOn && snap.v[P_bsOn] > 0.5f && engine.breaks().numSlices() > 0 && fxBeatInc > 0.0 && (hostPlaying || ! hostTransport);
+        const int anySlices = engine.breaks().numSlices (0) + engine.breaks().numSlices (1) + engine.breaks().numSlices (2);
+        const bool run = bcOn && snap.v[P_bsOn] > 0.5f && anySlices > 0 && fxBeatInc > 0.0 && (hostPlaying || ! hostTransport);
         if (run && ! bsRunning) bsStart (beatAt (0));
         if (! run && bsRunning) { bsRunning = false; bsNumRolls = 0; bsStepShown.store (-1); }
         if (run)
@@ -839,6 +911,8 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         }
         if (bsRunning)
             next = std::min (next, pos + std::max (1, (int) std::ceil ((bsDue() - beatAt (pos)) / fxBeatInc - 1.0e-6)));
+        if (breakSelPending >= 0 && fxBeatInc > 0.0)
+            next = std::min (next, pos + std::max (1, (int) std::ceil ((breakSelBeat - beatAt (pos)) / fxBeatInc - 1.0e-6)));
 
         // render up to the next event, in chunks no larger than the prepared block size
         while (pos < next)
@@ -878,6 +952,12 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             ++it;
         }
         if ((arpOn && arp.active()) || arp.sounding()) arpTick (beatAt (pos));
+        if (breakSelPending >= 0 && beatAt (pos) >= breakSelBeat - 1.0e-9)
+        {
+            // a Break Select key on the beat
+            setParamFromAudio (P_bcActive, (float) (breakSelPending + 1)); snap.v[P_bcActive] = (float) (breakSelPending + 1);
+            breakSelPending = -1;
+        }
         if (bsRunning) bsTick (beatAt (pos));
         if (seqRunning && seqSamplesToNext <= 0.5)
         {
@@ -1065,7 +1145,7 @@ bool MegaSynthProcessor::loadSampleData (const juce::MemoryBlock& data, const ju
         if (it == waveKeep.end()) break;
         waveKeep.erase (it);
     }
-    if (slot == kSlotBreak) refreshBreakAnalysis (true);
+    if (slot >= kSlotBreak) refreshBreakAnalysis (true);
     return true;
 }
 
@@ -1077,7 +1157,7 @@ void MegaSynthProcessor::clearSample (int slot)
     waveData[slot].reset();
     waveShared[slot].reset();
     waveName[slot].clear();
-    if (slot == kSlotBreak) refreshBreakAnalysis (true);
+    if (slot >= kSlotBreak) refreshBreakAnalysis (true);
 }
 
 juce::String MegaSynthProcessor::getSampleStatus (int slot) const
@@ -1153,6 +1233,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 14) setPerfDefaultsForOldPatch();
     if (version < 15) setGranDefaultsForOldPatch();
     if (version < 16) setBreakDefaultsForOldPatch();
+    if (version < 17) setBreak3DefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1379,6 +1460,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("pfRoll")) setPerfDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("gsOn")) setGranDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bcOn")) setBreakDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("bcActive")) setBreak3DefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -1625,6 +1707,19 @@ void MegaSynthProcessor::setBreakDefaultsForOldPatch()
         prm->endChangeGesture();
     }
     breakStore.reset();
+}
+
+void MegaSynthProcessor::setBreak3DefaultsForOldPatch()
+{
+    // Before three breaks: Break 1 active at full level, and the Break Select keys off (in an older
+    // project those keys may be notes the synth plays)
+    for (int i = P_bcActive; i <= P_bsAmount; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (i == P_bcSelKeys ? 0.0f : prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
 }
 
 void MegaSynthProcessor::setCharDefaultsForOldPatch()
@@ -1905,6 +2000,8 @@ bool MegaSynthProcessor::loadFactoryPreset (int index)
     if (b.breakDemo >= 0)
     {
         loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, b.breakDemo), 44100.0), "Mega Break 170 (synthesised).wav", kSlotBreak);
+        if (b.breakDemo2 >= 0) loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 174.0, b.breakDemo2), 44100.0), "Mega Break 2-Step 174 (synthesised).wav", breakSlot (1));
+        if (b.breakDemo3 >= 0) loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 165.0, b.breakDemo3), 44100.0), "Mega Break Rollers 165 (synthesised).wav", breakSlot (2));
         refreshBreakAnalysis (true);
         if (b.breakEdit) breakStore.edit (b.breakEdit);
     }
@@ -1956,7 +2053,7 @@ bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
 {
     return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.lfoShapes == b.lfoShapes && a.arpStore == b.arpStore && a.breakStore == b.breakStore && a.msegs == b.msegs && a.scenes == b.scenes && a.macroNames == b.macroNames
         && a.sceneEdit == b.sceneEdit && a.patchName == b.patchName
-        && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1] && a.wave[2] == b.wave[2] && a.wave[3] == b.wave[3]
+        && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1] && a.wave[2] == b.wave[2] && a.wave[3] == b.wave[3] && a.wave[4] == b.wave[4] && a.wave[5] == b.wave[5]
         && a.params.isEquivalentTo (b.params);
 }
 

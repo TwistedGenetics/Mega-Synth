@@ -9,7 +9,7 @@ namespace tgui
 {
 
 // A knob for a value in the BreakStore (not a plug-in parameter): caption, knob, value text
-class StoreKnob : public juce::Component
+class StoreKnob : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     StoreKnob (const juce::String& cap, double lo, double hi, double step, juce::Colour c,
@@ -55,6 +55,12 @@ private:
     std::function<void (bool)> setter;
 };
 
+inline juce::Colour breakColourForGrid (int k)
+{
+    static const juce::Colour c[] = { juce::Colour (0xffff6b6b), juce::Colour (0xfffeca57), juce::Colour (0xff00d2d3) };
+    return c[juce::jlimit (0, 2, k)];
+}
+
 // The step grid: 16 or 32 cells with the slice number, velocity, accent, roll, reverse and tie
 class BreakStepGrid : public juce::Component, public juce::SettableTooltipClient
 {
@@ -70,7 +76,7 @@ public:
         const auto d = proc.breakStore.get();
         const int pat = editedPattern(), steps = numSteps();
         juce::String key; key << pat << "|" << steps << "|" << selected << "|" << proc.bsStepShown.load() << "|" << proc.bsPatternShown.load();
-        for (int i = 0; i < steps; ++i) { const auto& s = d.step[pat][i]; key << (s.on ? "1" : "0") << s.slice << s.roll << (s.accent ? "a" : "") << (s.reverse ? "r" : "") << (s.tie ? "t" : "") << juce::roundToInt (s.vel * 20.0f); }
+        for (int i = 0; i < steps; ++i) { const auto& s = d.step[pat][i]; key << (s.on ? "1" : "0") << s.slice << s.roll << (s.accent ? "a" : "") << (s.reverse ? "r" : "") << (s.tie ? "t" : "") << juce::roundToInt (s.vel * 20.0f) << "b" << s.brk << (s.layer ? "L" : "") << juce::roundToInt (s.pitch); }
         if (key != lastKey) { lastKey = key; data = d; repaint(); }
     }
     void paint (juce::Graphics& g) override
@@ -86,7 +92,8 @@ public:
             if (s.on || s.tie)
             {
                 const float h = (r.getHeight() - 22.0f) * juce::jlimit (0.0f, 1.0f, s.vel);
-                g.setColour ((s.accent ? col::supersaw : col::seq).withAlpha (s.tie ? 0.35f : 0.85f));
+                const juce::Colour bc = s.brk > 0 ? breakColourForGrid (s.brk - 1) : col::seq;
+                g.setColour ((s.accent ? bc.brighter (0.5f) : bc).withAlpha (s.tie ? 0.35f : 0.85f));
                 g.fillRoundedRectangle (juce::Rectangle<float> (r.getX() + 3, r.getBottom() - 3 - h, r.getWidth() - 6, h), 3.0f);
                 g.setColour (col::text);
                 g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
@@ -95,6 +102,8 @@ public:
                 if (s.roll > 1) marks << "x" << s.roll;
                 if (s.reverse) marks << " R";
                 if (s.pitch != 0.0f) marks << " " << (s.pitch > 0 ? "+" : "") << juce::roundToInt (s.pitch);
+                if (s.brk > 0) marks << " B" << s.brk;
+                if (s.layer) marks << " +" << s.layerBrk;
                 g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
                 g.drawText (marks, r.withTrimmedTop (16.0f).withHeight (13.0f), juce::Justification::centred);
             }
@@ -116,7 +125,9 @@ public:
             {
                 auto& s = d.step[pat][i];
                 s.on = ! s.on;
-                if (s.on && s.slice == 0 && i > 0 && d.nSlices > 0) s.slice = (i * d.nSlices / numSteps()) % d.nSlices;   // a sensible first slice
+                const int ab = juce::jlimit (0, 2, juce::roundToInt (proc.param (tg::P_bcActive)->convertFrom0to1 (proc.param (tg::P_bcActive)->getValue())) - 1);
+                const int ns = d.brk[s.brk > 0 ? s.brk - 1 : ab].nSlices;
+                if (s.on && s.slice == 0 && i > 0 && ns > 0) s.slice = (i * ns / numSteps()) % ns;   // a sensible first slice
             });
         }
         lastKey.clear(); refresh();
@@ -147,20 +158,32 @@ private:
     void timerCallback() override { if (tick && getParentComponent() != nullptr && getParentComponent()->isShowing()) tick(); }
 };
 
-inline juce::String breakInfoText (const MegaSynthProcessor& p)
+// each break's colour, everywhere it's shown (the page, the step grid, the keyboard)
+inline juce::Colour breakColour (int k) { return breakColourForGrid (k); }
+
+inline juce::String breakInfoText (const MegaSynthProcessor& p, int k)
 {
-    const int slot = MegaSynthProcessor::kSlotBreak;
-    if (p.getSample (slot) == nullptr) return "No break loaded";
-    const auto d = p.breakStore.get();
-    juce::String t = sampleInfoText (p, slot);
-    t << "\n" << d.nSlices << " slices   " << juce::String (d.origBpm, 1) << " BPM";
-    if (d.bars > 0) t << " (" << d.bars << (d.bars == 1 ? " bar)" : " bars)");
-    const double host = p.getHostTempoShown();
-    if (d.origBpm > 1.0 && host > 0.0)
+    const int slot = MegaSynthProcessor::breakSlot (k);
+    juce::String t;
+    if (p.getSample (slot) == nullptr) t = "Break " + juce::String (k + 1) + ": empty";
+    else
     {
-        const bool sync = p.param (tg::P_bcSync)->getValue() > 0.5f;
-        t << "   playing at " << juce::String (host, 1) << " BPM: " << (sync ? "x" + juce::String (host / d.origBpm, 3) : juce::String ("not synced (x1)"));
+        const auto d = p.breakStore.get();
+        const auto& b = d.brk[k];
+        t = sampleInfoText (p, slot);
+        t << "\n" << b.nSlices << " slices   " << juce::String (b.origBpm, 1) << " BPM";
+        if (b.bars > 0) t << " (" << b.bars << (b.bars == 1 ? " bar)" : " bars)");
+        const double host = p.getHostTempoShown();
+        if (b.origBpm > 1.0 && host > 0.0)
+        {
+            const bool sync = p.param (tg::P_bcSync)->getValue() > 0.5f;
+            t << "   at " << juce::String (host, 1) << " BPM: " << (sync ? "x" + juce::String (host / b.origBpm, 3) : juce::String ("not synced (x1)"));
+        }
     }
+    // the three together: a warning above 20 MB
+    double mb = 0.0;
+    for (int j = 0; j < 3; ++j) mb += (double) p.getSampleBytes (MegaSynthProcessor::breakSlot (j)) / (1024.0 * 1024.0);
+    if (mb > 20.0) t << "   (all three breaks add " << juce::String (mb, 1) << " MB to the project: saving and undo get slower)";
     return t;
 }
 

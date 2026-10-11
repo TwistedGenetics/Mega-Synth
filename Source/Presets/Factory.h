@@ -1,7 +1,7 @@
 #pragma once
 #include <functional>
 #include "../Break/BreakTools.h"
-// Factory presets: the 35 demo patches that ship inside the plugin.
+// Factory presets: the 36 demo patches that ship inside the plugin.
 //
 // Each preset is written as code against the parameter table (so it can never refer to a
 // control that doesn't exist) and is built on top of a clean starting point: every parameter
@@ -44,6 +44,7 @@ struct PresetBuilder
     std::vector<ArpStep> arpPattern;                          // steps that differ from "on, 100%"
     std::vector<int> learnedChord;                            // chord memory's Learned chord (empty: default)
     int breakDemo = -1;                                       // Break Chopper: load the synthesised demo break (variant)
+    int breakDemo2 = -1, breakDemo3 = -1;                     // ... and into Breaks 2 and 3
     std::function<void (BreakData&)> breakEdit;               // ... then set up its slices / patterns (after slicing)
 
     PresetBuilder()
@@ -790,16 +791,33 @@ namespace factory_detail
         b.set (P_bcStretch, 0).set (P_bcColour, 3).set (P_bcSync, 0).set (P_bsOn, 0).set (P_bcVelSens, 0.8f);
         b.breakEdit = [] (BreakData& d)
         {
-            for (int k = 0; k < BreakData::kSlices; ++k) d.slice[k].choke = 0;   // poly: hits ring over each other
-            d.slice[2].pitch = -2.0f; d.slice[6].reverse = true; d.slice[15].loop = true;
+            for (int k = 0; k < BreakData::kSlices; ++k) d.brk[0].slice[k].choke = 0;   // poly: hits ring over each other
+            d.brk[0].slice[2].pitch = -2.0f; d.brk[0].slice[6].reverse = true; d.brk[0].slice[15].loop = true;
         };
+    }
+    inline void breakFrankenstein (B& b)
+    {
+        breakBase (b);
+        b.set (P_bcStretch, 1).set (P_bcStretch2, 2).set (P_bcStretch3, 1).set (P_bcColour, 2).set (P_bcColour3, 1)
+         .set (P_bcSliceMode2, 3).set (P_bcBars2, 2).set (P_bcSliceMode3, 3).set (P_bcBars3, 2)
+         .set (P_bsOn, 1).set (P_bsChainOn, 1).set (P_bsAmount, 0.8f);
+        b.breakDemo2 = 1; b.breakDemo3 = 2;
+        b.breakEdit = [] (BreakData& d)
+        {
+            breaktools::original (d, 0, 32, 0);
+            breaktools::frankenbreak (d, 1, 32, 5, 0.8f, 0);
+            breaktools::jungle (d, 2, 32, 9, 0);
+            breaktools::frankenbreak (d, 3, 32, 12, 0.7f, 1);
+            BreakStore::setChain (d, "ABAD");
+        };
+        b.macro (0, "Break Pitch", { { P_bcPitch, 0.15f } });
     }
 }
 
-inline const std::array<FactoryPreset, 35>& factoryPresets()
+inline const std::array<FactoryPreset, 36>& factoryPresets()
 {
     using namespace factory_detail;
-    static const std::array<FactoryPreset, 35> list { {
+    static const std::array<FactoryPreset, 36> list { {
         { "Init Genome",           "Init",   "Two saws and a sub, with the eight macros wired to the main mutation engines.", initGenome },
         { "Reese Mutation",        "Bass",   "Detuned reese with slow wave-fold and filter drift plus Cell Instability.", reeseMutation },
         { "Sub Helix",             "Bass",   "Sine sub with an audio-rate FM blip at the front of each note.", subHelix },
@@ -835,6 +853,7 @@ inline const std::array<FactoryPreset, 35>& factoryPresets()
         { "Break Chop 170",        "Jungle / DnB", "Break: a synthesised 170 BPM break, Akai Cyclic to the song, S950. Patterns A-D on C0-D#0 (original, jungle edit, reversed, edit 2); slices on C1 up; sub on the other keys.", breakChop170 },
         { "Break Rollers",         "Jungle / DnB", "Break: the demo break, Clean stretch, SP-1200, swung, chained AABA (original, original, jungle edit, original) under a sine sub.", breakRollers },
         { "Break Keys",            "Jungle / DnB", "Break: the demo break's 16 slices on C1 up to play by hand, no sequencer, E-mu colour, velocity on; one slice reversed, one loops.", breakKeys },
+        { "Break Frankenstein",    "Jungle / DnB", "Break: three synthesised breaks (the demo break, a 2-step and a ghost-note roller) chopped together: chain A-B-A-D of the original and Frankenbreak edits. A0-B0 choose the break the keys play.", breakFrankenstein },
     } };
     return list;
 }

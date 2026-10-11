@@ -293,7 +293,7 @@ public:
     BreakChopper& breaks() { return chopper; }
     const BreakChopper& breaks() const { return chopper; }
     void setBreakStore (const BreakStore* st) { breakStore = st; }
-    void pullBreak (const WaveSample* w) { if (breakStore != nullptr) breakStore->pull (chopper.data(), breakSeen); chopper.setSample (w); }
+    void pullBreak (const WaveSample* const* w) { if (breakStore != nullptr) breakStore->pull (chopper.data(), breakSeen); for (int k = 0; k < BreakChopper::kBreaks; ++k) chopper.setSample (k, w[k]); }
     BreakChopper::Settings breakSettings (const Snapshot& s) const;   // the chopper's settings from the parameters
     std::atomic<double> breakPlayheadShown { -1.0 };
     std::atomic<int> breakSliceShown { -1 };

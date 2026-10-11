@@ -235,6 +235,38 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
 - **Factory content:** no copyrighted breaks are included.
   - The three new presets (**Break Chop 170**, **Break Rollers**, **Break Keys**) use a two-bar 170 BPM break synthesised by the plugin itself: a sine-sweep kick, a tone-and-noise snare with ghost notes, and noise hats, in an original pattern.
 
+### Three breaks
+
+- **Slots:** there are three break slots, Break 1, Break 2 and Break 3. Each has its own sample, slicing, markers, tempo, per-slice settings, stretch mode, colour, level and pan.
+- **Active Break:** the selector at the top of the page picks the Active Break. That's the break you're editing, and the break the keys play.
+  - The three small waveforms show all the breaks; click one to make it active.
+  - The Active Break is a parameter, so you can automate it, MIDI-learn it, or drive it from the Mod Matrix.
+- **One key zone:** all three breaks play from First Key up. The zone is as long as the Active Break's slice count and is tinted in its colour on the keyboard.
+  - The three **Break Select** keys just below the zone switch the Active Break: A0, A#0 and B0 when the zone starts at C1. They move with First Key.
+  - **On the Beat** makes the switch wait for the next beat.
+  - A key you're holding keeps playing the slice it started; letting go stops that slice, whichever break it came from.
+  - Older projects load with Break Select off, since those keys may be notes they play.
+- **The sequencer:**
+  - Each step plays the Active Break by default, or can be pinned to Break 1, 2 or 3. The grid shows a B1/B2/B3 tag and the break's colour.
+  - **Layer** stacks a second hit from another break on a step, with its own slice and level.
+  - **Pattern Break:** a pattern can make a break active when it starts, so pattern keys can change the break too.
+  - **Alternate** swaps the Active steps to another break every other bar, every other 2 bars, or every other 4 bars.
+- **New tools:**
+  - **Franken (Frankenbreak):** the Active Break's groove, with its kicks, snares and hats each taken from a different loaded break, matched kind for kind using the kick/snare/hat analysis. **Amount** sets how many hits are swapped; each press gives a new mix.
+  - **Swap:** the same pattern played with the Active Break's slices in the same places.
+  - **Match Levels** evens out the loaded breaks' loudness with their level faders.
+  - **Match Tempo** turns Tempo Sync on, so every break follows the song.
+- **Mixing:**
+  - All three share **one Break strip** on the Mixer (pan, mute, solo, meter, master level).
+  - Each break has its own level (0-200%) and pan on the Break Chopper page.
+  - The level faders are Mod Matrix destinations, and **Break Slot** (which break played last) is a Mod Matrix source.
+- **Size:** each break keeps the 30 s cap. The page warns when the three together add more than 20 MB to a project.
+- **CPU:** 8 slices spread over three breaks, each with a different stretch mode and colour, costs about 1.7% of one core.
+- **Factory content:**
+  - Two more breaks are synthesised by the plugin: a 2-step at 174 BPM and a ghost-note roller at 165 BPM.
+  - **Break Frankenstein** loads all three and chains the original with Frankenbreak edits.
+- **Key names:** the Break pages name keys the way Live does (MIDI 60 = C3). The on-screen keyboard has always labelled MIDI 60 as C4, so the zone that Live calls C1 shows as C2 there.
+
 ## Break Sequencer (Sequencers > Break Sequencer)
 
 - **Patterns:**
@@ -427,7 +459,7 @@ Each of the four LFOs has, on top of Wave, Rate and Depth:
 
 ## Factory presets
 
-The patch menu (and *Browse*) starts with 35 built-in presets (the last three play the Break Chopper), followed by your saved patches. The arrows step through both.
+The patch menu (and *Browse*) starts with 36 built-in presets (the last four play the Break Chopper), followed by your saved patches. The arrows step through both.
 Each preset is an ordinary patch - routes, macros (named), scenes, DNA steps and the effects rack included - so it can be
 edited, saved, mutated or bred. Loading one can be undone.
 

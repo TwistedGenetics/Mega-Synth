@@ -27,13 +27,16 @@ class BreakChopper
 {
 public:
     enum Stretch { Repitch, Cyclic, Clean };
+    static constexpr int kBreaks = BreakData::kBreaks;
+    struct PerBreak { int stretch = Cyclic, colour = 0; float level = 1.0f, pan = 0.0f; };
     struct Settings
     {
         float level = 0.8f, pitch = 0.0f, velSens = 0.5f, cycleMs = 40.0f, xfade = 0.35f;
-        int stretch = Cyclic, colour = 0, quality = 1;
+        int quality = 1;
         bool sync = true, thruFilter = false;
         double hostTempo = 120.0;
         float stripL = 1.0f, stripR = 1.0f;   // the Mixer strip (balance pan, mute / solo), already worked out
+        PerBreak b[kBreaks];                  // each break's stretch, colour, level and pan
     };
     static constexpr int kVoices = 8;
 
@@ -41,91 +44,118 @@ public:
     {
         sr = sampleRate;
         for (auto& b : bus) b.assign ((size_t) std::max (64, maxBlock) + 16, 0.0f);
-        colourFx.prepare (sr);
+        for (auto& b : sub) b.assign ((size_t) std::max (64, maxBlock) + 16, 0.0f);
+        for (auto& c : colourFx) c.prepare (sr);
         filter.reset();
         reset();
     }
     void reset()
     {
         for (auto& v : voices) v.on = false;
-        colourFx.reset(); filter.reset();
-        tail = 0; peakShown = 0.0f;
+        for (auto& c : colourFx) c.reset();
+        filter.reset();
+        for (auto& t : tail) t = 0;
+        peakShown = 0.0f;
     }
 
     // the analysis and per-slice settings to play from (the engine pulls a fresh copy when it changes)
     BreakData& data() { return d; }
-    void setSample (const WaveSample* w) { if (w != wav) { wav = w; for (auto& v : voices) v.on = false; } }
-    const WaveSample* sample() const { return wav; }
-    int numSlices() const { return wav != nullptr ? d.nSlices : 0; }
+    void setSample (int k, const WaveSample* w) { if (w != wav[k]) { wav[k] = w; for (auto& v : voices) if (v.brk == k) v.on = false; } }
+    const WaveSample* sample (int k = 0) const { return wav[k]; }
+    int numSlices (int k = 0) const { return wav[k] != nullptr ? d.brk[k].nSlices : 0; }
 
     // ---- control (audio thread, between renders)
-    struct Trigger { int slice = 0; float vel = 1.0f, pitch = 0.0f; bool reverse = false; bool fromKey = false; };
+    struct Trigger { int slice = 0; float vel = 1.0f, pitch = 0.0f; bool reverse = false; bool fromKey = false; int brk = 0, key = -1; float level = 1.0f; bool noChoke = false; };
     void trigger (const Trigger& t, const Settings& s)
     {
-        if (wav == nullptr || d.nSlices <= 0) return;
-        const int k = ((t.slice % d.nSlices) + d.nSlices) % d.nSlices;
-        const BreakSlice& sl = d.slice[k];
-        lastSlice = k;
-        // the choke group cuts the others off (fast fade)
-        if (sl.choke > 0) for (auto& v : voices) if (v.on && v.choke == sl.choke) v.stop (sr);
+        const int bi = std::clamp (t.brk, 0, kBreaks - 1);
+        const BreakSlot& bs = d.brk[bi];
+        if (wav[bi] == nullptr || bs.nSlices <= 0) return;
+        const int k = ((t.slice % bs.nSlices) + bs.nSlices) % bs.nSlices;
+        const BreakSlice& sl = bs.slice[k];
+        lastSlice = k; lastBreak = bi;
+        // the choke group cuts the others off (fast fade), whichever break they're from
+        if (sl.choke > 0 && ! t.noChoke) for (auto& v : voices) if (v.on && v.choke == sl.choke) v.stop (sr);
         Voice* slot = nullptr;
         for (auto& v : voices) if (! v.on) { slot = &v; break; }
         if (slot == nullptr) { slot = &voices[0]; for (auto& v : voices) if (v.age > slot->age) slot = &v; }
         Voice& v = *slot;
         v = Voice();
-        v.on = true; v.slice = k; v.choke = sl.choke; v.loop = sl.loop; v.held = t.fromKey;
-        const double a = d.start[k], b = d.start[k + 1], len = b - a;
+        v.on = true; v.slice = k; v.brk = bi; v.key = t.key; v.choke = sl.choke; v.loop = sl.loop; v.held = t.fromKey;
+        const double a = bs.start[k], b = bs.start[k + 1], len = b - a;
         v.s0 = a + sl.trimStart * len; v.s1 = a + sl.trimEnd * len;
         v.dir = (t.reverse != sl.reverse) ? -1 : 1;
         const float velG = 1.0f - s.velSens + s.velSens * juce::jlimit (0.0f, 1.25f, t.vel);
-        v.gain = sl.gain * velG;
+        v.gain = sl.gain * velG * t.level;
         const float pan = juce::jlimit (-1.0f, 1.0f, sl.pan);
         v.pl = std::min (1.0f, 1.0f - pan); v.pr = std::min (1.0f, 1.0f + pan);
         v.attack = std::max (0.0015f, sl.attack); v.decay = sl.decay;
         v.semis = s.pitch + sl.pitch + t.pitch;
         v.startHead();
     }
-    // a key let go: looping slices stop, one-shots play on
-    void release (int slice)
+    // a key let go: looping slices stop, one-shots play on (the slice that key started, whichever
+    // break is active now)
+    void release (int key)
     {
-        for (auto& v : voices) if (v.on && v.held && v.slice == slice) { v.held = false; if (v.loop) v.stop (sr); }
+        for (auto& v : voices) if (v.on && v.held && v.key == key) { v.held = false; if (v.loop) v.stop (sr); }
     }
     void stopAll() { for (auto& v : voices) if (v.on) v.stop (sr); }
     int lastSlicePlayed() const { return lastSlice; }
+    int lastBreakPlayed() const { return lastBreak; }
     int activeVoices() const { int n = 0; for (auto& v : voices) n += v.on ? 1 : 0; return n; }
-    double ratio (const Settings& s) const { return s.sync && d.origBpm > 1.0 ? s.hostTempo / d.origBpm : 1.0; }
+    double ratio (const Settings& s, int k = 0) const { return s.sync && d.brk[k].origBpm > 1.0 ? s.hostTempo / d.brk[k].origBpm : 1.0; }
 
     // Renders the slices and adds them (coloured, filtered, through the strip) into L / R.
     // snapV: the parameters (Filter 1 settings for "through synth filter")
     void process (float* L, float* R, int n, const Settings& s, const float* snapV)
     {
-        bool any = false;
-        for (auto& v : voices) any = any || v.on;
-        if (! any && tail <= 0) { peakShown = 0.0f; return; }
-        float* bl = bus[0].data(); float* br = bus[1].data();
+        bool anyVoice[kBreaks] {};
+        for (auto& v : voices) if (v.on) anyVoice[v.brk] = true;
+        bool runs[kBreaks] {}, any = false;
+        for (int k = 0; k < kBreaks; ++k) { runs[k] = anyVoice[k] || tail[k] > 0; any = any || runs[k]; }
+        if (! any) { peakShown = 0.0f; return; }
         if ((int) bus[0].size() < n) return;
-        std::fill (bl, bl + n, 0.0f); std::fill (br, br + n, 0.0f);
-        if (wav != nullptr && wav->length > 1)
+        float* bl = bus[0].data(); float* br = bus[1].data();
+        bool first = true;
+        for (int k = 0; k < kBreaks; ++k)
         {
-            const double tempoRatio = ratio (s);
-            const double fileRate = wav->sampleRate / sr;
-            for (auto& v : voices) if (v.on) renderVoice (v, bl, br, n, s, tempoRatio, fileRate);
+            if (! runs[k]) continue;
+            // each break on its own bus: its slices, its colour, its level and pan (break 1 alone, at
+            // full level and centred, goes straight through, exactly as before there were three)
+            float* xl = first ? bl : sub[0].data();
+            float* xr = first ? br : sub[1].data();
+            std::fill (xl, xl + n, 0.0f); std::fill (xr, xr + n, 0.0f);
+            const WaveSample* w = wav[k];
+            if (w != nullptr && w->length > 1)
+            {
+                const double tempoRatio = ratio (s, k);
+                const double fileRate = w->sampleRate / sr;
+                for (auto& v : voices) if (v.on && v.brk == k) renderVoice (v, xl, xr, n, s, tempoRatio, fileRate);
+            }
+            bool still = false;
+            for (auto& v : voices) still = still || (v.on && v.brk == k);
+            tail[k] = still ? (int) (0.3 * sr) : tail[k] - n;   // the colour and filter ring on a little after the last slice
+            const PerBreak& pb = s.b[k];
+            if (pb.colour > 0)
+            {
+                static const int model[] = { 0, 0, 1, 2, 3 };
+                colourV[P_smpModel] = (float) model[juce::jlimit (0, 4, pb.colour)];
+                colourV[P_smpBits] = 12.0f; colourV[P_smpRate] = pb.colour == 2 ? 22050.0f : 32000.0f; colourV[P_smpAA] = 1.0f;
+                colourV[P_smpCutoff] = pb.colour == 2 ? 11000.0f : 14000.0f; colourV[P_smpRes] = 0.1f;
+                colourV[P_smpNoise] = 0.05f; colourV[P_smpDrive] = 0.25f;
+                FxContext ctx; ctx.sr = sr; ctx.quality = s.quality;
+                colourFx[k].process (xl, xr, n, colourV.data(), ctx);
+            }
+            const float pan = juce::jlimit (-1.0f, 1.0f, pb.pan), lv = juce::jlimit (0.0f, 2.0f, pb.level);
+            if (pan != 0.0f || lv != 1.0f)
+            {
+                const float gl = lv * std::min (1.0f, 1.0f - pan), gr = lv * std::min (1.0f, 1.0f + pan);
+                for (int i = 0; i < n; ++i) { xl[i] *= gl; xr[i] *= gr; }
+            }
+            if (! first) for (int i = 0; i < n; ++i) { bl[i] += xl[i]; br[i] += xr[i]; }
+            first = false;
         }
-        any = false;
-        for (auto& v : voices) any = any || v.on;
-        tail = any ? (int) (0.3 * sr) : tail - n;   // the colour and filter ring on a little after the last slice
 
-        // ---- the sampler colour (the Vintage Sampler's models)
-        if (s.colour > 0)
-        {
-            static const int model[] = { 0, 0, 1, 2, 3 };
-            colourV[P_smpModel] = (float) model[juce::jlimit (0, 4, s.colour)];
-            colourV[P_smpBits] = 12.0f; colourV[P_smpRate] = s.colour == 2 ? 22050.0f : 32000.0f; colourV[P_smpAA] = 1.0f;
-            colourV[P_smpCutoff] = s.colour == 2 ? 11000.0f : 14000.0f; colourV[P_smpRes] = 0.1f;
-            colourV[P_smpNoise] = 0.05f; colourV[P_smpDrive] = 0.25f;
-            FxContext ctx; ctx.sr = sr; ctx.quality = s.quality;
-            colourFx.process (bl, br, n, colourV.data(), ctx);
-        }
         // ---- through the synth's Filter 1 (off by default)
         if (s.thruFilter && snapV != nullptr)
         {
@@ -162,19 +192,19 @@ public:
     float takePeak() { const float p = peakShown; peakShown = 0.0f; return p; }
 
     // for the display: the newest voice's position (fraction of the sample), -1 when none
-    double playheadFrac() const
+    double playheadFrac (int k = 0) const
     {
         const Voice* nv = nullptr;
-        for (auto& v : voices) if (v.on && (nv == nullptr || v.age < nv->age)) nv = &v;
-        if (nv == nullptr || wav == nullptr || wav->length < 2) return -1.0;
-        return juce::jlimit (0.0, 1.0, nv->progress / (double) wav->length);
+        for (auto& v : voices) if (v.on && v.brk == k && (nv == nullptr || v.age < nv->age)) nv = &v;
+        if (nv == nullptr || wav[k] == nullptr || wav[k]->length < 2) return -1.0;
+        return juce::jlimit (0.0, 1.0, nv->progress / (double) wav[k]->length);
     }
 
 private:
     struct Voice
     {
         bool on = false, held = false, loop = false;
-        int slice = 0, choke = 1, dir = 1;
+        int slice = 0, choke = 1, dir = 1, brk = 0, key = -1;
         double s0 = 0, s1 = 0;            // the (trimmed) slice in sample frames
         float gain = 1.0f, pl = 1.0f, pr = 1.0f, attack = 0.002f, decay = 0.0f, semis = 0.0f;
         int64_t age = 0;                  // output samples since the start
@@ -206,7 +236,8 @@ private:
 
     void renderVoice (Voice& v, float* bl, float* br, int n, const Settings& s, double tempoRatio, double fileRate)
     {
-        const WaveSample& w = *wav;
+        const WaveSample& w = *wav[v.brk];
+        const int stretch = s.b[v.brk].stretch;
         const double pitchRate = std::pow (2.0, v.semis / 12.0) * fileRate;   // how fast the heads read (pitch only)
         const double adv = tempoRatio * fileRate;                            // how fast the slice is gone through
         const double repRate = pitchRate * tempoRatio;                       // repitch: both together
@@ -220,7 +251,7 @@ private:
         for (int i = 0; i < n && v.on; ++i)
         {
             // where the slice should be by now, and how much is left
-            const double rate = s.stretch == Repitch ? repRate : adv;
+            const double rate = stretch == Repitch ? repRate : adv;
             double remain = v.dir > 0 ? (v.s1 - v.progress) / rate : (v.progress - v.s0) / rate;
             if (remain <= 0.0)
             {
@@ -229,7 +260,7 @@ private:
             }
             if (! v.loop && remain < fadeOut) v.stop (sr);   // a quick fade at the end of the slice
             float yl = 0.0f, yr = 0.0f;
-            switch (s.stretch)
+            switch (stretch)
             {
                 case Repitch:
                 {
@@ -331,15 +362,15 @@ private:
     }
 
     double sr = 48000.0;
-    const WaveSample* wav = nullptr;
+    const WaveSample* wav[kBreaks] {};
     BreakData d;
     std::array<Voice, kVoices> voices {};
-    std::vector<float> bus[2];
-    VintageSampler colourFx;
+    std::vector<float> bus[2], sub[2];
+    VintageSampler colourFx[kBreaks];
     std::array<float, P_COUNT> colourV {};
     FilterUnit filter;
     int fModel = -1, fType = -1, fSlope = -1, fChar = -1;
-    int tail = 0, lastSlice = 0;
+    int tail[kBreaks] {}, lastSlice = 0, lastBreak = 0;
     float peakShown = 0.0f;
 };
 

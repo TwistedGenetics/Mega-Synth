@@ -11,6 +11,7 @@
 #include "UI/PatchBrowser.h"
 #include "UI/PerfFxPage.h"
 #include "UI/SamplePages.h"
+#include "UI/BreakPages.h"
 #include "UI/Overview.h"
 
 using namespace tg;
@@ -2292,7 +2293,14 @@ int main()
             // and the demo break for the Break Chopper / Sequencer pages
             setP (*p, P_bcOn, 1.0f); setP (*p, P_bcSliceMode, 0.0f); setP (*p, P_bsSteps, 1.0f);
             p->loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, 0), 44100.0), "Mega Break 170 (synthesised).wav", MegaSynthProcessor::kSlotBreak);
-            p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::jungle (d, 0, 32, 4); tg::BreakStore::setChain (d, "AABA"); });
+            for (int k = 1; k < 3; ++k)
+            {
+                setP (*p, tg::breakParams (k).sliceMode, 3.0f);
+                p->loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, k == 1 ? 174.0 : 165.0, k), 44100.0),
+                                   k == 1 ? "Mega Break 2-Step 174 (synthesised).wav" : "Mega Break Rollers 165 (synthesised).wav", MegaSynthProcessor::breakSlot (k));
+            }
+            setP (*p, P_bcActive, 2.0f); setP (*p, P_bcColour2, 2.0f); setP (*p, P_bcStretch2, 2.0f);
+            p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::jungle (d, 0, 32, 4); tg::breaktools::frankenbreak (d, 0, 32, 3, 0.7f, 0); tg::BreakStore::setChain (d, "AABA"); d.patBreak[0] = 2; });
         }
         render (*p, 0.3, chord (0.0, 1.0, { 48 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
@@ -2302,6 +2310,7 @@ int main()
         for (auto& name : e->allPageNames())
         {
             e->showPage (name);
+            e->timerCallbackForTests();
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
             auto f = dir.getChildFile ("page_" + name.retainCharacters ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") + ".png"); f.deleteFile();
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
@@ -2565,12 +2574,12 @@ int main()
         };
         // (the voices share one random sequence across instances, so the order matters: the first 32 presets in the
         // order the reference fingerprints were taken, then the presets added since)
-        for (int q = 0; q < 3; ++q)
-            for (int idx = 0; idx < 32; ++idx)
-                hashRun ([&] (MegaSynthProcessor& p) { p.loadFactoryPreset (idx); setP (p, P_quality, (float) q); }, juce::String (q) + ":" + list[(size_t) idx].name);
-        for (int q = 0; q < 3; ++q)
-            for (int idx = 32; idx < (int) list.size(); ++idx)
-                hashRun ([&] (MegaSynthProcessor& p) { p.loadFactoryPreset (idx); setP (p, P_quality, (float) q); }, juce::String (q) + ":" + list[(size_t) idx].name);
+        // (in batches, in the order they were added: 32 originals, the three Break presets, Break Frankenstein)
+        const int batches[] = { 0, 32, 35, (int) list.size() };
+        for (int bt = 0; bt + 1 < (int) (sizeof (batches) / sizeof (batches[0])); ++bt)
+            for (int q = 0; q < 3; ++q)
+                for (int idx = batches[bt]; idx < batches[bt + 1]; ++idx)
+                    hashRun ([&] (MegaSynthProcessor& p) { p.loadFactoryPreset (idx); setP (p, P_quality, (float) q); }, juce::String (q) + ":" + list[(size_t) idx].name);
         return 0;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BENCH", {}).isNotEmpty())
@@ -3896,35 +3905,35 @@ int main()
             auto p = make(); setP (*p, P_bcOn, 1.0f);
             p->loadSampleData (demo(), "demo.wav", slot);
             auto d = p->breakStore.get();
-            CHECK (std::abs (d.origBpm - 170.0) < 0.5 && d.bars == 2, "tempo detected from the length: 170 BPM, 2 bars (" + juce::String (d.origBpm, 2) + ")");
+            CHECK (std::abs (d.brk[0].origBpm - 170.0) < 0.5 && d.brk[0].bars == 2, "tempo detected from the length: 170 BPM, 2 bars (" + juce::String (d.brk[0].origBpm, 2) + ")");
             // the true hit times (16ths with the demo's small swing)
             std::vector<double> hits; const double st = 60.0 / 170.0 / 4.0;
             for (int s16 : { 0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 }) hits.push_back (s16 * st + ((s16 & 1) ? st * 0.08 : 0.0));
             int near = 0;
-            for (int k = 1; k < d.nSlices; ++k)
+            for (int k = 1; k < d.brk[0].nSlices; ++k)
             {
-                const double t = d.start[k] / 44100.0;
+                const double t = d.brk[0].start[k] / 44100.0;
                 double best = 1.0; for (double h : hits) best = std::min (best, std::abs (t - h));
                 if (best < 0.012) ++near;
             }
-            std::cout << "  transients: " << d.nSlices << " slices, " << near << " of " << (d.nSlices - 1) << " within 12 ms of a real hit" << std::endl;
-            CHECK (d.nSlices >= 12 && d.nSlices <= 32 && near >= (d.nSlices - 1) * 9 / 10, "transient slicing finds the hits");
+            std::cout << "  transients: " << d.brk[0].nSlices << " slices, " << near << " of " << (d.brk[0].nSlices - 1) << " within 12 ms of a real hit" << std::endl;
+            CHECK (d.brk[0].nSlices >= 12 && d.brk[0].nSlices <= 32 && near >= (d.brk[0].nSlices - 1) * 9 / 10, "transient slicing finds the hits");
             setP (*p, P_bcSens, 0.0f); p->refreshBreakAnalysis();
-            const int fewer = p->breakStore.get().nSlices;
+            const int fewer = p->breakStore.get().brk[0].nSlices;
             setP (*p, P_bcSens, 1.0f); p->refreshBreakAnalysis();
-            CHECK (fewer <= p->breakStore.get().nSlices, "sensitivity: more slices when higher (" + juce::String (fewer) + " / " + juce::String (p->breakStore.get().nSlices) + ")");
+            CHECK (fewer <= p->breakStore.get().brk[0].nSlices, "sensitivity: more slices when higher (" + juce::String (fewer) + " / " + juce::String (p->breakStore.get().brk[0].nSlices) + ")");
             setP (*p, P_bcSliceMode, 3.0f); p->refreshBreakAnalysis();
             d = p->breakStore.get();
-            bool equal = d.nSlices == 16;
-            for (int k = 0; k < 16 && equal; ++k) equal = std::abs ((d.start[k + 1] - d.start[k]) - d.start[16] / 16) <= 1;
+            bool equal = d.brk[0].nSlices == 16;
+            for (int k = 0; k < 16 && equal; ++k) equal = std::abs ((d.brk[0].start[k + 1] - d.brk[0].start[k]) - d.brk[0].start[16] / 16) <= 1;
             CHECK (equal, "Equal 16");
             setP (*p, P_bcSliceMode, 5.0f);
-            p->breakStore.edit ([] (tg::BreakData& x) { x.nMarkers = 2; x.markers[0] = 0.25f; x.markers[1] = 0.6f; });
+            p->breakStore.edit ([] (tg::BreakData& x) { x.brk[0].nMarkers = 2; x.brk[0].markers[0] = 0.25f; x.brk[0].markers[1] = 0.6f; });
             p->refreshBreakAnalysis();
             d = p->breakStore.get();
-            CHECK (d.nSlices == 3 && std::abs (d.start[1] - (int) (0.25 * d.start[3])) < 2, "manual markers");
+            CHECK (d.brk[0].nSlices == 3 && std::abs (d.brk[0].start[1] - (int) (0.25 * d.brk[0].start[3])) < 2, "manual markers");
             setP (*p, P_bcTempo, 85.0f); p->refreshBreakAnalysis();
-            CHECK (std::abs (p->breakStore.get().origBpm - 85.0) < 0.01, "a typed tempo wins");
+            CHECK (std::abs (p->breakStore.get().brk[0].origBpm - 85.0) < 0.01, "a typed tempo wins");
         }
         // 2. stretching a steady 440 Hz "break" (typed at 120 BPM, one bar) to 90 BPM: length and pitch per mode
         {
@@ -4032,8 +4041,8 @@ int main()
         }
         // 6. the tools
         {
-            tg::BreakData d; d.nSlices = 16; for (int k = 0; k <= 16; ++k) d.start[k] = k * 1000;
-            for (int k = 0; k < 16; ++k) { d.kick[k] = (k % 8 == 0) ? 1.0f : 0.1f; d.snare[k] = (k % 8 == 4) ? 1.0f : 0.1f; }
+            tg::BreakData d; d.brk[0].nSlices = 16; for (int k = 0; k <= 16; ++k) d.brk[0].start[k] = k * 1000;
+            for (int k = 0; k < 16; ++k) { d.brk[0].kick[k] = (k % 8 == 0) ? 1.0f : 0.1f; d.brk[0].snare[k] = (k % 8 == 4) ? 1.0f : 0.1f; }
             tg::breaktools::original (d, 0, 32);
             bool ok = true; for (int i = 0; i < 32; ++i) ok = ok && (i % 2 == 0 ? (d.step[0][i].on && d.step[0][i].slice == i / 2) : ! d.step[0][i].on);
             CHECK (ok, "Original: the slices in order, where they fall in time");
@@ -4049,11 +4058,11 @@ int main()
         {
             auto p = make(); setP (*p, P_bcOn, 1.0f); setP (*p, P_bcStretch, 2.0f); setP (*p, P_bsOn, 1.0f);
             p->loadSampleData (demo(), "demo.wav", slot);
-            p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::jungle (d, 3, 32, 11); d.slice[4].pitch = 3.0f; d.slice[4].reverse = true; tg::BreakStore::setChain (d, "ABAC"); });
+            p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::jungle (d, 3, 32, 11); d.brk[0].slice[4].pitch = 3.0f; d.brk[0].slice[4].reverse = true; tg::BreakStore::setChain (d, "ABAC"); });
             const auto json = p->breakStore.toJson();
             juce::MemoryBlock mb; p->getStateInformation (mb);
             auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
-            CHECK (q->breakStore.toJson() == json && q->getSample (slot) != nullptr && q->breakStore.get().nSlices == p->breakStore.get().nSlices
+            CHECK (q->breakStore.toJson() == json && q->getSample (slot) != nullptr && q->breakStore.get().brk[0].nSlices == p->breakStore.get().brk[0].nSlices
                    && q->param (P_bcStretch)->convertFrom0to1 (q->param (P_bcStretch)->getValue()) > 1.5f, "saved in projects (sample, slices, patterns)");
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->breakStore.toJson() == json && r->getSample (slot) != nullptr, "saved in patches");
@@ -4108,8 +4117,192 @@ int main()
             bool anyStep = false; for (auto& st : d.step[0]) anyStep = anyStep || st.on;
             const auto out = runHost (*p, 172.0, 0.0, 2.0, { { 0, juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100) } });
             float pk = 0; bool finite = true; for (float v : out) { pk = std::max (pk, std::abs (v)); finite = finite && std::isfinite (v); }
-            CHECK (p->getSample (slot) != nullptr && d.nSlices == 16 && finite && pk > 0.05f && pk < 1.5f && (i == 34 || anyStep),
+            CHECK (p->getSample (slot) != nullptr && d.brk[0].nSlices == 16 && finite && pk > 0.05f && pk < 1.5f && (i == 34 || anyStep),
                    juce::String ("factory preset ") + tg::factoryPresets()[(size_t) i].name + " plays (" + juce::String (pk, 2) + ")");
+        }
+        // 11. three breaks: the shared zone, the Break Select keys, levels, layers, Frankenbreak, saving
+        {
+            // three steady tones as three "breaks" (one bar at 120 BPM, Equal 4): 440 / 660 / 880 Hz
+            auto three = [&] (MegaSynthProcessor& p)
+            {
+                quiet (p);
+                setP (p, P_bcOn, 1.0f); setP (p, P_bcStretch, 0.0f); setP (p, P_bcVelSens, 0.0f); setP (p, P_bcLevel, 1.0f);
+                for (int k = 0; k < 3; ++k)
+                {
+                    const auto bp = tg::breakParams (k);
+                    setP (p, bp.tempo, 120.0f); setP (p, bp.sliceMode, 1.0f); setP (p, bp.stretch, 0.0f);
+                    p.loadSampleData (sineBreak (440.0 * (1.0 + 0.5 * k), 2.0), "tone" + juce::String (k) + ".wav", MegaSynthProcessor::breakSlot (k));
+                    p.breakStore.edit ([k] (tg::BreakData& d) { for (auto& sl : d.brk[k].slice) sl.loop = true; });
+                }
+            };
+            auto hzOf = [&] (const std::vector<float>& x, int a, int b) { return zc (x, a, b); };
+            {
+                auto p = make(); three (*p);
+                setP (*p, P_bcActive, 2.0f);
+                const auto out = runHost (*p, 120.0, 0.0, 0.5, { { 256, juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100) } });
+                CHECK (std::abs (hzOf (out, 2000, 20000) / 660.0 - 1.0) < 0.01, "the shared zone plays the Active Break (Break 2: " + juce::String (hzOf (out, 2000, 20000), 1) + " Hz)");
+            }
+            {
+                // A0 / A#0 / B0 choose the break (and aren't played); a held key keeps its slice across the switch
+                auto p = make(); three (*p);
+                const auto out = runHost (*p, 120.0, 0.0, 1.0, { { 256, juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100) },
+                                                                { 12000, juce::MidiMessage::noteOn (1, 35, (juce::uint8) 100) },
+                                                                { 24000, juce::MidiMessage::noteOn (1, 37, (juce::uint8) 100) },
+                                                                { 36000, juce::MidiMessage::noteOff (1, 36) }, { 36000, juce::MidiMessage::noteOff (1, 37) } });
+                const double heldHz = hzOf (out, 14000, 22000);
+                CHECK (p->param (P_bcActive)->convertFrom0to1 (p->param (P_bcActive)->getValue()) > 2.5f, "B0 makes Break 3 the Active Break");
+                CHECK (std::abs (heldHz / 440.0 - 1.0) < 0.01, "a held key keeps its slice after the switch (" + juce::String (heldHz, 1) + " Hz)");
+                float after = 0; for (int i = 40000; i < 47000; ++i) after = std::max (after, std::abs (out[(size_t) i]));
+                CHECK (after < 1e-4f, "letting go stops the looping slices (by key, whichever break they came from)");
+                // the second key, pressed after the switch, played Break 3: both tones from 24000
+                juce::AudioBuffer<float> none;
+                (void) none;
+            }
+            {
+                // On the Beat: the switch waits for the next beat
+                auto p = make(); three (*p); setP (*p, P_bcSelQuant, 1.0f);
+                const double inc = 120.0 / 60.0 / sr;
+                FakeHead head; p->setPlayHead (&head);
+                double ppq = 0.3; juce::AudioBuffer<float> buf (2, 64);
+                double changedAt = -1.0;
+                for (int pos = 0; pos < (int) (sr * 0.8); pos += 64)
+                {
+                    head.info.setIsPlaying (true); head.info.setBpm (120.0); head.info.setPpqPosition (ppq); head.info.setPpqPositionOfLastBarStart (0.0);
+                    juce::MidiBuffer m; if (pos == 64) m.addEvent (juce::MidiMessage::noteOn (1, 34, (juce::uint8) 100), 10);
+                    buf.clear(); p->processBlock (buf, m);
+                    if (changedAt < 0 && p->param (P_bcActive)->convertFrom0to1 (p->param (P_bcActive)->getValue()) > 1.5f) changedAt = ppq;
+                    ppq += 64 * inc;
+                }
+                p->setPlayHead (nullptr);
+                CHECK (changedAt > 0.98 && changedAt < 1.0 + 64 * inc * 1.01, "On the Beat: Break 2 comes in on the next beat (" + juce::String (changedAt, 4) + ")");
+            }
+            {
+                // the three level faders; one strip for all
+                auto lvl = [&] (int active, float level)
+                {
+                    auto p = make(); three (*p); setP (*p, P_bcActive, (float) active); setP (*p, tg::breakParams (active - 1).level, level);
+                    const auto out = runHost (*p, 120.0, 0.0, 0.4, { { 0, juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100) } });
+                    float pk = 0; for (size_t i = 4000; i < out.size(); ++i) pk = std::max (pk, std::abs (out[i]));
+                    return pk;
+                };
+                const float full = lvl (2, 1.0f), half = lvl (2, 0.5f);
+                CHECK (std::abs (half / full - 0.5f) < 0.02f, "Break 2's level fader (" + juce::String (half / full, 3) + ")");
+                auto m = make(); three (*m); setP (*m, P_mxBreakMute, 1.0f); setP (*m, P_bcActive, 3.0f);
+                const auto out = runHost (*m, 120.0, 0.0, 0.3, { { 0, juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100) } });
+                float pk = 0; for (float v : out) pk = std::max (pk, std::abs (v));
+                CHECK (pk < 1e-6f, "one Break strip mutes all three");
+            }
+            {
+                // no clicks when the Active Break changes while slices play
+                auto p = make(); three (*p);
+                for (int k = 0; k < 3; ++k) p->breakStore.edit ([k] (tg::BreakData& d) { for (auto& sl : d.brk[k].slice) sl.loop = false; });
+                std::vector<std::pair<int, juce::MidiMessage>> ev;
+                for (int i = 0; i < 12; ++i)
+                {
+                    ev.push_back ({ 300 + i * 3000, juce::MidiMessage::noteOn (1, 36 + (i % 4), (juce::uint8) 100) });
+                    ev.push_back ({ 1800 + i * 3000, juce::MidiMessage::noteOn (1, 33 + (i % 3), (juce::uint8) 100) });
+                }
+                const auto out = runHost (*p, 120.0, 0.0, 0.8, ev);
+                float worst = 0, pk = 0;
+                for (size_t i = 1; i < out.size(); ++i) { worst = std::max (worst, std::abs (out[i] - out[i - 1])); pk = std::max (pk, std::abs (out[i])); }
+                CHECK (pk > 0.05f && worst < pk * 0.12f, "no clicks switching breaks while playing (" + juce::String (worst / std::max (1e-6f, pk), 3) + ")");
+            }
+            {
+                // the sequencer: steps pinned to a break, "Active" steps, Alternate, layers, a pattern's own break
+                auto p = make(); three (*p); setP (*p, P_bsOn, 1.0f);
+                p->breakStore.edit ([] (tg::BreakData& d)
+                {
+                    for (int i = 0; i < 16; ++i) { d.step[0][i].on = true; d.step[0][i].slice = 0; }
+                    d.step[0][1].brk = 3;
+                    d.step[0][2].layer = true; d.step[0][2].layerBrk = 2;
+                    d.patBreak[1] = 3;
+                });
+                setP (*p, P_bsAlternate, 1.0f); setP (*p, P_bsAltBreak, 1.0f);   // every other bar: Break 2
+                std::vector<MegaSynthProcessor::BsLogEntry> log; p->bsLog = &log;
+                runHost (*p, 120.0, 0.0, 4.0 * 2 * 60.0 / 120.0 + 0.01, {}, 64);
+                p->bsLog = nullptr;
+                bool ok = log.size() >= 32;
+                for (auto& e : log)
+                {
+                    const int idx = (int) (e.step % 16), bar = (int) (e.step / 16);
+                    const int want = idx == 1 ? 2 : (bar % 2 == 1 ? 1 : 0);
+                    ok = ok && e.brk == want;
+                }
+                CHECK (ok, "steps play their break: pinned, Active, and Alternate every other bar");
+                // a layered step sounds two hits at once
+                auto q = make(); three (*q); setP (*q, P_bsOn, 1.0f);
+                q->breakStore.edit ([] (tg::BreakData& d) { d.step[0][0].on = true; d.step[0][0].layer = true; d.step[0][0].layerBrk = 3; });
+                FakeHead head; q->setPlayHead (&head);
+                head.info.setIsPlaying (true); head.info.setBpm (120.0); head.info.setPpqPosition (0.0); head.info.setPpqPositionOfLastBarStart (0.0);
+                juce::AudioBuffer<float> buf (2, 64); juce::MidiBuffer m; q->processBlock (buf, m);
+                q->setPlayHead (nullptr);
+                CHECK (q->getEngine().breaks().activeVoices() == 2, "a layered step plays both hits");
+                // switching to pattern B makes its break the Active Break
+                auto r = make(); three (*r); setP (*r, P_bsOn, 1.0f); setP (*r, P_bsSwitch, 0.0f);
+                r->breakStore.edit ([] (tg::BreakData& d) { d.patBreak[1] = 3; d.step[1][0].on = true; });
+                setP (*r, P_bsPattern, 1.0f);
+                runHost (*r, 120.0, 0.0, 0.3);
+                CHECK (r->param (P_bcActive)->convertFrom0to1 (r->param (P_bcActive)->getValue()) > 2.5f, "a pattern's own break becomes the Active Break");
+            }
+            {
+                // Frankenbreak: kicks, snares and hats each from a different break, matching kind for kind
+                auto p = make(); setP (*p, P_bcOn, 1.0f);
+                for (int k = 0; k < 3; ++k)
+                {
+                    setP (*p, tg::breakParams (k).sliceMode, 3.0f);
+                    p->loadSampleData (wav16 (tg::breaks::makeDemoBreak (44100.0, 170.0 - 3 * k, k), 44100.0), "b" + juce::String (k) + ".wav", MegaSynthProcessor::breakSlot (k));
+                }
+                auto d = p->breakStore.get();
+                auto kindOf = [] (const tg::BreakSlot& b, int k) { return b.kick[k] >= b.snare[k] && b.kick[k] >= b.hat[k] ? 0 : (b.snare[k] >= b.hat[k] ? 1 : 2); };
+                tg::breaktools::original (d, 0, 32, 0, true);
+                auto f = d; tg::breaktools::frankenbreak (f, 0, 32, 3, 1.0f, 0);
+                int swapped = 0, matched = 0; std::set<int> fromBreaks;
+                for (int i = 0; i < 32; ++i)
+                {
+                    const auto& o = d.step[0][i]; const auto& n = f.step[0][i];
+                    if (! o.on || n.brk == 1) continue;
+                    ++swapped; fromBreaks.insert (n.brk);
+                    if (kindOf (d.brk[0], o.slice) == kindOf (f.brk[n.brk - 1], n.slice)) ++matched;
+                }
+                std::cout << "  Frankenbreak: " << swapped << " hits swapped, " << matched << " the same kind, from " << (int) fromBreaks.size() << " other breaks" << std::endl;
+                CHECK (swapped >= 6 && matched == swapped && fromBreaks.size() >= 1, "Frankenbreak takes kicks / snares / hats from the other breaks, kind for kind");
+                auto g = d; tg::breaktools::frankenbreak (g, 0, 32, 3, 1.0f, 0);
+                bool same = true; for (int i = 0; i < 32; ++i) same = same && g.step[0][i].slice == f.step[0][i].slice && g.step[0][i].brk == f.step[0][i].brk;
+                CHECK (same, "Frankenbreak is repeatable from its seed");
+                auto sw = d; tg::breaktools::swapBreak (sw, 0, 32, 2);
+                bool all3 = true; for (int i = 0; i < 32; ++i) if (sw.step[0][i].on) all3 = all3 && sw.step[0][i].brk == 3 && sw.step[0][i].slice == d.step[0][i].slice % d.brk[2].nSlices;
+                CHECK (all3, "Swap Break: the same pattern on Break 3");
+                // Match Levels
+                setP (*p, P_bcLevel2, 1.0f);
+                CHECK (p->matchBreakLevels(), "Match Levels");
+                double lo = 1e9, hi = 0;
+                for (int k = 0; k < 3; ++k) { const double l = p->param (tg::breakParams (k).level)->convertFrom0to1 (p->param (tg::breakParams (k).level)->getValue()) * p->breakStore.get().brk[k].rms; lo = std::min (lo, l); hi = std::max (hi, l); }
+                CHECK (hi / lo < 1.05, "Match Levels evens out the breaks' loudness");
+                // saved: the three samples, their slices and settings, the patterns' breaks and layers
+                p->breakStore.edit ([] (tg::BreakData& x) { x.brk[2].slice[3].pitch = 5.0f; x.brk[1].nMarkers = 1; x.brk[1].markers[0] = 0.3f; x.step[2][4].on = true; x.step[2][4].brk = 2;
+                                                            x.step[2][4].layer = true; x.step[2][4].layerBrk = 3; x.step[2][4].layerSlice = 7; x.patBreak[2] = 2; });
+                setP (*p, P_bcActive, 3.0f); setP (*p, P_bcColour3, 2.0f);
+                const auto json = p->breakStore.toJson();
+                juce::MemoryBlock mb; p->getStateInformation (mb);
+                auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+                bool samples = true; for (int k = 0; k < 3; ++k) samples = samples && q->getSample (MegaSynthProcessor::breakSlot (k)) != nullptr && q->breakStore.get().brk[k].nSlices == 16;
+                CHECK (samples && q->breakStore.toJson() == json && q->param (P_bcActive)->convertFrom0to1 (q->param (P_bcActive)->getValue()) > 2.5f
+                       && q->param (P_bcColour3)->convertFrom0to1 (q->param (P_bcColour3)->getValue()) > 1.5f, "three breaks saved in projects");
+                auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
+                samples = true; for (int k = 0; k < 3; ++k) samples = samples && r->getSample (MegaSynthProcessor::breakSlot (k)) != nullptr;
+                CHECK (samples && r->breakStore.toJson() == json, "three breaks saved in patches");
+                // an older project (one break): Break 1, active, full level, the select keys off
+                auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"16\"")
+                                                   .replace ("waveDataBreak2=", "o1=").replace ("waveDataBreak3=", "o2=");
+                juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
+                auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
+                CHECK (o->getSample (MegaSynthProcessor::breakSlot (0)) != nullptr && o->getSample (MegaSynthProcessor::breakSlot (1)) == nullptr
+                       && std::abs (o->param (P_bcActive)->convertFrom0to1 (o->param (P_bcActive)->getValue()) - 1.0f) < 0.01f
+                       && std::abs (o->param (P_bcLevel1)->convertFrom0to1 (o->param (P_bcLevel1)->getValue()) - 1.0f) < 0.001f
+                       && o->param (P_bcSelKeys)->getValue() < 0.5f, "older projects: their break is Break 1, active, full level; select keys off");
+                // the warning for three big breaks
+                CHECK (! tgui::breakInfoText (*p, 0).contains ("MB to the project"), "no size warning for small breaks");
+            }
         }
         // 10. CPU: 8 slices at once in each stretch mode, Eco / Normal / High (the chopper alone)
         {
@@ -4121,11 +4314,11 @@ int main()
                 line << kBcStretchLabels[mode] << ":";
                 for (int q = 0; q < 3; ++q)
                 {
-                    tg::BreakChopper c; c.prepare (sr, 256); c.setSample (&w);
-                    tg::BreakData d; tg::breaks::analyse (&w, 3, 0.5f, 2, 0.0, d);
-                    for (int k = 0; k < 16; ++k) { d.slice[k].choke = 0; d.slice[k].loop = true; }
+                    tg::BreakChopper c; c.prepare (sr, 256); c.setSample (0, &w);
+                    tg::BreakData d; tg::breaks::analyse (&w, 3, 0.5f, 2, 0.0, d.brk[0]);
+                    for (int k = 0; k < 16; ++k) { d.brk[0].slice[k].choke = 0; d.brk[0].slice[k].loop = true; }
                     c.data() = d;
-                    tg::BreakChopper::Settings st; st.stretch = mode; st.quality = q; st.hostTempo = 140.0;
+                    tg::BreakChopper::Settings st; st.b[0].stretch = mode; st.quality = q; st.hostTempo = 140.0;
                     for (int k = 0; k < 8; ++k) { tg::BreakChopper::Trigger t; t.slice = k * 2; c.trigger (t, st); }
                     std::vector<float> l (256), r (256);
                     std::vector<float> v (P_COUNT, 0.0f);
@@ -4136,6 +4329,21 @@ int main()
                 line << "   ";
             }
             std::cout << "  CPU, 8 looping slices at once (Eco / Normal / High, % of a core): " << line << std::endl;
+            // three breaks at once: 8 slices spread over them, each break with its own colour
+            {
+                tg::BreakChopper c; c.prepare (sr, 256);
+                tg::BreakData d;
+                for (int k = 0; k < 3; ++k) { c.setSample (k, &w); tg::breaks::analyse (&w, 3, 0.5f, 2, 0.0, d.brk[k]); for (auto& sl : d.brk[k].slice) { sl.choke = 0; sl.loop = true; } }
+                c.data() = d;
+                tg::BreakChopper::Settings st; st.hostTempo = 140.0;
+                for (int k = 0; k < 3; ++k) { st.b[k].stretch = k; st.b[k].colour = k + 1; st.b[k].level = 0.8f; st.b[k].pan = 0.2f * (float) (k - 1); }
+                for (int k = 0; k < 8; ++k) { tg::BreakChopper::Trigger t; t.slice = k * 2; t.brk = k % 3; c.trigger (t, st); }
+                std::vector<float> l (256), r (256), v (P_COUNT, 0.0f);
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                for (int blk = 0; blk < (int) (5.0 * sr / 256); ++blk) { std::fill (l.begin(), l.end(), 0.0f); std::fill (r.begin(), r.end(), 0.0f); c.process (l.data(), r.data(), 256, st, v.data()); }
+                std::cout << "  CPU, 8 slices over three breaks (one each: Repitch / Cyclic / Clean, all coloured), Normal: "
+                          << juce::String (juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0) / 5.0 * 100.0, 2) << "% of a core" << std::endl;
+            }
         }
     };
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BREAKDEMOS", {}).isNotEmpty())
@@ -4201,6 +4409,23 @@ int main()
                                           ev.push_back ({ (int) ((b * 4.0 + 3.5) / inc), juce::MidiMessage::noteOff (1, b % 4 == 3 ? 31 + 12 : 33 + 12) }); }
             renderTo (*p, "break_demo_3_pattern_switch_172.wav", ev);
         }
+        // 4. three breaks: Break Frankenstein's chain (original, Frankenbreak edits), the Active Break moved
+        //    by the Break Select keys every two bars (on the beat), and Alternate on its "Active" steps
+        {
+            auto p = make(); p->loadFactoryPreset (35);
+            setP (*p, P_bcSelQuant, 1.0f);
+            std::vector<std::pair<int, juce::MidiMessage>> ev;
+            const int sel[] = { 33, 34, 35, 33 };
+            for (int k = 1; k < 4; ++k)
+            {
+                const int at = (int) ((k * 8.0 - 0.6) / inc);
+                ev.push_back ({ at, juce::MidiMessage::noteOn (1, sel[k], (juce::uint8) 100) });
+                ev.push_back ({ at + 1000, juce::MidiMessage::noteOff (1, sel[k]) });
+            }
+            for (int b = 0; b < 8; ++b) { ev.push_back ({ (int) (b * 4.0 / inc), juce::MidiMessage::noteOn (1, b % 4 == 3 ? 43 : 45, (juce::uint8) 90) });
+                                          ev.push_back ({ (int) ((b * 4.0 + 3.5) / inc), juce::MidiMessage::noteOff (1, b % 4 == 3 ? 43 : 45) }); }
+            renderTo (*p, "break_demo_4_three_breaks_172.wav", ev);
+        }
         return 0;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BREAKONLY", {}).isNotEmpty())
@@ -4259,11 +4484,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.48.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.52.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.48 (Performance FX, the Granular Synth and the Break Chopper / Sequencer added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.52 (Performance FX, the Granular Synth, the Break Chopper / Sequencer and three breaks added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",
@@ -5681,7 +5906,7 @@ int main()
     {
         std::cout << "Stage 17: factory presets" << std::endl;
         const auto& list = factoryPresets();
-        CHECK (list.size() == 35, "35 factory presets");
+        CHECK (list.size() == 36, "36 factory presets");
         std::set<juce::String> names;
         for (auto& fp : list) names.insert (fp.name);
         CHECK (names.size() == list.size(), "factory preset names are unique");

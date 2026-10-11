@@ -72,10 +72,10 @@ inline std::vector<int> transients (const WaveSample& w, float sens)
         if (! on.empty() && at - on.back().at < minGap) { if (rise > on.back().strength) on.back() = { at, rise }; continue; }
         on.push_back ({ at, rise });
     }
-    if ((int) on.size() > BreakData::kSlices - 1)
+    if ((int) on.size() > BreakSlot::kSlices - 1)
     {
         std::sort (on.begin(), on.end(), [] (const On& x, const On& y) { return x.strength > y.strength; });
-        on.resize ((size_t) BreakData::kSlices - 1);
+        on.resize ((size_t) BreakSlot::kSlices - 1);
     }
     std::vector<int> out;
     for (auto& o : on) out.push_back (o.at);
@@ -83,14 +83,15 @@ inline std::vector<int> transients (const WaveSample& w, float sens)
     return out;
 }
 
-// Works out the slices (into d.start / d.nSlices), the tempo and each slice's kick / snare score
-inline void analyse (const WaveSample* w, int mode, float sens, int barsChoice, double typedBpm, BreakData& d)
+// Works out one break's slices (into b.start / b.nSlices), its tempo, its loudness and each slice's
+// kick / snare / hat score
+inline void analyse (const WaveSample* w, int mode, float sens, int barsChoice, double typedBpm, BreakSlot& b)
 {
-    d.nSlices = 0; d.origBpm = 0.0; d.bars = 0;
-    std::fill (std::begin (d.start), std::end (d.start), 0);
+    b.nSlices = 0; b.origBpm = 0.0; b.bars = 0; b.rms = 0.0f;
+    std::fill (std::begin (b.start), std::end (b.start), 0);
     if (w == nullptr || w->length < 64) return;
-    d.sampleRate = w->sampleRate;
-    d.origBpm = tempoFor (w->duration(), barsChoice, typedBpm, d.bars);
+    b.sampleRate = w->sampleRate;
+    b.origBpm = tempoFor (w->duration(), barsChoice, typedBpm, b.bars);
     std::vector<int> st { 0 };
     const int len = w->length;
     switch (mode)
@@ -102,34 +103,53 @@ inline void analyse (const WaveSample* w, int mode, float sens, int barsChoice, 
             break;
         }
         case 5:
-            for (int i = 0; i < d.nMarkers; ++i) { const int at = (int) (d.markers[i] * len); if (at > 64 && at < len - 64) st.push_back (at); }
+            for (int i = 0; i < b.nMarkers; ++i) { const int at = (int) (b.markers[i] * len); if (at > 64 && at < len - 64) st.push_back (at); }
             break;
         default:
             for (int at : transients (*w, sens)) if (at > 256) st.push_back (at);
             break;
     }
     std::sort (st.begin(), st.end());
-    st.erase (std::unique (st.begin(), st.end(), [] (int a, int b) { return std::abs (a - b) < 64; }), st.end());
-    d.nSlices = std::min ((int) st.size(), (int) BreakData::kSlices);
-    for (int k = 0; k < d.nSlices; ++k) d.start[k] = st[(size_t) k];
-    d.start[d.nSlices] = len;
+    st.erase (std::unique (st.begin(), st.end(), [] (int x, int y) { return std::abs (x - y) < 64; }), st.end());
+    b.nSlices = std::min ((int) st.size(), (int) BreakSlot::kSlices);
+    for (int k = 0; k < b.nSlices; ++k) b.start[k] = st[(size_t) k];
+    b.start[b.nSlices] = len;
 
-    // kick / snare scores from the first 60 ms of each slice: low end against the bright noisy part
-    float maxK = 1e-9f, maxS = 1e-9f;
     const float* a = w->ch[0].data();
+    const float* r = w->ch[w->numChannels > 1 ? 1 : 0].data();
+    {
+        double e = 0.0; for (int i = 0; i < len; ++i) e += 0.5 * ((double) a[i] * a[i] + (double) r[i] * r[i]);
+        b.rms = (float) std::sqrt (e / len);
+    }
+    // kick / snare scores from the first 60 ms of each slice: low end against the bright noisy part
+    // (exactly as before three breaks, so factory patterns made from them don't change)
+    float maxK = 1e-9f, maxS = 1e-9f, maxH = 1e-9f;
     const float cl = 1.0f - std::exp (-2.0f * 3.14159f * 150.0f / (float) w->sampleRate);
     const float ch = 1.0f - std::exp (-2.0f * 3.14159f * 2000.0f / (float) w->sampleRate);
-    for (int k = 0; k < d.nSlices; ++k)
+    const float c6 = 1.0f - std::exp (-2.0f * 3.14159f * 6000.0f / (float) w->sampleRate);
+    for (int k = 0; k < b.nSlices; ++k)
     {
-        const int s0 = d.start[k], s1 = std::min (d.start[k + 1], s0 + (int) (0.06 * w->sampleRate));
+        const int s0 = b.start[k], s1 = std::min (b.start[k + 1], s0 + (int) (0.06 * w->sampleRate));
         float lp = 0.0f, lp2 = 0.0f; double lo = 0.0, hi = 0.0;
         for (int i = s0; i < s1; ++i) { lp += (a[i] - lp) * cl; lp2 += (a[i] - lp2) * ch; lo += (double) lp * lp; const float h = a[i] - lp2; hi += (double) h * h; }
         const double mid = std::max (0.0, hi * 0.5);
-        d.kick[k] = (float) (lo / (lo + hi + 1e-12) * std::sqrt (lo + hi));
-        d.snare[k] = (float) (mid / (lo + hi + 1e-12) * std::sqrt (lo + hi));
-        maxK = std::max (maxK, d.kick[k]); maxS = std::max (maxS, d.snare[k]);
+        b.kick[k] = (float) (lo / (lo + hi + 1e-12) * std::sqrt (lo + hi));
+        b.snare[k] = (float) (mid / (lo + hi + 1e-12) * std::sqrt (lo + hi));
+        // hats: mostly above 6 kHz, little low end, and gone quickly (30-90 ms against the first 30 ms)
+        const int s2 = std::min (b.start[k + 1], s0 + (int) (0.09 * w->sampleRate)), split = s0 + (int) (0.03 * w->sampleRate);
+        float l6 = 0.0f, ll = 0.0f; double top = 0.0, low = 0.0, all = 0.0, early = 0.0, late = 0.0;
+        for (int i = s0; i < s2; ++i)
+        {
+            l6 += (a[i] - l6) * c6; ll += (a[i] - ll) * cl;
+            const float t = a[i] - l6;
+            top += (double) t * t; low += (double) ll * ll; all += (double) a[i] * a[i];
+            (i < split ? early : late) += (double) a[i] * a[i];
+        }
+        const double ring = late / (early + 1e-12);
+        b.hat[k] = (float) (top / (all + 1e-12) * std::sqrt (all) * std::max (0.0, 1.0 - 4.0 * low / (all + 1e-12)) * std::max (0.1, 1.0 - ring));
+        maxK = std::max (maxK, b.kick[k]); maxS = std::max (maxS, b.snare[k]); maxH = std::max (maxH, b.hat[k]);
     }
-    for (int k = 0; k < d.nSlices; ++k) { d.kick[k] /= maxK; d.snare[k] /= maxS; }
+    for (int k = 0; k < b.nSlices; ++k) { b.kick[k] /= maxK; b.snare[k] /= maxS; b.hat[k] /= maxH; }
 }
 
 // ---- the factory demo break: two bars, synthesised (kick, snare with ghost notes, hats), at the given tempo
@@ -149,7 +169,7 @@ inline juce::AudioBuffer<float> makeDemoBreak (double sr = 44100.0, double bpm =
         for (int i = 0; i < (int) (0.32 * sr); ++i)
         {
             const double x = i / sr;
-            const double f = 46.0 + 110.0 * std::exp (-x / 0.028);
+            const double f = (variant == 1 ? 52.0 : 46.0) + 110.0 * std::exp (-x / 0.028);
             ph += f / sr;
             float v = (float) (std::sin (2.0 * juce::MathConstants<double>::pi * ph) * std::exp (-x / 0.16));
             if (i < (int) (0.004 * sr)) v += 0.35f * rnd() * (1.0f - (float) i / (float) (0.004 * sr));   // beater click
@@ -164,7 +184,7 @@ inline juce::AudioBuffer<float> makeDemoBreak (double sr = 44100.0, double bpm =
         for (int i = 0; i < (int) (0.24 * sr); ++i)
         {
             const double x = i / sr;
-            const float tone = (float) (std::sin (2.0 * juce::MathConstants<double>::pi * (186.0 * x + 2.0 * std::exp (-x / 0.01))) * std::exp (-x / 0.07));
+            const float tone = (float) (std::sin (2.0 * juce::MathConstants<double>::pi * ((variant == 2 ? 210.0 : 186.0) * x + 2.0 * std::exp (-x / 0.01))) * std::exp (-x / 0.07));
             const float nz = rnd();
             bp1 += (nz - bp1) * 0.45f; bp2 += (bp1 - bp2) * 0.45f;
             const float noise = (nz - bp2) * (float) std::exp (-x / 0.11);
@@ -185,17 +205,36 @@ inline juce::AudioBuffer<float> makeDemoBreak (double sr = 44100.0, double bpm =
             add (s0 + i, 0, v * 0.7f); add (s0 + i, 1, v);
         }
     };
-    // an original two-bar pattern (16ths): kicks, backbeat snares with ghosts, a shuffled hat line
-    const int kicks[] = { 0, 10, 16, 18, 26, 27 };
-    const int snares[] = { 4, 12, 20, 28 };
-    const int ghosts[] = { 7, 9, 15, 23, 25, 30 };
-    const double swing = step * 0.08;   // a little push on the off 16ths
+    const double swing = step * (variant == 2 ? 0.14 : 0.08);   // a little push on the off 16ths
     auto at = [&] (int s) { return s * step + ((s & 1) ? swing : 0.0); };
-    for (int s : kicks) kick (at (s), s == 27 ? 0.7f : 1.0f);
-    for (int s : snares) snare (at (s), 0.95f);
-    for (int s : ghosts) snare (at (s), 0.28f + 0.06f * (float) (s % 3));
-    for (int s = 0; s < 32; s += 2) hat (at (s), (s % 4 == 2) ? 0.9f : 0.6f, s == 14 || s == 30);
-    for (int s = 1; s < 32; s += 4) hat (at (s), 0.35f, false);
+    if (variant == 1)
+    {
+        // "2-step": kick on 1 and the "and" of 2, a tight backbeat, 16th hats with an open one per bar
+        for (int s : { 0, 6, 16, 22, 26 }) kick (at (s), s == 26 ? 0.75f : 1.0f);
+        for (int s : { 4, 12, 20, 28 }) snare (at (s), 1.0f);
+        for (int s : { 15, 31 }) snare (at (s), 0.3f);
+        for (int s = 0; s < 32; ++s) hat (at (s), (s % 2 == 0) ? 0.7f : 0.4f, s == 10 || s == 26);
+    }
+    else if (variant == 2)
+    {
+        // "rollers": a sparse kick under a rolling bed of ghost snares and swung hats
+        for (int s : { 0, 10, 16, 26 }) kick (at (s), 1.0f);
+        for (int s : { 4, 12, 20, 28 }) snare (at (s), 0.9f);
+        for (int s : { 2, 3, 7, 9, 11, 14, 15, 18, 19, 23, 25, 27, 30, 31 }) snare (at (s), 0.18f + 0.05f * (float) (s % 4));
+        for (int s = 0; s < 32; s += 2) hat (at (s), (s % 4 == 0) ? 0.45f : 0.75f, false);
+    }
+    else
+    {
+        // an original two-bar pattern (16ths): kicks, backbeat snares with ghosts, a shuffled hat line
+        const int kicks[] = { 0, 10, 16, 18, 26, 27 };
+        const int snares[] = { 4, 12, 20, 28 };
+        const int ghosts[] = { 7, 9, 15, 23, 25, 30 };
+        for (int s : kicks) kick (at (s), s == 27 ? 0.7f : 1.0f);
+        for (int s : snares) snare (at (s), 0.95f);
+        for (int s : ghosts) snare (at (s), 0.28f + 0.06f * (float) (s % 3));
+        for (int s = 0; s < 32; s += 2) hat (at (s), (s % 4 == 2) ? 0.9f : 0.6f, s == 14 || s == 30);
+        for (int s = 1; s < 32; s += 4) hat (at (s), 0.35f, false);
+    }
     // a short room
     for (int c = 0; c < 2; ++c)
     {

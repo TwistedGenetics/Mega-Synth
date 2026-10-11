@@ -11,6 +11,8 @@ class SampleWaveView : public juce::Component, public juce::SettableTooltipClien
 public:
     struct Marker { double frac; juce::Colour colour; juce::String label; bool thick; };
     SampleWaveView (MegaSynthProcessor& p, int slotIndex, juce::Colour c) : proc (p), slot (slotIndex), colour (c) { startTimerHz (20); }
+    void setSlot (int s) { if (s != slot) { slot = s; built = nullptr; repaint(); } }
+    void setColour (juce::Colour c) { colour = c; repaint(); }
     ~SampleWaveView() override { stopTimer(); }
 
     std::function<std::vector<Marker>()> markers;          // what to draw over the wave (fractions of its length)
@@ -94,7 +96,7 @@ private:
         }
     }
     MegaSynthProcessor& proc;
-    const int slot;
+    int slot;
     juce::Colour colour;
     const tg::WaveSample* built = nullptr;
     std::vector<float> peaks;

@@ -1,8 +1,8 @@
 #pragma once
-// The Break Chopper's and Break Sequencer's saved settings: per-slice settings, the manual slice
-// markers, the eight patterns (A-H) and the pattern chain. Plus the analysis of the loaded break
-// (slice points, the tempo, which slices sound like kicks or snares), which isn't saved but worked
-// out again from the sample.
+// The Break Chopper's and Break Sequencer's saved settings: for each of the three breaks, its
+// per-slice settings and manual slice markers; the eight patterns (A-H), each pattern's own break,
+// and the pattern chain. Plus the analysis of each loaded break (slice points, tempo, which slices
+// sound like kicks, snares or hats), which isn't saved but worked out again from the samples.
 //
 // The message thread edits under a lock; the audio thread takes a copy when the version changes
 // (with a try-lock, so it never waits).
@@ -16,7 +16,7 @@ namespace tg
 struct BreakSlice
 {
     float pitch = 0.0f, gain = 1.0f, pan = 0.0f, trimStart = 0.0f, trimEnd = 1.0f, attack = 0.0f, decay = 0.0f;
-    int choke = 1;          // 0: none; slices in the same group cut each other off
+    int choke = 1;          // 0: none; slices in the same group cut each other off (across all three breaks)
     bool reverse = false, loop = false;
     bool isDefault() const { return pitch == 0.0f && gain == 1.0f && pan == 0.0f && trimStart == 0.0f && trimEnd == 1.0f && attack == 0.0f && decay == 0.0f && choke == 1 && ! reverse && ! loop; }
 };
@@ -26,24 +26,46 @@ struct BreakStep
     bool on = false, accent = false, reverse = false, tie = false;
     int slice = 0, roll = 1;   // roll: 1 = once, 2 / 3 / 4 = retriggered within the step
     float vel = 0.8f, pitch = 0.0f, prob = 1.0f;
+    int brk = 0;               // 0: the Active Break; 1-3: always that break
+    bool layer = false;        // a second hit stacked on this one ...
+    int layerBrk = 2, layerSlice = 0;   // ... from this break (1-3) and slice
+    float layerLevel = 0.7f;
+};
+
+// one break's own settings and its analysis
+struct BreakSlot
+{
+    static constexpr int kSlices = 32;
+    BreakSlice slice[kSlices];
+    float markers[kSlices] {};   // manual markers (fractions of the sample, sorted; 0 is always a slice start)
+    int nMarkers = 0;
+    // ---- the analysis (not saved)
+    int nSlices = 0;
+    int start[kSlices + 1] {};   // slice k: frames start[k] .. start[k + 1]
+    float kick[kSlices] {}, snare[kSlices] {}, hat[kSlices] {};   // 0..1: how much each slice sounds like a kick / snare / hat
+    double origBpm = 0.0;        // the break's tempo (detected, from the bars, or typed in)
+    int bars = 0;
+    double sampleRate = 44100.0;
+    float rms = 0.0f;            // its loudness (for Match Levels)
+
+    void copyAnalysisFrom (const BreakSlot& a)
+    {
+        nSlices = a.nSlices; std::copy (std::begin (a.start), std::end (a.start), std::begin (start));
+        std::copy (std::begin (a.kick), std::end (a.kick), std::begin (kick));
+        std::copy (std::begin (a.snare), std::end (a.snare), std::begin (snare));
+        std::copy (std::begin (a.hat), std::end (a.hat), std::begin (hat));
+        origBpm = a.origBpm; bars = a.bars; sampleRate = a.sampleRate; rms = a.rms;
+    }
 };
 
 struct BreakData
 {
-    static constexpr int kSlices = 32, kPatterns = 8, kSteps = 32;
-    BreakSlice slice[kSlices];
+    static constexpr int kBreaks = 3, kSlices = BreakSlot::kSlices, kPatterns = 8, kSteps = 32;
+    BreakSlot brk[kBreaks];
     BreakStep step[kPatterns][kSteps];
-    float markers[kSlices] {};   // manual markers (fractions of the sample, sorted; 0 is always a slice start)
-    int nMarkers = 0;
+    int patBreak[kPatterns] {};  // 0: none; 1-3: starting this pattern makes that break the Active Break
     char chain[17] {};           // pattern chain, e.g. "AABA"
-    int seed = 1;                // Shuffle / Jungle: each press takes the next seed
-    // ---- the analysis (not saved)
-    int nSlices = 0;
-    int start[kSlices + 1] {};   // slice k: frames start[k] .. start[k + 1]
-    float kick[kSlices] {}, snare[kSlices] {};   // 0..1: how much each slice sounds like a kick / a snare
-    double origBpm = 0.0;        // the break's tempo (detected, from the bars, or typed in)
-    int bars = 0;
-    double sampleRate = 44100.0;
+    int seed = 1;                // Shuffle / Jungle / Frankenbreak: each press takes the next seed
 };
 
 class BreakStore
@@ -79,15 +101,14 @@ public:
         return true;
     }
 
-    // ---- saving (only what differs from the defaults)
-    juce::var toVar() const
+    // ---- saving (only what differs from the defaults). Break 1 is saved where the single break
+    // always was ("slices", "markers"), so older plug-ins and older tests read it unchanged.
+    static void slotToVar (const BreakSlot& b, juce::DynamicObject& o)
     {
-        const auto d = get();
-        auto* o = new juce::DynamicObject();
         juce::Array<juce::var> sl;
-        for (int k = 0; k < BreakData::kSlices; ++k)
+        for (int k = 0; k < BreakSlot::kSlices; ++k)
         {
-            const auto& s = d.slice[k];
+            const auto& s = b.slice[k];
             if (s.isDefault()) continue;
             auto* x = new juce::DynamicObject();
             x->setProperty ("i", k); x->setProperty ("pitch", s.pitch); x->setProperty ("gain", s.gain); x->setProperty ("pan", s.pan);
@@ -95,10 +116,50 @@ public:
             x->setProperty ("choke", s.choke); x->setProperty ("rev", s.reverse); x->setProperty ("loop", s.loop);
             sl.add (juce::var (x));
         }
-        o->setProperty ("slices", sl);
+        o.setProperty ("slices", sl);
         juce::Array<juce::var> mk;
-        for (int i = 0; i < d.nMarkers; ++i) mk.add (d.markers[i]);
-        o->setProperty ("markers", mk);
+        for (int i = 0; i < b.nMarkers; ++i) mk.add (b.markers[i]);
+        o.setProperty ("markers", mk);
+    }
+    static void slotFromVar (BreakSlot& b, const juce::var& v)
+    {
+        if (auto* sl = v["slices"].getArray())
+            for (auto& x : *sl)
+            {
+                const int k = (int) x["i"];
+                if (k < 0 || k >= BreakSlot::kSlices) continue;
+                auto& s = b.slice[k];
+                s.pitch = juce::jlimit (-24.0f, 24.0f, (float) x.getProperty ("pitch", 0.0));
+                s.gain = juce::jlimit (0.0f, 2.0f, (float) x.getProperty ("gain", 1.0));
+                s.pan = juce::jlimit (-1.0f, 1.0f, (float) x.getProperty ("pan", 0.0));
+                s.trimStart = juce::jlimit (0.0f, 0.95f, (float) x.getProperty ("ts", 0.0));
+                s.trimEnd = juce::jlimit (s.trimStart + 0.05f, 1.0f, (float) x.getProperty ("te", 1.0));
+                s.attack = juce::jlimit (0.0f, 0.5f, (float) x.getProperty ("a", 0.0));
+                s.decay = juce::jlimit (0.0f, 4.0f, (float) x.getProperty ("d", 0.0));
+                s.choke = juce::jlimit (0, 8, (int) x.getProperty ("choke", 1));
+                s.reverse = (bool) x.getProperty ("rev", false);
+                s.loop = (bool) x.getProperty ("loop", false);
+            }
+        if (auto* mk = v["markers"].getArray())
+        {
+            for (auto& m : *mk) if (b.nMarkers < BreakSlot::kSlices) b.markers[b.nMarkers++] = juce::jlimit (0.0f, 1.0f, (float) m);
+            std::sort (b.markers, b.markers + b.nMarkers);
+        }
+    }
+
+    juce::var toVar() const
+    {
+        const auto d = get();
+        auto* o = new juce::DynamicObject();
+        slotToVar (d.brk[0], *o);
+        for (int k = 1; k < BreakData::kBreaks; ++k)
+        {
+            auto* bo = new juce::DynamicObject();
+            slotToVar (d.brk[k], *bo);
+            const bool empty = bo->getProperty ("slices").getArray()->isEmpty() && bo->getProperty ("markers").getArray()->isEmpty();
+            if (empty) delete bo;
+            else o->setProperty ("break" + juce::String (k + 1), juce::var (bo));
+        }
         juce::Array<juce::var> pats;
         for (int p = 0; p < BreakData::kPatterns; ++p)
         {
@@ -106,7 +167,7 @@ public:
             for (int i = 0; i < BreakData::kSteps; ++i)
             {
                 const auto& s = d.step[p][i];
-                if (! s.on && ! s.tie && s.slice == 0) continue;
+                if (! s.on && ! s.tie && s.slice == 0 && s.brk == 0 && ! s.layer) continue;
                 auto* x = new juce::DynamicObject();
                 x->setProperty ("i", i); x->setProperty ("on", s.on); x->setProperty ("slice", s.slice); x->setProperty ("vel", s.vel);
                 if (s.accent) x->setProperty ("acc", true);
@@ -115,6 +176,8 @@ public:
                 if (s.roll > 1) x->setProperty ("roll", s.roll);
                 if (s.pitch != 0.0f) x->setProperty ("pitch", s.pitch);
                 if (s.prob < 1.0f) x->setProperty ("prob", s.prob);
+                if (s.brk != 0) x->setProperty ("brk", s.brk);
+                if (s.layer) { x->setProperty ("layer", true); x->setProperty ("lb", s.layerBrk); x->setProperty ("ls", s.layerSlice); x->setProperty ("ll", s.layerLevel); }
                 steps.add (juce::var (x));
             }
             pats.add (steps);
@@ -122,6 +185,9 @@ public:
         o->setProperty ("patterns", pats);
         o->setProperty ("chain", juce::String (d.chain));
         o->setProperty ("seed", d.seed);
+        bool anyPatBreak = false;
+        for (int p : d.patBreak) anyPatBreak = anyPatBreak || p != 0;
+        if (anyPatBreak) { juce::Array<juce::var> pb; for (int p : d.patBreak) pb.add (p); o->setProperty ("patBreak", pb); }
         return juce::var (o);
     }
     juce::String toJson() const { return juce::JSON::toString (toVar(), true); }
@@ -134,27 +200,11 @@ public:
             d = BreakData();
             copyAnalysis (analysis, d);
             if (! v.isObject()) return;
-            if (auto* sl = v["slices"].getArray())
-                for (auto& x : *sl)
-                {
-                    const int k = (int) x["i"];
-                    if (k < 0 || k >= BreakData::kSlices) continue;
-                    auto& s = d.slice[k];
-                    s.pitch = juce::jlimit (-24.0f, 24.0f, (float) x.getProperty ("pitch", 0.0));
-                    s.gain = juce::jlimit (0.0f, 2.0f, (float) x.getProperty ("gain", 1.0));
-                    s.pan = juce::jlimit (-1.0f, 1.0f, (float) x.getProperty ("pan", 0.0));
-                    s.trimStart = juce::jlimit (0.0f, 0.95f, (float) x.getProperty ("ts", 0.0));
-                    s.trimEnd = juce::jlimit (s.trimStart + 0.05f, 1.0f, (float) x.getProperty ("te", 1.0));
-                    s.attack = juce::jlimit (0.0f, 0.5f, (float) x.getProperty ("a", 0.0));
-                    s.decay = juce::jlimit (0.0f, 4.0f, (float) x.getProperty ("d", 0.0));
-                    s.choke = juce::jlimit (0, 8, (int) x.getProperty ("choke", 1));
-                    s.reverse = (bool) x.getProperty ("rev", false);
-                    s.loop = (bool) x.getProperty ("loop", false);
-                }
-            if (auto* mk = v["markers"].getArray())
+            slotFromVar (d.brk[0], v);
+            for (int k = 1; k < BreakData::kBreaks; ++k)
             {
-                for (auto& m : *mk) if (d.nMarkers < BreakData::kSlices) d.markers[d.nMarkers++] = juce::jlimit (0.0f, 1.0f, (float) m);
-                std::sort (d.markers, d.markers + d.nMarkers);
+                const auto bv = v[juce::Identifier ("break" + juce::String (k + 1))];
+                if (bv.isObject()) slotFromVar (d.brk[k], bv);
             }
             if (auto* pats = v["patterns"].getArray())
                 for (int p = 0; p < juce::jmin (BreakData::kPatterns, pats->size()); ++p)
@@ -173,9 +223,16 @@ public:
                             s.roll = juce::jlimit (1, 4, (int) x.getProperty ("roll", 1));
                             s.pitch = juce::jlimit (-24.0f, 24.0f, (float) x.getProperty ("pitch", 0.0));
                             s.prob = juce::jlimit (0.0f, 1.0f, (float) x.getProperty ("prob", 1.0));
+                            s.brk = juce::jlimit (0, 3, (int) x.getProperty ("brk", 0));
+                            s.layer = (bool) x.getProperty ("layer", false);
+                            s.layerBrk = juce::jlimit (1, 3, (int) x.getProperty ("lb", 2));
+                            s.layerSlice = juce::jlimit (0, BreakData::kSlices - 1, (int) x.getProperty ("ls", 0));
+                            s.layerLevel = juce::jlimit (0.0f, 1.5f, (float) x.getProperty ("ll", 0.7));
                         }
             setChain (d, v["chain"].toString());
             d.seed = juce::jmax (1, (int) v.getProperty ("seed", 1));
+            if (auto* pb = v["patBreak"].getArray())
+                for (int p = 0; p < juce::jmin (BreakData::kPatterns, pb->size()); ++p) d.patBreak[p] = juce::jlimit (0, 3, (int) (*pb)[p]);
         });
     }
 
@@ -188,10 +245,7 @@ public:
     }
     static void copyAnalysis (const BreakData& from, BreakData& to)
     {
-        to.nSlices = from.nSlices; std::copy (std::begin (from.start), std::end (from.start), std::begin (to.start));
-        std::copy (std::begin (from.kick), std::end (from.kick), std::begin (to.kick));
-        std::copy (std::begin (from.snare), std::end (from.snare), std::begin (to.snare));
-        to.origBpm = from.origBpm; to.bars = from.bars; to.sampleRate = from.sampleRate;
+        for (int k = 0; k < BreakData::kBreaks; ++k) to.brk[k].copyAnalysisFrom (from.brk[k]);
     }
 
 private:

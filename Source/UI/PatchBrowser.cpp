@@ -34,6 +34,13 @@ void Favourites::save() const { file.replaceWithText (keys.joinIntoString ("\n")
 void PatchCatalogue::rescan()
 {
     entries.clearQuick(); factoryCats.clear(); folders.clear();
+    {
+        PatchEntry init; init.factory = true; init.index = -1; init.name = "Init"; init.category = "Init";
+        init.description = MegaSynthProcessor::hasUserInit() ? "Your saved Init (Init button > Save current patch as Init)"
+                                                             : "A clean start: one saw, filter open, no effects. Mod wheel adds vibrato.";
+        factoryCats.add (init.category);
+        entries.add (init);
+    }
     const auto& fp = tg::factoryPresets();
     for (int i = 0; i < (int) fp.size(); ++i)
     {
@@ -156,7 +163,8 @@ void PatchBrowser::load (int row)
 {
     if (row < 0 || row >= shown.size()) return;
     const auto& e = cat[shown[row]];
-    if (e.factory) { if (onLoadFactory) onLoadFactory (e.index); }
+    if (e.factory && e.index < 0) { if (onLoadInit) onLoadInit(); }
+    else if (e.factory) { if (onLoadFactory) onLoadFactory (e.index); }
     else if (onLoadFile) onLoadFile (e.file);
 }
 

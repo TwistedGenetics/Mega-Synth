@@ -131,8 +131,8 @@ DnaSeqPanel::DnaSeqPanel (MegaSynthProcessor& p)
     addAndMakeVisible (pattern);
     addAndMakeVisible (laneSel);
 
-    chainAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_dsChainOn], chainOn);
-    lane2Att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_dsLane2On], lane2On);
+    chainAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_dsChainOn], tagParam (chainOn, P_dsChainOn));
+    lane2Att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_dsLane2On], tagParam (lane2On, P_dsLane2On));
     chainOn.setTooltip ("Play the patterns in the chain order, one pattern cycle (lane 1's length) each");
     lane2On.setTooltip ("Lane 2: a second set of steps with its own length (Lane 2 Steps), for polymeter");
     for (auto* t : { &chainOn, &lane2On }) { t->setColour (juce::ToggleButton::tickColourId, kDna); addAndMakeVisible (*t); }
@@ -142,7 +142,7 @@ DnaSeqPanel::DnaSeqPanel (MegaSynthProcessor& p)
     chain.onTextChange = [this] { proc.dnaSteps.setChain (chain.getText()); };
     addAndMakeVisible (chain);
     for (int i = 0; i < kListDsMidi.size; ++i) midiSel.addItem (kListDsMidi.labels[i], i + 1);
-    midiAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, kParamIds[P_dsMidiSelect], midiSel);
+    midiAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, kParamIds[P_dsMidiSelect], tagParam (midiSel, P_dsMidiSelect));
     midiSel.setTooltip ("Pick the pattern from MIDI: these four notes select A-D (they don't play a sound)");
     addAndMakeVisible (midiSel);
 

@@ -96,7 +96,7 @@ if(MEGASYNTH_TESTS)
     target_sources(MegaSynthTest PRIVATE Tests/RenderTest.cpp ${MEGASYNTH_SOURCES})
     target_include_directories(MegaSynthTest PRIVATE Source)
     target_compile_definitions(MegaSynthTest PRIVATE ${MEGASYNTH_DEFINES}
-        JucePlugin_Name="Mega Synth" JUCE_STANDALONE_APPLICATION=1)
+        JucePlugin_Name="Mega Synth" JUCE_STANDALONE_APPLICATION=1 JUCE_PLUGINHOST_VST3=1)
     target_link_libraries(MegaSynthTest PRIVATE
         juce::juce_audio_utils juce::juce_audio_formats juce::juce_dsp
         juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

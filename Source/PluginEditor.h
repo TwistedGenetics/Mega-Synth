@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "UI/PatchBrowser.h"
+#include "UI/MidiMonitor.h"
 
 namespace tgui
 {
@@ -329,6 +330,15 @@ private:
     juce::String lastShownName;
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
     juce::MidiKeyboardComponent keyboard;
+    std::unique_ptr<tgui::MidiMonitor> midiMonitor;
+    // right-click on any toggle or choice box: MIDI Learn / Forget (knobs have their own menu)
+    struct LearnClicks : juce::MouseListener
+    {
+        explicit LearnClicks (MegaSynthEditor& e) : ed (e) {}
+        void mouseDown (const juce::MouseEvent&) override;
+        MegaSynthEditor& ed;
+    } learnClicks { *this };
+    void showInitMenu();
     juce::Label octLabel;
 
     juce::Array<tgui::AssignSlot*> assignSlots;   // owned by their tab pages

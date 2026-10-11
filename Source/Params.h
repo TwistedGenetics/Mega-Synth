@@ -850,7 +850,9 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(mseg1Sync,   "MSEG 1 Sync", false) \
     F(mseg1Scale,  "MSEG 1 Time Scale", 0.25, 4, 1, 0.01, 1) \
     B(mseg2Sync,   "MSEG 2 Sync", false) \
-    F(mseg2Scale,  "MSEG 2 Time Scale", 0.25, 4, 1, 0.01, 1)
+    F(mseg2Scale,  "MSEG 2 Time Scale", 0.25, 4, 1, 0.01, 1) \
+    B(wheelLfo1,   "Mod Wheel to LFO 1 Depth", true) \
+    B(sustainPedal, "Sustain Pedal", true)
 
 enum ParamIndex
 {

@@ -150,7 +150,7 @@ RackList::RackList (MegaSynthProcessor& p) : proc (p)
     {
         auto* t = on.add (new juce::ToggleButton ("On"));
         t->setColour (juce::ToggleButton::tickColourId, col::fx);
-        onAtt.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[P_fxOnStutter + 2 * s], *t));
+        onAtt.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[P_fxOnStutter + 2 * s], tagParam (*t, P_fxOnStutter + 2 * s)));
         addAndMakeVisible (t);
         auto* m = mix.add (new juce::Slider());
         m->setSliderStyle (juce::Slider::LinearBar);

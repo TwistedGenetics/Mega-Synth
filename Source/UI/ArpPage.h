@@ -14,7 +14,7 @@ public:
     ParamToggle (MegaSynthProcessor& p, int param, const juce::String& text, juce::Colour c) : juce::ToggleButton (text)
     {
         setColour (juce::ToggleButton::tickColourId, c);
-        att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, tg::kParamIds[param], *this);
+        att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, tg::kParamIds[param], tagParam (*this, param));
     }
 private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att;

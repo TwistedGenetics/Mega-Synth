@@ -57,6 +57,7 @@ void Voice::prepare (double sampleRate)
 }
 
 static uint32_t voiceRandState = 0x9E3779B9u;
+void resetVoiceRandom() { voiceRandState = 0x9E3779B9u; }   // tests: compare renders from the same random start
 static float voiceRand01()
 {
     voiceRandState ^= voiceRandState << 13; voiceRandState ^= voiceRandState >> 17; voiceRandState ^= voiceRandState << 5;

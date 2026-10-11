@@ -123,6 +123,19 @@ public:
     juce::String exportBrowserPatch() const;
     juce::String importBrowserPatch (const juce::String& json);   // returns an error message, or empty on success
     void resetToDefaults();
+    // Init: a clean starting patch (one saw, no effects), or the user's own Init when one has been saved.
+    // New instances start from it; a project or patch being loaded always replaces it completely.
+    void loadInitPatch();                    // the Init button and the browser's Init entry (undoable)
+    void applyInitState();                   // just the settings (no undo step)
+    void applyFactoryInit();                 // the built-in clean Init, on top of the parameter defaults
+    bool saveCurrentAsInit();                // "Save as Init": shared by every instance and project
+    bool resetInitToFactory();               // forget the saved Init
+    static bool hasUserInit();
+    static juce::File getUserInitFile();     // in the app's data folder (MEGASYNTH_DATA_DIR overrides, for tests)
+    static inline std::atomic<bool> applyInitOnCreate { true };
+    void initOnFirstUse();                   // Init for a new instance (see the .cpp)
+    std::atomic<bool> stateRestored { false }, initDone { false };
+    static constexpr float kInitWheelVibrato = 0.02f;   // Mod Matrix depth of the Init patch's wheel vibrato   // tests turn this off to start from the bare defaults
     bool loadFactoryPreset (int index);
     void copyFilter1To2();
     // ---- MIDI learn (saved with the project; patches don't change it)
@@ -269,6 +282,17 @@ private:
     double sampleRate = 48000.0;
     int maxBlock = 512;
     float bendSemis = 0.0f;
+    float bendNorm = 0.0f;                  // the wheel, -1..1 (the range is applied every block, so changing it bends held notes too)
+    bool sustainDown = false;
+    std::array<bool, 128> sustained {};     // keys let go while the sustain pedal is down
+    void sustainRelease();
+public:
+    // MIDI input monitor (written on the audio thread, shown by the editor)
+    std::atomic<float> monBend { 0.0f }, monWheel { 0.0f }, monPressure { 0.0f };
+    std::atomic<int> monCC { -1 }, monCCVal { 0 }, monCh { 0 };
+    std::atomic<bool> monSustain { false };
+    std::atomic<uint32_t> monBendCount { 0 }, monCCCount { 0 }, monNoteCount { 0 };
+private:
     std::atomic<double> hostTempo { 0.0 };
 
     // sequencer runtime (audio thread)
@@ -297,3 +321,6 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MegaSynthProcessor)
 };
+
+// Marks a toggle or choice box with the parameter it controls, so a right-click can offer MIDI Learn
+template <class C> C& tagParam (C& c, int paramIndex) { c.getProperties().set ("megaParam", paramIndex); return c; }

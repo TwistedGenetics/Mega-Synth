@@ -315,7 +315,7 @@ Choice::Choice (MegaSynthProcessor& p, int idx, const juce::String& cap)
     caption.setColour (juce::Label::textColourId, col::muted);
     caption.setFont (juce::Font (juce::FontOptions (11.5f)));
     addAndMakeVisible (caption);
-    att = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, kParamIds[idx], box);
+    att = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, kParamIds[idx], tagParam (box, idx));
 }
 
 void Choice::resized()
@@ -391,7 +391,7 @@ AssignSlot::AssignSlot (MegaSynthProcessor& p, int firstParam, const juce::Strin
     for (int i = 0; i < MT_COUNT; ++i) target.addItem (kTargetLabels[i], i + 1);
     addAndMakeVisible (source);
     addAndMakeVisible (target);
-    srcAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, kParamIds[first], source);
+    srcAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, kParamIds[first], tagParam (source, first));
 
     // Choosing a new target from the menu resets the amount to that target's default depth,
     // like the browser version. Host automation of the target leaves the amount alone.
@@ -1107,12 +1107,8 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
         proc.markOriginal();
         setStatus (err.isEmpty() ? "Patch loaded from clipboard" : err);
     };
-    initBtn.onClick = [this]
-    {
-        juce::NativeMessageBox::showOkCancelBox (juce::MessageBoxIconType::QuestionIcon, "Init patch",
-            "Reset every control, the sequence and the sample to defaults?", this,
-            juce::ModalCallbackFunction::create ([this] (int r) { if (r == 1) { proc.resetToDefaults(); setStatus ("Patch reset"); } }));
-    };
+    initBtn.onClick = [this] { showInitMenu(); };
+    initBtn.setTooltip ("Init: load a clean starting patch, save the current patch as your own Init, or reset it");
     octDown.onClick = [this] { shiftOctave (-1); };
     octUp.onClick = [this] { shiftOctave (1); };
 
@@ -1163,7 +1159,53 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     setFocus (content);
     setWantsKeyboardFocus (standalone);
     setMouseClickGrabsKeyboardFocus (standalone);
+    midiMonitor = std::make_unique<tgui::MidiMonitor> (proc);
+    content.addAndMakeVisible (*midiMonitor);
+    midiMonitor->setBounds (kDesignW - 240, 734, 230, 120);
+    content.addMouseListener (&learnClicks, true);
     startTimerHz (30);
+}
+
+void MegaSynthEditor::LearnClicks::mouseDown (const juce::MouseEvent& e)
+{
+    if (! e.mods.isPopupMenu()) return;
+    juce::Component* c = e.originalComponent;
+    for (int up = 0; c != nullptr && up < 4 && ! c->getProperties().contains ("megaParam"); ++up) c = c->getParentComponent();
+    if (c == nullptr || ! c->getProperties().contains ("megaParam")) return;
+    const int param = (int) c->getProperties()["megaParam"];
+    if (param < 0 || param >= tg::P_COUNT) return;
+    if (auto* b = dynamic_cast<juce::Button*> (c)) b->setState (juce::Button::buttonNormal);   // a right-click must not flip the toggle
+    auto& proc = ed.proc;
+    juce::PopupMenu menu;
+    menu.addSectionHeader (tg::meta (param).name);
+    menu.addItem (1, proc.learningParam() == param ? "MIDI Learn: move a controller..." : "MIDI Learn");
+    const int cc = proc.ccForParam (param);
+    if (cc >= 0) menu.addItem (2, "Forget MIDI (CC " + juce::String (cc) + ")");
+    juce::Component::SafePointer<juce::Component> target (c);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (c), [this, param] (int r)
+    {
+        if (r == 1) { ed.proc.midiLearn (param); ed.setStatus ("MIDI Learn: move a controller for " + tg::meta (param).name); }
+        else if (r == 2) { ed.proc.midiForget (param); ed.setStatus ("MIDI mapping removed"); }
+    });
+}
+
+void MegaSynthEditor::showInitMenu()
+{
+    juce::PopupMenu m;
+    const bool user = MegaSynthProcessor::hasUserInit();
+    m.addItem (1, user ? "Load Init (your saved Init)" : "Load Init (clean: one saw, no effects)");
+    m.addSeparator();
+    m.addItem (2, "Save current patch as Init");
+    m.addItem (3, "Reset Init to factory", user);
+    m.addSeparator();
+    m.addItem (4, "Reset every control to its default (the old Init)");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&initBtn), [this] (int r)
+    {
+        if (r == 1) { proc.loadInitPatch(); setStatus ("Init loaded"); refreshPatchList(); }
+        else if (r == 2) setStatus (proc.saveCurrentAsInit() ? "Saved as Init: new instances and the Init button start from this patch" : "Couldn't save the Init file");
+        else if (r == 3) setStatus (proc.resetInitToFactory() ? "Init reset to the clean factory Init" : "Couldn't remove the saved Init");
+        else if (r == 4) { proc.resetToDefaults(); setStatus ("Every control reset to its default"); refreshPatchList(); }
+    });
 }
 
 MegaSynthEditor::~MegaSynthEditor()
@@ -1193,7 +1235,7 @@ void MegaSynthEditor::buildPages()
         auto* pad = page->own (new XYPad (proc));
         perfXY = pad;
         perfMorphBtn.setColour (juce::ToggleButton::tickColourId, col::mod);
-        perfMorphAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_sceneMorph], perfMorphBtn);
+        perfMorphAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_sceneMorph], tagParam (perfMorphBtn, P_sceneMorph));
         page->addAndMakeVisible (perfMorphBtn);
 
         auto* mu = sec (page, "Mutate", col::wavetable);
@@ -1217,7 +1259,7 @@ void MegaSynthEditor::buildPages()
         auto* dsOn = new juce::ToggleButton ("On");
         dsOn->setColour (juce::ToggleButton::tickColourId, col::wavetable);
         ds->add (dsOn, 54, 40);
-        perfAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[P_dsOn], *dsOn));
+        perfAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[P_dsOn], tagParam (*dsOn, P_dsOn)));
         auto* pat = new Segmented (proc, P_dsPattern, { "A", "B", "C", "D" }, col::wavetable);
         ds->add (pat, 150, 30);
         ds->newRow();
@@ -1485,13 +1527,13 @@ void MegaSynthEditor::buildPages()
         frz->setColour (juce::ToggleButton::tickColourId, col::supersaw);
         frz->setTooltip ("Stop recording: the grains keep playing what's in the buffer, even after the notes end");
         grS->add (frz, 90, 30);
-        freezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_grFreeze], *frz);
+        freezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_grFreeze], tagParam (*frz, P_grFreeze));
         auto* spS = sec (page, "Spectral  (FFT resynthesis; adds one frame of latency, reported to your DAW, while it's on)", col::fx);
         auto* spOn = new juce::ToggleButton ("On");
         spOn->setColour (juce::ToggleButton::tickColourId, col::fx);
         spOn->setTooltip ("Switch the spectral stage in. While it's on, the synth's output is delayed by one FFT frame; your DAW is told and compensates.");
         spS->add (spOn, 60, 30);
-        spOnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_spOn], *spOn);
+        spOnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_spOn], tagParam (*spOn, P_spOn));
         spS->choice (P_spSize, "FFT Size (quality)", 150);
         spS->knob (P_spMix, "Mix");
         spS->knob (P_spBlur, "Blur");
@@ -1505,7 +1547,7 @@ void MegaSynthEditor::buildPages()
         spFz->setColour (juce::ToggleButton::tickColourId, col::fx);
         spFz->setTooltip ("Hold the current spectrum. Morph blends the live sound towards the last frozen spectrum.");
         spS->add (spFz, 90, 30);
-        spFreezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_spFreeze], *spFz);
+        spFreezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_spFreeze], tagParam (*spFz, P_spFreeze));
         auto* ordS = sec (page, "Order", col::muted);
         ordS->choice (P_busOrder, "Bus order", 180);
         auto* fbS = sec (page, "Feedback Matrix  (from > to; every path is DC-blocked, filtered, soft-clipped and limited)", col::complex);
@@ -1692,7 +1734,7 @@ void MegaSynthEditor::buildPages()
             auto* t = new juce::ToggleButton (text);
             t->setColour (juce::ToggleButton::tickColourId, col::fx);
             s->add (t, w, 40);
-            fxAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[param], *t));
+            fxAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[param], tagParam (*t, param)));
             return t;
         };
         auto slotControls = [&] (Section* s, int slot)
@@ -2120,7 +2162,7 @@ void MegaSynthEditor::buildPages()
             for (juce::Component* c : { (juce::Component*) &sceneEditBtn[k], (juce::Component*) &sceneStoreBtn[k], (juce::Component*) &sceneState[k] })
                 page->addAndMakeVisible (c);
         }
-        morphAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_sceneMorph], morphBtn);
+        morphAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_sceneMorph], tagParam (morphBtn, P_sceneMorph));
         morphBtn.setColour (juce::ToggleButton::tickColourId, col::mod);
         morphBtn.setTooltip ("On: the sound is a blend of the four scenes at the XY position, and the panel edits the selected scene");
         clearScenesBtn.onClick = [this] { proc.clearScenes(); proc.pushHistory ("Clear scenes"); setStatus ("Scenes cleared"); updateSceneButtons(); };
@@ -2198,7 +2240,7 @@ void MegaSynthEditor::buildPages()
         {
             auto* t = mutLocks.add (new juce::ToggleButton (kMutLockNames[k]));
             t->setColour (juce::ToggleButton::tickColourId, col::complex);
-            mutLockAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[P_mutLock1 + k], *t));
+            mutLockAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[P_mutLock1 + k], tagParam (*t, P_mutLock1 + k)));
             page->addAndMakeVisible (t);
         }
         mutHistLabel.setColour (juce::Label::textColourId, col::muted);
@@ -2333,7 +2375,7 @@ void MegaSynthEditor::buildPages()
         auto* on = new juce::ToggleButton ("On");
         on->setColour (juce::ToggleButton::tickColourId, col::wavetable);
         c->add (on, 54, 40);
-        dsOnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_dsOn], *on);
+        dsOnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_dsOn], tagParam (*on, P_dsOn));
         c->choice (P_dsSync, "Sync", 120)->box.setTooltip ("Host: the DAW's tempo and beat position (the synth's tempo while the DAW is stopped).  Internal: the synth's tempo.  Free: Free Rate in Hz.");
         c->choice (P_dsRate, "Rate", 120);
         c->choice (P_dsRestart, "Restart", 160)->box.setTooltip ("Never: runs on (in Host sync, locked to the song position).  Each note: starts again at every note.  Each bar: starts again every bar.  Host start: starts when the DAW starts playing.");
@@ -2357,7 +2399,7 @@ void MegaSynthEditor::buildPages()
     {
         auto* page = addPage ("Sequencer");
         auto* c = sec (page, "Sequencer", col::seq);
-        seqRunAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_seqRun], seqRunBtn);
+        seqRunAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_seqRun], tagParam (seqRunBtn, P_seqRun));
         seqRunBtn.setColour (juce::ToggleButton::tickColourId, col::seq);
         seqRandomBtn.onClick = [this] { proc.generateRandomPhrase(); };
         auto* buttons = new juce::Component();   // holds Run + Random at the start of the section's first row
@@ -2425,7 +2467,8 @@ void MegaSynthEditor::resized()
     octDown.setBounds (10, 738, 70, 28);
     octUp.setBounds (10, 772, 70, 28);
     octLabel.setBounds (6, 806, 80, 40);
-    keyboard.setBounds (90, 734, kDesignW - 100, 120);
+    keyboard.setBounds (90, 734, kDesignW - 100 - 236, 120);
+    if (midiMonitor != nullptr) midiMonitor->setBounds (kDesignW - 240, 734, 230, 120);
     keyboard.setKeyWidth ((float) keyboard.getWidth() / 36.0f);
 }
 
@@ -2464,6 +2507,7 @@ void MegaSynthEditor::showBrowser (bool show)
             browser = std::make_unique<tgui::PatchBrowser> (proc);
             browser->onLoadFactory = [this] (int i) { loadFactory (i); };
             browser->onLoadFile = [this] (const juce::File& f) { loadPatch (f); };
+            browser->onLoadInit = [this] { proc.loadInitPatch(); setStatus ("Init loaded"); refreshPatchList(); };
             browser->onClose = [this] { showBrowser (false); };
             content.addChildComponent (*browser);
             browser->setBounds (0, 88, kDesignW, 640);

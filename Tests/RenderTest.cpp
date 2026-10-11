@@ -110,6 +110,13 @@ int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
     const double sr = 48000.0;
+    // the tests start from the bare parameter defaults (what every golden render and old test assumes);
+    // the Init tests switch Init-on-create back on, with the user Init kept in a temporary folder
+    MegaSynthProcessor::applyInitOnCreate = false;
+    const auto testDataDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("megasynth_test_data");
+    testDataDir.createDirectory();
+    setenv ("MEGASYNTH_DATA_DIR", testDataDir.getFullPathName().toRawUTF8(), 1);
+    MegaSynthProcessor::getUserInitFile().deleteFile();
 
     auto make = [&]
     {
@@ -625,6 +632,7 @@ int main()
         p->msegs.setPreset (1, 2); p->msegs.setPreset (0, 3); setP (*p, P_pEnvAmt, 12.0f);
         for (int k : { 0, 1, 3 }) setP (*p, P_uni1Voices + kUniStride * k, 5.0f);
         render (*p, 0.3, chord (0.0, 1.0, { 48 }));
+        render (*p, 0.05, { { 0.0, juce::MidiMessage::pitchWheel (1, 12000) }, { 0.0, juce::MidiMessage::controllerEvent (1, 1, 80) }, { 0.0, juce::MidiMessage::controllerEvent (1, 64, 127) } });
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
         ed->setSize (1200, 860);
         std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
@@ -2260,6 +2268,196 @@ int main()
         return pct;
     };
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_WORST", {}).isNotEmpty()) { worst (1); return 0; }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_DUMPDEFAULTS", {}).isNotEmpty())
+    {
+        auto p = make();
+        for (int i = 0; i < P_COUNT; ++i)
+        {
+            auto* prm = p->param (i);
+            std::cout << "DEF " << kParamIds[i] << " | " << prm->getName (60) << " | " << prm->getCurrentValueAsText() << " | norm " << prm->getValue() << std::endl;
+        }
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_WHEELS", {}).isNotEmpty())
+    {
+        // does pitch bend / the mod wheel change the sound at all, preset by preset?
+        const auto& list = factoryPresets();
+        auto diffWith = [&] (int idx, std::vector<std::pair<double, juce::MidiMessage>> extra)
+        {
+            auto run = [&] (bool withExtra)
+            {
+                auto p = make(); if (idx >= 0) p->loadFactoryPreset (idx);
+                for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix }) setP (*p, i, 0.0f);   // no background-loaded reverbs
+                auto ev = chord (0.0, 1.4, { 57 });
+                if (withExtra) for (auto& e : extra) ev.push_back (e);
+                juce::AudioBuffer<float> c; render (*p, 1.5, ev, &c);
+                return c;
+            };
+            auto a = run (false), b = run (true);
+            double d = 0, e = 0;
+            for (int i = (int) (0.6 * sr); i < (int) (1.3 * sr); ++i) { d += std::pow (a.getSample (0, i) - b.getSample (0, i), 2.0); e += std::pow (a.getSample (0, i), 2.0); }
+            return 10.0 * std::log10 ((d + 1e-20) / (e + 1e-20));   // dB of difference relative to the signal
+        };
+        auto pitchOf = [&] (const juce::AudioBuffer<float>& c, double t0)
+        {
+            // autocorrelation pitch over 0.15 s (55-1000 Hz), mono
+            const int a = (int) (t0 * sr), N = (int) (0.15 * sr);
+            std::vector<double> x ((size_t) N + 2000);
+            for (int i = 0; i < (int) x.size(); ++i) x[(size_t) i] = c.getSample (0, a + i) + c.getSample (1, a + i);
+            double best = -1; int bestLag = 0;
+            for (int lag = (int) (sr / 1000); lag < (int) (sr / 55); ++lag)
+            {
+                double num = 0, e1 = 0, e2 = 0;
+                for (int i = 0; i < N; ++i) { num += x[(size_t) i] * x[(size_t) (i + lag)]; e1 += x[(size_t) i] * x[(size_t) i]; e2 += x[(size_t) (i + lag)] * x[(size_t) (i + lag)]; }
+                const double r = num / std::sqrt (e1 * e2 + 1e-20);
+                if (r > best + 0.02) { best = r; bestLag = lag; }   // first clear peak wins (avoids octave errors)
+            }
+            return bestLag > 0 ? sr / bestLag : 0.0;
+        };
+        auto lvl = [&] (const juce::AudioBuffer<float>& c, double t0, double t1) { double e = 0; for (int i = (int) (t0 * sr); i < (int) (t1 * sr); ++i) e += c.getSample (0, i) * c.getSample (0, i); return std::sqrt (e / ((t1 - t0) * sr)); };
+        for (int idx = -1; idx < (int) list.size(); ++idx)
+        {
+            auto p = make(); if (idx >= 0) p->loadFactoryPreset (idx);
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix }) setP (*p, i, 0.0f);
+            setP (*p, P_arpOn, 0.0f);
+            juce::AudioBuffer<float> c;
+            render (*p, 2.0, { { 0.0, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) }, { 0.8, juce::MidiMessage::pitchWheel (1, 16383) },
+                               { 1.9, juce::MidiMessage::noteOff (1, 57) } }, &c);
+            const double f0 = pitchOf (c, 0.5), f1 = pitchOf (c, 1.3);
+            std::cout << "WHEELS " << (idx < 0 ? juce::String ("<default state>") : juce::String (list[(size_t) idx].name)).paddedRight (' ', 24)
+                      << " bend range " << juce::String (p->param (P_bendRange)->convertFrom0to1 (p->param (P_bendRange)->getValue()), 0)
+                      << "  pitch " << juce::String (f0, 1) << " -> " << juce::String (f1, 1) << " Hz (x" << juce::String (f1 / std::max (1.0, f0), 3) << ")"
+                      << "  level " << juce::String (lvl (c, 0.5, 0.75), 3) << std::endl;
+        }
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_VST3", {}).isNotEmpty())
+    {
+        // Host the BUILT plug-in the way a DAW does: JUCE's VST3 hosting turns CCs and pitch bend into
+        // parameter changes through the plug-in's IMidiMapping, just as Ableton and other VST3 hosts do.
+        const juce::File bundle (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_VST3", {}));
+        juce::VST3PluginFormat fmt;
+        juce::OwnedArray<juce::PluginDescription> descs;
+        fmt.findAllTypesForFile (descs, bundle.getFullPathName());
+        CHECK (descs.size() > 0, "found the VST3");
+        if (descs.isEmpty()) return 1;
+        juce::String err;
+        auto h = fmt.createInstanceFromDescription (*descs[0], sr, 512, err);
+        CHECK (h != nullptr, "VST3 instance: " + err);
+        if (h == nullptr) return 1;
+        h->setPlayConfigDetails (0, 2, sr, 512);
+        h->prepareToPlay (sr, 512);
+        auto ref = make();   // our own copy, for parameter names and ranges
+        auto hostParam = [&] (int idx) -> juce::AudioProcessorParameter*
+        {
+            const auto name = ref->param (idx)->getName (200);
+            for (auto* hp : h->getParameters()) if (hp->getName (200) == name) return hp;
+            return nullptr;
+        };
+        auto hostSet = [&] (int idx, float plain)
+        {
+            auto* hp = hostParam (idx);
+            CHECK (hp != nullptr, "host sees parameter " + juce::String (kParamIds[idx]));
+            if (hp != nullptr) hp->setValueNotifyingHost (ref->param (idx)->convertTo0to1 (plain));
+        };
+        auto hostGet = [&] (int idx) { auto* hp = hostParam (idx); return hp != nullptr ? ref->param (idx)->convertFrom0to1 (hp->getValue()) : -1.0f; };
+        // a plain sine on Osc 1, nothing else
+        for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain,
+                       P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain, P_lfoAssignAmt0, P_ciAmount, P_mutAmount })
+            hostSet (i, 0.0f);
+        hostSet (P_filterCutoff, 20000.0f); hostSet (P_osc1Wave, 3.0f); hostSet (P_bendRange, 2.0f);
+        juce::AudioBuffer<float> out (2, (int) (3.0 * sr)), buf (2, 512);
+        std::vector<std::pair<int, juce::MidiMessage>> ev;
+        auto runFor = [&] (double secs, std::vector<std::pair<double, juce::MidiMessage>> events)
+        {
+            const int total = (int) (secs * sr);
+            out.setSize (2, total, false, true, true); out.clear();
+            for (int pos = 0; pos < total; pos += 512)
+            {
+                const int n = std::min (512, total - pos);
+                buf.setSize (2, n, false, false, true); buf.clear();
+                juce::MidiBuffer m;
+                for (auto& e : events) { const int at = (int) (e.first * sr); if (at >= pos && at < pos + n) m.addEvent (e.second, at - pos); }
+                h->processBlock (buf, m);
+                for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, buf, c, 0, n);
+            }
+        };
+        auto freqIn = [&] (double t0, double t1)
+        {
+            double first = -1, last = -1; int k = 0;
+            for (int i = (int) (t0 * sr) + 1; i < (int) (t1 * sr); ++i)
+            {
+                const float a = out.getSample (0, i - 1), b = out.getSample (0, i);
+                if (a < 0.0f && b >= 0.0f) { const double x = (i - 1 + a / (a - b)) / sr; if (first < 0) first = x; last = x; ++k; }
+            }
+            return k > 1 ? (k - 1) / (last - first) : 0.0;
+        };
+        runFor (0.3, {});   // let the parameter changes land
+        runFor (2.0, { { 0.0, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) },
+                       { 0.5, juce::MidiMessage::pitchWheel (1, 16383) },
+                       { 1.0, juce::MidiMessage::pitchWheel (1, 8192) },
+                       { 1.9, juce::MidiMessage::noteOff (1, 57) } });
+        const double f0 = freqIn (0.2, 0.45), fUp = freqIn (0.7, 0.95), fBack = freqIn (1.2, 1.45);
+        std::cout << "  VST3: held note " << juce::String (f0, 1) << " Hz, bent up " << juce::String (fUp, 1) << " Hz, back " << juce::String (fBack, 1) << " Hz" << std::endl;
+        CHECK (std::abs (f0 - 220.0) < 1.0, "VST3: the note plays at 220 Hz");
+        CHECK (std::abs (fUp - 220.0 * std::pow (2.0, 2.0 / 12.0)) < 1.5, "VST3: pitch bend up 2 st on a held note");
+        CHECK (std::abs (fBack - 220.0) < 1.0, "VST3: bend returns to centre");
+        hostSet (P_bendRange, 12.0f);
+        runFor (0.2, {});
+        runFor (1.0, { { 0.0, juce::MidiMessage::pitchWheel (1, 0) }, { 0.05, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) },
+                       { 0.9, juce::MidiMessage::noteOff (1, 57) }, { 0.95, juce::MidiMessage::pitchWheel (1, 8192) } });
+        const double fDown = freqIn (0.3, 0.6);
+        std::cout << "  VST3: new note with full bend down, range 12: " << juce::String (fDown, 1) << " Hz" << std::endl;
+        CHECK (std::abs (fDown - 110.0) < 1.0, "VST3: bend range honoured, and applies to a new note");
+        // CC7 reaches the plug-in (volume -> master volume)
+        runFor (0.5, { { 0.0, juce::MidiMessage::controllerEvent (1, 7, 0) } });
+        runFor (0.3, {});
+        CHECK (hostGet (P_masterVolume) < 0.01f, "VST3: CC7 arrives (" + juce::String (hostGet (P_masterVolume), 3) + ")");
+        // CC1 reaches the plug-in (mod wheel -> LFO 1 depth, as in the browser synth; Init switches that link off)
+        hostSet (P_wheelLfo1, 1.0f); runFor (0.1, {});
+        runFor (0.5, { { 0.0, juce::MidiMessage::controllerEvent (1, 1, 127) } });
+        runFor (0.3, {});
+        CHECK (hostGet (P_lfo1Depth) > 0.99f * ref->param (P_lfo1Depth)->getNormalisableRange().end, "VST3: CC1 arrives (LFO 1 depth " + juce::String (hostGet (P_lfo1Depth), 3) + ")");
+        // CC64 through the host: a released key keeps sounding until the pedal comes up
+        hostSet (P_bendRange, 2.0f); hostSet (P_masterVolume, 0.25f);
+        runFor (0.2, {});
+        runFor (1.6, { { 0.0, juce::MidiMessage::controllerEvent (1, 64, 127) }, { 0.05, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) },
+                       { 0.2, juce::MidiMessage::noteOff (1, 57) }, { 0.8, juce::MidiMessage::controllerEvent (1, 64, 0) } });
+        auto rms = [&] (double t0, double t1) { double e = 0; for (int i = (int) (t0 * sr); i < (int) (t1 * sr); ++i) e += out.getSample (0, i) * out.getSample (0, i); return std::sqrt (e / ((t1 - t0) * sr)); };
+        std::cout << "  VST3 sustain: held " << rms (0.6, 0.75) << ", after pedal up " << rms (1.4, 1.6) << std::endl;
+        CHECK (rms (0.6, 0.75) > 0.01 && rms (1.4, 1.6) < rms (0.6, 0.75) * 0.01, "VST3: sustain pedal");
+        h->releaseResources();
+        h.reset();
+        {
+            // a brand-new instance in the host starts from Init, and the mod wheel brings in vibrato
+            auto h2 = fmt.createInstanceFromDescription (*descs[0], sr, 512, err);
+            h2->setPlayConfigDetails (0, 2, sr, 512); h2->prepareToPlay (sr, 512);
+            { std::unique_ptr<juce::AudioProcessorEditor> e2 (h2->createEditorIfNeeded()); }   // no message loop here, so let the editor apply Init
+            auto get2 = [&] (int idx) { const auto name = ref->param (idx)->getName (200); for (auto* hp : h2->getParameters()) if (hp->getName (200) == name) return ref->param (idx)->convertFrom0to1 (hp->getValue()); return -1.0f; };
+            CHECK (get2 (P_osc2Gain) < 1e-4f && get2 (P_fxOnReverb) < 0.5f && get2 (P_filterCutoff) > 19000.0f, "VST3: a new instance starts at Init");
+            for (auto* hp : h2->getParameters()) if (hp->getName (200) == ref->param (P_osc1Wave)->getName (200)) hp->setValueNotifyingHost (ref->param (P_osc1Wave)->convertTo0to1 (3.0f));
+            auto run2 = [&] (double secs, std::vector<std::pair<double, juce::MidiMessage>> events)
+            {
+                const int total = (int) (secs * sr); out.setSize (2, total, false, true, true); out.clear();
+                for (int pos = 0; pos < total; pos += 512)
+                {
+                    const int n = std::min (512, total - pos); buf.setSize (2, n, false, false, true); buf.clear();
+                    juce::MidiBuffer m; for (auto& e : events) { const int at = (int) (e.first * sr); if (at >= pos && at < pos + n) m.addEvent (e.second, at - pos); }
+                    h2->processBlock (buf, m); for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, buf, c, 0, n);
+                }
+            };
+            run2 (0.2, {});
+            run2 (1.0, { { 0.0, juce::MidiMessage::controllerEvent (1, 1, 127) }, { 0.0, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) }, { 0.99, juce::MidiMessage::noteOff (1, 57) } });
+            double lo = 1e9, hi = 0;
+            for (double t = 0.3; t < 0.9; t += 0.02) { const double f = freqIn (t, t + 0.03); lo = std::min (lo, f); hi = std::max (hi, f); }
+            const double cents = 1200.0 * std::log2 (hi / lo);
+            std::cout << "  VST3 Init + mod wheel: " << juce::String (cents, 1) << " cents of vibrato" << std::endl;
+            CHECK (cents > 25.0 && cents < 90.0, "VST3: the mod wheel adds vibrato on Init");
+            h2->releaseResources();
+        }
+        std::cout << (failures == 0 ? "VST3 HOST TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_HASHALL", {}).isNotEmpty())
     {
         // a fingerprint of every factory preset's output (DAW at 172 BPM, play pressed mid-bar), plus the worst case, at all three qualities
@@ -2479,6 +2677,232 @@ int main()
     {
         hardTests();
         std::cout << (failures == 0 ? "HARD TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+    // ---- MIDI input: pitch bend range, sustain pedal, mod wheel, learn on any control; the clean Init patch
+    auto midiTests = [&]
+    {
+        std::cout << "MIDI input / Init" << std::endl;
+        auto clean = [&]
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain, P_osc2Gain, P_osc3Gain, P_subGain }) setP (*p, i, 0.0f);
+            setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_lfoAssignAmt0, 0.0f); setP (*p, P_osc1Wave, 3.0f);
+            return p;
+        };
+        auto freqIn = [&] (const juce::AudioBuffer<float>& c, double t0, double t1)
+        {
+            double first = -1, last = -1; int k = 0;
+            for (int i = (int) (t0 * sr) + 1; i < (int) (t1 * sr); ++i)
+            {
+                const float a = c.getSample (0, i - 1), b = c.getSample (0, i);
+                if (a < 0.0f && b >= 0.0f) { const double x = (i - 1 + a / (a - b)) / sr; if (first < 0) first = x; last = x; ++k; }
+            }
+            return k > 1 ? (k - 1) / (last - first) : 0.0;
+        };
+        auto rmsIn = [&] (const juce::AudioBuffer<float>& c, double t0, double t1)
+        {
+            double e = 0; const int a = (int) (t0 * sr), b = (int) (t1 * sr);
+            for (int i = a; i < b; ++i) e += c.getSample (0, i) * c.getSample (0, i) + c.getSample (1, i) * c.getSample (1, i);
+            return std::sqrt (e / std::max (1, 2 * (b - a)));
+        };
+        {
+            // changing the bend range bends a note that is already bent
+            auto p = clean();
+            juce::AudioBuffer<float> a; render (*p, 0.4, { { 0.0, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) }, { 0.0, juce::MidiMessage::pitchWheel (1, 16383) } }, &a);
+            const double f2 = freqIn (a, 0.2, 0.39);
+            setP (*p, P_bendRange, 12.0f);
+            juce::AudioBuffer<float> b; render (*p, 0.4, {}, &b);
+            const double f12 = freqIn (b, 0.2, 0.39);
+            std::cout << "  full bend: range 2 " << juce::String (f2, 1) << " Hz, range 12 " << juce::String (f12, 1) << " Hz" << std::endl;
+            CHECK (std::abs (f2 - 246.94) < 1.0 && std::abs (f12 - 440.0) < 1.5, "bend range applies to a held, bent note");
+        }
+        {
+            // sustain pedal
+            auto run = [&] (bool pedalParam, juce::AudioBuffer<float>& c)
+            {
+                auto p = clean(); setP (*p, P_sustainPedal, pedalParam ? 1.0f : 0.0f);
+                render (*p, 1.6, { { 0.0, juce::MidiMessage::controllerEvent (1, 64, 127) }, { 0.05, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) },
+                                   { 0.2, juce::MidiMessage::noteOff (1, 57) }, { 0.8, juce::MidiMessage::controllerEvent (1, 64, 0) } }, &c);
+                return std::move (p);
+            };
+            juce::AudioBuffer<float> on, off;
+            run (true, on); run (false, off);
+            const double heldOn = rmsIn (on, 0.6, 0.75), afterOn = rmsIn (on, 1.4, 1.6), heldOff = rmsIn (off, 1.4, 1.6);
+            std::cout << "  sustain: held " << heldOn << ", after pedal up " << afterOn << "; pedal switched off, same time: " << heldOff << std::endl;
+            CHECK (heldOn > 0.02 && afterOn < heldOn * 0.01, "sustain pedal holds a released key until the pedal comes up");
+            CHECK (heldOff < heldOn * 0.01, "Sustain Pedal off: CC64 is ignored");
+            // re-striking a sustained key doesn't pile up voices
+            auto p = clean();
+            std::vector<std::pair<double, juce::MidiMessage>> ev { { 0.0, juce::MidiMessage::controllerEvent (1, 64, 127) } };
+            for (int k = 0; k < 6; ++k) { ev.push_back ({ 0.01 + 0.1 * k, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) }); ev.push_back ({ 0.06 + 0.1 * k, juce::MidiMessage::noteOff (1, 60) }); }
+            render (*p, 0.7, ev);
+            render (*p, 1.5, {});   // the re-struck notes ring out; only the last one is still held by the pedal
+            CHECK (p->getEngine().activeVoiceCount() == 1 && p->getEngine().isHeld (60), "re-striking under the pedal: " + juce::String (p->getEngine().activeVoiceCount()) + " voice(s) left");
+            // chord memory under the pedal: the whole chord is released with the pedal
+            auto q = clean(); setP (*q, P_chdOn, 1.0f); setP (*q, P_chdPreset, 7.0f);
+            render (*q, 0.3, { { 0.0, juce::MidiMessage::controllerEvent (1, 64, 127) }, { 0.01, juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100) }, { 0.1, juce::MidiMessage::noteOff (1, 48) } });
+            int held = 0; for (int j = 0; j < 8; ++j) held += q->getEngine().isHeld (2000 + 48 * 16 + j) ? 1 : 0;
+            render (*q, 0.05, { { 0.0, juce::MidiMessage::controllerEvent (1, 64, 0) } });
+            int after = 0; for (int j = 0; j < 8; ++j) after += q->getEngine().isHeld (2000 + 48 * 16 + j) ? 1 : 0;
+            CHECK (held == 5 && after == 0, "sustained chord: held " + juce::String (held) + ", then released");
+            // all notes off clears the pedal
+            auto r = clean();
+            render (*r, 0.3, { { 0.0, juce::MidiMessage::controllerEvent (1, 64, 127) }, { 0.01, juce::MidiMessage::noteOn (1, 50, (juce::uint8) 100) }, { 0.1, juce::MidiMessage::noteOff (1, 50) },
+                               { 0.2, juce::MidiMessage::controllerEvent (1, 123, 0) } });
+            render (*r, 0.05, { { 0.0, juce::MidiMessage::noteOn (1, 52, (juce::uint8) 100) }, { 0.01, juce::MidiMessage::noteOff (1, 52) } });
+            CHECK (! r->getEngine().isHeld (52) && ! r->getEngine().isHeld (50), "All Notes Off lifts the pedal");
+        }
+        {
+            // mod wheel: the legacy LFO 1 Depth link can be switched off; the wheel is always a Mod Matrix source
+            auto a = make(); render (*a, 0.02, { { 0.0, juce::MidiMessage::controllerEvent (1, 1, 127) } });
+            CHECK (a->param (P_lfo1Depth)->getValue() > 0.99f, "wheel -> LFO 1 Depth (as before)");
+            auto b = make(); setP (*b, P_wheelLfo1, 0.0f);
+            const float before = b->param (P_lfo1Depth)->getValue();
+            render (*b, 0.02, { { 0.0, juce::MidiMessage::controllerEvent (1, 1, 127) } });
+            CHECK (std::abs (b->param (P_lfo1Depth)->getValue() - before) < 1e-6f, "switched off: the wheel leaves LFO 1 Depth alone");
+            CHECK (std::abs (b->monWheel.load() - 1.0f) < 1e-6f && b->monCC.load() == 1 && b->monCCCount.load() == 1, "the MIDI monitor saw the wheel");
+            render (*b, 0.02, { { 0.0, juce::MidiMessage::pitchWheel (1, 0) } });
+            CHECK (b->monBend.load() < -0.99f && b->monBendCount.load() == 1, "the MIDI monitor saw the bend");
+        }
+        {
+            // MIDI learn on a toggle and on a choice
+            auto p = make();
+            p->midiLearn (P_fxOnReverb); render (*p, 0.02, { { 0.0, juce::MidiMessage::controllerEvent (1, 25, 0) } });
+            CHECK (p->ccForParam (P_fxOnReverb) == 25 && p->param (P_fxOnReverb)->getValue() < 0.5f, "toggle learned (off)");
+            render (*p, 0.02, { { 0.0, juce::MidiMessage::controllerEvent (1, 25, 127) } });
+            CHECK (p->param (P_fxOnReverb)->getValue() > 0.5f, "learned CC switches the toggle on");
+            p->midiLearn (P_filterType); render (*p, 0.02, { { 0.0, juce::MidiMessage::controllerEvent (1, 26, 127) } });
+            CHECK (p->ccForParam (P_filterType) == 26 && p->param (P_filterType)->getValue() > 0.99f, "choice learned: CC 127 picks the last entry");
+            // undo leaves the MIDI map alone
+            p->pushHistory ("x"); setP (*p, P_filterCutoff, 300.0f); p->pushHistory ("y"); p->undo();
+            CHECK (p->ccForParam (P_fxOnReverb) == 25 && p->ccForParam (P_filterType) == 26, "undo keeps the MIDI map");
+            // the editor tags its toggles and choice boxes so right-click can offer MIDI Learn
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            int tagged = 0, toggles = 0, combos = 0;
+            std::function<void (juce::Component*)> walk = [&] (juce::Component* c)
+            {
+                if (c->getProperties().contains ("megaParam"))
+                {
+                    ++tagged;
+                    if (dynamic_cast<juce::ToggleButton*> (c) != nullptr) ++toggles;
+                    if (dynamic_cast<juce::ComboBox*> (c) != nullptr) ++combos;
+                }
+                for (auto* ch : c->getChildren()) walk (ch);
+            };
+            walk (ed.get());
+            std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
+            {
+                if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
+                for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
+                return nullptr;
+            };
+            if (auto* tabs = findTabs (ed.get()))
+                for (int t = 0; t < tabs->getNumTabs(); ++t)
+                    if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);   // pages not on screen
+            std::cout << "  learnable toggles " << toggles << ", choice boxes " << combos << std::endl;
+            CHECK (toggles >= 20 && combos >= 40, "toggles and choice boxes offer MIDI Learn");
+        }
+        // ---- Init
+        auto initFile = MegaSynthProcessor::getUserInitFile();
+        initFile.deleteFile();
+        auto fresh = [&]
+        {
+            MegaSynthProcessor::applyInitOnCreate = true;
+            auto p = make();
+            p->initOnFirstUse();   // what the first timer tick (or opening the editor) does
+            MegaSynthProcessor::applyInitOnCreate = false;
+            return p;
+        };
+        auto plain = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+        {
+            auto p = fresh();
+            CHECK (p->getPatchName() == "Init", "a new instance is called Init");
+            bool clean = plain (*p, P_osc1Gain) > 0.5f && plain (*p, P_fxOnReverb) < 0.5f && plain (*p, P_fxOnDelay) < 0.5f && plain (*p, P_fxOnChorus) < 0.5f;
+            for (int i : { P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain, P_complexGain, P_supersawGain, P_mutAmount, P_ciAmount, P_dsOn, P_arpOn, P_chdOn, P_fEnvAmt, P_lfoAssignAmt0, P_envAssignAmt0 })
+                clean = clean && std::abs (plain (*p, i)) < 1e-4f;
+            for (int k = 0; k < 6; ++k) clean = clean && plain (*p, P_uni1Voices + kUniStride * k) < 1.5f;
+            for (int k = 0; k < FS_COUNT; ++k) clean = clean && plain (*p, P_fxOnStutter + 2 * k) < 0.5f;
+            CHECK (clean, "Init: Osc 1 only, no effects, no mutation, sequencers or arp");
+            // only Osc 1 is heard, and nothing rings on after the release
+            juce::AudioBuffer<float> c; render (*p, 1.5, chord (0.0, 0.5, { 57 }), &c);
+            const double lvl = rmsIn (c, 0.2, 0.45), tail = rmsIn (c, 1.2, 1.5);
+            setP (*p, P_osc1Gain, 0.0f);
+            juce::AudioBuffer<float> d; render (*p, 0.6, chord (0.0, 0.5, { 57 }), &d);
+            std::cout << "  Init: level " << lvl << ", tail " << tail << ", without Osc 1 " << rmsIn (d, 0.1, 0.45) << std::endl;
+            CHECK (lvl > 0.02 && tail < 1e-5 && rmsIn (d, 0.1, 0.45) < 1e-6, "Init: Osc 1 is the only sound and there is no effects tail");
+            // the wheel brings in vibrato
+            auto v = fresh(); setP (*v, P_osc1Wave, 3.0f);
+            auto spread = [&] (const juce::AudioBuffer<float>& b)
+            {
+                double lo = 1e9, hi = 0;
+                for (double t = 0.3; t < 0.9; t += 0.02) { const double f = freqIn (b, t, t + 0.03); lo = std::min (lo, f); hi = std::max (hi, f); }
+                return 1200.0 * std::log2 (hi / lo);
+            };
+            juce::AudioBuffer<float> w0, w1;
+            render (*v, 1.0, chord (0.0, 1.0, { 57 }), &w0);
+            render (*v, 1.0, { { 0.0, juce::MidiMessage::controllerEvent (1, 1, 127) }, { 0.0, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) }, { 0.99, juce::MidiMessage::noteOff (1, 57) } }, &w1);
+            std::cout << "  Init vibrato: wheel down " << juce::String (spread (w0), 1) << " cents, wheel up " << juce::String (spread (w1), 1) << " cents peak to peak" << std::endl;
+            CHECK (spread (w0) < 3.0 && spread (w1) > 25.0 && spread (w1) < 90.0, "Init: the mod wheel adds vibrato");
+        }
+        {
+            // Save as Init, the Init button, Reset to factory
+            auto p = fresh(); setP (*p, P_filterCutoff, 900.0f); setP (*p, P_osc2Gain, 0.5f);
+            CHECK (p->saveCurrentAsInit() && MegaSynthProcessor::hasUserInit(), "Save as Init");
+            auto q = fresh();
+            CHECK (std::abs (plain (*q, P_filterCutoff) - 900.0f) < 2.0f && std::abs (plain (*q, P_osc2Gain) - 0.5f) < 0.01f, "a new instance starts from the saved Init");
+            auto r = make(); setP (*r, P_filterRes, 9.0f); r->pushHistory ("edit"); r->loadInitPatch();
+            CHECK (std::abs (plain (*r, P_filterCutoff) - 900.0f) < 2.0f && plain (*r, P_filterRes) < 2.0f && r->getPatchName() == "Init", "the Init button loads the saved Init");
+            r->undo();
+            CHECK (std::abs (plain (*r, P_filterRes) - 9.0f) < 0.1f, "Init can be undone");
+            CHECK (p->resetInitToFactory() && ! MegaSynthProcessor::hasUserInit(), "Reset Init to factory");
+            auto s2 = fresh();
+            CHECK (plain (*s2, P_filterCutoff) > 19000.0f && plain (*s2, P_osc2Gain) < 1e-4f, "after the reset: the clean Init again");
+        }
+        {
+            // restoring a project never applies Init: an old project (state from before Init existed) comes back exactly
+            auto old = make();   // the old start-up state (bare defaults), with a few edits
+            setP (*old, P_filterCutoff, 1234.0f); old->addRoute (MS_Lfo2, P_filterRes, 0.3f);
+            juce::MemoryBlock mb; old->getStateInformation (mb);
+            MegaSynthProcessor::applyInitOnCreate = true;
+            auto p = std::make_unique<MegaSynthProcessor>();
+            p->setStateInformation (mb.getData(), (int) mb.getSize());
+            p->setPlayConfigDetails (0, 2, sr, 512); p->prepareToPlay (sr, 512); p->initOnFirstUse();
+            MegaSynthProcessor::applyInitOnCreate = false;
+            CHECK (p->getPatchName() != "Init" || old->getPatchName() == "Init", "a restored project isn't replaced by Init");
+            bool same = true; int firstDiff = -1;
+            for (int i = 0; i < P_COUNT; ++i)
+                if (std::abs (p->param (i)->getValue() - old->param (i)->getValue()) > 1e-6f) { same = false; if (firstDiff < 0) firstDiff = i; }
+            CHECK (same, "a restored project gets every parameter back" + (firstDiff >= 0 ? juce::String (" (differs: ") + kParamIds[firstDiff] + ")" : juce::String()));
+            CHECK (juce::JSON::toString (p->routes.toVar()) == juce::JSON::toString (old->routes.toVar()), "a restored project gets its routes back (Init's wheel route is gone)");
+            juce::MemoryBlock m2; p->getStateInformation (m2);
+            CHECK (getXmlFromBinaryForTest (m2) == getXmlFromBinaryForTest (mb), "the restored project saves out identically");
+            // and the old start-up sound: a project saved with the defaults renders exactly as a bare instance
+            auto a = make(); juce::MemoryBlock m3; a->getStateInformation (m3);
+            // as a host loads a project: a new instance, the state, then prepare
+            MegaSynthProcessor::applyInitOnCreate = true;
+            auto b = std::make_unique<MegaSynthProcessor>();
+            b->setStateInformation (m3.getData(), (int) m3.getSize());
+            b->setPlayConfigDetails (0, 2, sr, 512); b->prepareToPlay (sr, 512); b->initOnFirstUse();
+            MegaSynthProcessor::applyInitOnCreate = false;
+            auto c2 = make();
+            juce::AudioBuffer<float> x, y;
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix }) { setP (*b, i, 0.0f); setP (*c2, i, 0.0f); }
+            tg::resetVoiceRandom(); render (*b, 1.0, chord (0.0, 0.5, { 48, 55 }), &x);
+            tg::resetVoiceRandom(); render (*c2, 1.0, chord (0.0, 0.5, { 48, 55 }), &y);
+            double diff = 0; for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < x.getNumSamples(); ++i) diff = std::max (diff, (double) std::abs (x.getSample (ch, i) - y.getSample (ch, i)));
+            CHECK (diff == 0.0, "an old project on a new instance sounds exactly as before");
+        }
+        {
+            tgui::PatchCatalogue c; c.rescan();
+            CHECK (c.size() > 0 && c[0].name == "Init" && c[0].factory && c[0].index < 0 && c[0].category == "Init", "the browser lists Init first");
+        }
+        initFile.deleteFile();
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_MIDIONLY", {}).isNotEmpty())
+    {
+        midiTests();
+        std::cout << (failures == 0 ? "MIDI TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PLAYONLY", {}).isNotEmpty())
@@ -3814,6 +4238,7 @@ int main()
     dnaTests();
     fxTests();
     playTests();
+    midiTests();
     hardTests();
     lfoTests();
     arpTests();

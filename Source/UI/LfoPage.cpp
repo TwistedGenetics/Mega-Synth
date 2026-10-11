@@ -246,8 +246,8 @@ LfoPanel::LfoPanel (MegaSynthProcessor& p, int k, juce::Colour c) : proc (p), lf
     }
     uni.setTooltip ("0..1 instead of -1..1: modulation only goes one way");
     custom.setTooltip ("Use the drawn shape instead of the waveform");
-    btnAtt.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[xb + 5], uni));
-    btnAtt.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[xb + 7], custom));
+    btnAtt.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[xb + 5], tagParam (uni, xb + 5)));
+    btnAtt.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[xb + 7], tagParam (custom, xb + 7)));
 
     editor = std::make_unique<LfoShapeEditor> (proc, lfo);
     addAndMakeVisible (*editor);

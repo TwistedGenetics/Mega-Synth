@@ -37,7 +37,8 @@ namespace
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
-            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni") || id.startsWith ("pEnv") || id.startsWith ("mseg");
+            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni") || id.startsWith ("pEnv") || id.startsWith ("mseg")
+            || id == "wheelLfo1" || id == "sustainPedal";
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -185,6 +186,7 @@ void MegaSynthProcessor::prepareToPlay (double sr, int block)
     fillSnapshot (0);
     const double tempo = snap.fxTempo;
     engine.fx().updateImpulse (juce::jlimit (0.5, 4.5, syncSeconds (kListReverbSync, snap.i (P_reverbSync), tempo, snap.f (P_reverbSize))));
+    sustained.fill (false); sustainDown = false;
     seqRunning = false;
     seqHeldKey = -1;
     seqReleaseIn = -1;
@@ -198,6 +200,7 @@ void MegaSynthProcessor::fillSnapshot (int)
     snap.sampleRate = sampleRate;
     const double ht = hostTempo.load();
     snap.fxTempo = ht > 0 ? ht : (double) snap.f (P_seqTempo);
+    bendSemis = bendNorm * snap.f (P_bendRange);
     snap.bendSemis = bendSemis;
 }
 
@@ -286,6 +289,12 @@ void MegaSynthProcessor::routeNoteOn (int note, float vel, int ch)
     engine.polyFloor = 0;
 }
 
+void MegaSynthProcessor::sustainRelease()
+{
+    for (int k = 0; k < 128; ++k)
+        if (sustained[(size_t) k]) { sustained[(size_t) k] = false; routeNoteOff (k); }
+}
+
 void MegaSynthProcessor::routeNoteOff (int note)
 {
     note &= 127;
@@ -354,16 +363,30 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
     }
     if (m.isNoteOn())
     {
+        monNoteCount.fetch_add (1, std::memory_order_relaxed); monCh.store (ch, std::memory_order_relaxed);
+        const int nn = m.getNoteNumber() & 127;
+        if (sustained[(size_t) nn]) { sustained[(size_t) nn] = false; routeNoteOff (nn); }   // re-striking a sustained key
         routeNoteOn (m.getNoteNumber(), m.getFloatVelocity(), ch);
     }
     else if (m.isNoteOff())
     {
-        routeNoteOff (m.getNoteNumber());
+        const int nn = m.getNoteNumber() & 127;
+        if (sustainDown) sustained[(size_t) nn] = true;   // held by the pedal
+        else routeNoteOff (nn);
     }
     else if (m.isController())
     {
         const int cc = m.getControllerNumber();
         const float v = m.getControllerValue() / 127.0f;
+        monCC.store (cc, std::memory_order_relaxed); monCCVal.store (m.getControllerValue(), std::memory_order_relaxed);
+        monCh.store (ch, std::memory_order_relaxed); monCCCount.fetch_add (1, std::memory_order_relaxed);
+        if (cc == 1) monWheel.store (v, std::memory_order_relaxed);
+        if (cc == 64)
+        {
+            const bool down = m.getControllerValue() >= 64 && snap.i (P_sustainPedal) != 0;
+            if (sustainDown && ! down) sustainRelease();
+            sustainDown = down; monSustain.store (down, std::memory_order_relaxed);
+        }
         // MIDI learn: the first controller moved after "MIDI Learn" is mapped to that parameter
         if (cc < 120)
         {
@@ -382,9 +405,9 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
         if (cc == juce::roundToInt (snap.f (P_ccBNum))) modInputs.ccB = v;
         if (cc == 74) modInputs.mpeSlide[ch - 1] = v;              // MPE slide (Y)
         if (cc == 1) modInputs.wheel = v;
-        if (cc == 1) setParamFromAudio (P_lfo1Depth, v);           // mod wheel -> LFO1 depth (as in the browser)
+        if (cc == 1) { if (snap.i (P_wheelLfo1) != 0) setParamFromAudio (P_lfo1Depth, v); }   // mod wheel -> LFO1 depth (as in the browser; can be switched off)
         else if (cc == 7) setParamFromAudio (P_masterVolume, v);   // volume -> master volume
-        else if (cc == 120 || cc == 123) engine.allNotesOff();
+        else if (cc == 120 || cc == 123) { sustained.fill (false); sustainDown = false; monSustain.store (false); engine.allNotesOff(); }
     }
     else if (m.isProgramChange())
     {
@@ -395,6 +418,7 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
     {
         const float v = m.getChannelPressureValue() / 127.0f;
         modInputs.aftertouch = v;
+        monPressure.store (v, std::memory_order_relaxed);
         modInputs.mpePressure[ch - 1] = v;
     }
     else if (m.isAftertouch())
@@ -406,11 +430,14 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
         const float b = (float) ((m.getPitchWheelValue() - 8192) / 8192.0);
         modInputs.bend = b;
         modInputs.mpeGlide[ch - 1] = b;
-        bendSemis = (float) ((m.getPitchWheelValue() - 8192) / 8192.0) * snap.f (P_bendRange);
+        bendNorm = b;
+        bendSemis = bendNorm * snap.f (P_bendRange);
         snap.bendSemis = bendSemis;
+        monBend.store (b, std::memory_order_relaxed); monCh.store (ch, std::memory_order_relaxed); monBendCount.fetch_add (1, std::memory_order_relaxed);
     }
     else if (m.isAllNotesOff() || m.isAllSoundOff())
     {
+        sustained.fill (false); sustainDown = false; monSustain.store (false);
         engine.allNotesOff();
     }
 }
@@ -748,8 +775,9 @@ void MegaSynthProcessor::timerCallback()
 {
     {
         const int prog = pendingProgram.exchange (-1);
-        if (prog >= 0) loadFactoryPreset (prog);
+        if (prog >= 0) { stateRestored = true; loadFactoryPreset (prog); }
     }
+    initOnFirstUse();   // a new instance: Init, on the message thread, once (never over a restored project)
     updateLatency();
     pollCapture();
     // history: record a snapshot shortly after an edit finishes (knob released, step changed)
@@ -911,6 +939,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
 
 void MegaSynthProcessor::setStateInformation (const void* data, int size)
 {
+    stateRestored = true;   // a project: never put Init over it
     auto xml = getXmlFromBinary (data, size);
     if (xml == nullptr) return;
     auto tree = juce::ValueTree::fromXml (*xml);
@@ -1222,6 +1251,98 @@ void MegaSynthProcessor::resetToDefaults()
     markOriginal();
 }
 
+juce::File MegaSynthProcessor::getUserInitFile()
+{
+    const auto over = juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_DATA_DIR", {});
+    juce::File dir;
+    if (over.isNotEmpty()) dir = juce::File (over);
+    else
+    {
+       #if JUCE_MAC
+        dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Application Support").getChildFile ("Mega Synth");
+       #else
+        dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Mega Synth");
+       #endif
+    }
+    return dir.getChildFile ("UserInit.megasynth-init");
+}
+
+bool MegaSynthProcessor::hasUserInit() { return getUserInitFile().existsAsFile(); }
+
+void MegaSynthProcessor::applyFactoryInit()
+{
+    resetPatchState();
+    auto set = [this] (int idx, float plain)
+    {
+        auto* prm = params[(size_t) idx];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->convertTo0to1 (plain));
+        prm->endChangeGesture();
+    };
+    // one saw on Osc 1; every other source off
+    set (P_osc1Wave, 0.0f); set (P_osc1Gain, 0.8f);
+    for (int i : { P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain, P_complexGain, P_supersawGain, P_ringGain })
+        set (i, 0.0f);
+    set (P_warmth, 0.0f); set (P_analogDrift, 0.0f);
+    // filter open, no envelope sweep
+    set (P_filterCutoff, 20000.0f); set (P_fEnvAmt, 0.0f); set (P_envAssignAmt0, 0.0f);
+    // a plain amp envelope
+    set (P_ampA, 0.005f); set (P_ampD, 0.2f); set (P_ampS, 1.0f); set (P_ampR, 0.25f);
+    // no effects
+    for (int i : { P_delayMix, P_reverbMix, P_chorusMix, P_shimmerMix, P_reverseMix }) set (i, 0.0f);
+    for (int i : { P_fxOnDelay, P_fxOnChorus, P_fxOnReverb }) set (i, 0.0f);
+    // no vibrato until the mod wheel asks for it: the wheel adds up to about 25 cents of LFO 1 (5 Hz) to the pitch
+    set (P_lfoAssignAmt0, 0.0f);
+    set (P_wheelLfo1, 0.0f);
+    addRoute (MS_ModWheel, P_lfoAssignAmt0, kInitWheelVibrato);
+}
+
+void MegaSynthProcessor::applyInitState()
+{
+    if (hasUserInit())
+    {
+        const auto text = getUserInitFile().loadFileAsString();
+        resetPatchState();
+        if (importBrowserPatch (text).isEmpty()) return;
+    }
+    applyFactoryInit();
+}
+
+// A new instance starts from Init, applied on the message thread at the processor's first timer tick or
+// when its editor opens, and only if the host hasn't restored a project (or chosen a program) by then.
+// (Not in prepareToPlay: changing parameters while the host is activating the plug-in upsets some hosts.) Applying it lazily means an existing
+// project always loads into an untouched instance, so it comes back exactly as it did before Init existed.
+void MegaSynthProcessor::initOnFirstUse()
+{
+    if (initDone || stateRestored || ! applyInitOnCreate.load()) return;
+    initDone = true;
+    applyInitState();
+    setPatchName ("Init");
+    pushHistory ("Init");
+    markOriginal();
+}
+
+void MegaSynthProcessor::loadInitPatch()
+{
+    applyInitState();
+    setPatchName ("Init");
+    pushHistory ("Init");
+    markOriginal();
+}
+
+bool MegaSynthProcessor::saveCurrentAsInit()
+{
+    auto f = getUserInitFile();
+    f.getParentDirectory().createDirectory();
+    return f.replaceWithText (exportBrowserPatch());
+}
+
+bool MegaSynthProcessor::resetInitToFactory()
+{
+    auto f = getUserInitFile();
+    return ! f.existsAsFile() || f.deleteFile();
+}
+
 void MegaSynthProcessor::resetPatchState()
 {
     for (auto* p : params)
@@ -1435,6 +1556,7 @@ const juce::String MegaSynthProcessor::getProgramName (int i)
 void MegaSynthProcessor::setCurrentProgram (int i)
 {
     if (i < 0 || i >= getNumPrograms() || i == curProgram.load()) return;
+    stateRestored = true;
     curProgram.store (i);
     if (juce::MessageManager::existsAndIsCurrentThread()) { pendingProgram.store (-1); loadFactoryPreset (i); }
     else pendingProgram.store (i);   // picked up by the timer
@@ -2015,6 +2137,7 @@ void MegaSynthProcessor::setMacroNamesJoined (const juce::String& s)
 
 juce::AudioProcessorEditor* MegaSynthProcessor::createEditor()
 {
+    initOnFirstUse();
     return new MegaSynthEditor (*this);
 }
 

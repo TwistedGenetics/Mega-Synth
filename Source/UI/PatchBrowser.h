@@ -12,7 +12,7 @@ struct PatchEntry
 {
     juce::String name, category, description;
     bool factory = false;
-    int index = -1;          // factory preset index
+    int index = -1;          // factory preset index (-1 with factory: the Init patch)
     juce::File file;         // user patch
     juce::String key() const;   // favourites key: "factory:<name>" or "file:<path relative to the patch folder>"
 };
@@ -52,6 +52,7 @@ public:
     explicit PatchBrowser (MegaSynthProcessor&);
     std::function<void (int)> onLoadFactory;
     std::function<void (const juce::File&)> onLoadFile;
+    std::function<void()> onLoadInit;
     std::function<void()> onClose;
 
     void open();   // rescans and shows

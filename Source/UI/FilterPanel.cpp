@@ -287,8 +287,8 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
     addAndMakeVisible (which);
     routing.setTooltip ("Serial: Filter 1 then Filter 2.  Parallel: both get the same sound and are added (Balance sets the mix).");
     addAndMakeVisible (routing);
-    f2OnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_filter2On], f2On);
-    splitAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_filterStereoSplit], split);
+    f2OnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_filter2On], tagParam (f2On, P_filter2On));
+    splitAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_filterStereoSplit], tagParam (split, P_filterStereoSplit));
     f2On.setTooltip ("Switch Filter 2 in. Off, it uses no CPU and the sound is Filter 1 alone.");
     split.setTooltip ("Parallel only: Filter 1 on the left, Filter 2 on the right (Balance tilts between them)");
     addAndMakeVisible (f2On);
@@ -327,7 +327,7 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
         addChildComponent (s);
         auto* box = lfoSrc.add (new juce::ComboBox());
         for (int i = 0; i < kListFilterLfo.size; ++i) box->addItem (kListFilterLfo.labels[i], i + 1);
-        lfoAtt.add (new juce::AudioProcessorValueTreeState::ComboBoxAttachment (proc.apvts, kParamIds[f.lfoSrc], *box));
+        lfoAtt.add (new juce::AudioProcessorValueTreeState::ComboBoxAttachment (proc.apvts, kParamIds[f.lfoSrc], tagParam (*box, f.lfoSrc)));
         box->setTooltip ("Which LFO LFO Amt uses (rate, shape and depth are on the Modulation tab)");
         addChildComponent (box);
 

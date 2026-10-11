@@ -24,6 +24,8 @@
 
 namespace tg
 {
+void resetVoiceRandom();   // the shared per-voice random sequence back to its start (tests)
+
 // Snapshot, WaveSample, ModState and the sync helpers live in EngineTypes.h; FxBus in Fx/FxBus.h.
 
 

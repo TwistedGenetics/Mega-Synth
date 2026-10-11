@@ -135,7 +135,7 @@ namespace
             const bool pitchy = id.endsWith ("Oct") || id.endsWith ("Semi") || id.containsIgnoreCase ("Detune");
             if (startsAny (id, { "fxOn", "fxMix", "mbc", "smp", "rpt", "flp", "vsh", "stt", "sch" }))
                 { m.category = Category::Fx; m.group = MutGroup::Fx; }
-            else if (isAny (id, { "masterVolume", "polyphony", "keyboardOctave", "porta", "velSens", "bendRange" }))
+            else if (isAny (id, { "masterVolume", "polyphony", "keyboardOctave", "porta", "velSens", "bendRange", "wheelLfo1", "sustainPedal" }))
                 { m.category = Category::Performance; m.group = id == "porta" ? MutGroup::Pitch : MutGroup::None; }
             else if (isAny (id, { "warmth", "bassKeep", "analogDrift" }))
                 { m.category = Category::Analog; m.group = id == "bassKeep" ? MutGroup::Filter : MutGroup::Oscillators; }

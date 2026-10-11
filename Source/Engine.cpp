@@ -154,6 +154,7 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     for (auto& w : wt) { w.pos = -1.0; w.stopped = false; w.loaded = false; w.wav = nullptr; }   // start set on the first control update
 
     // Initialise every smoother at its target. Oscillators start at the glide-from pitch.
+    startUnison (s);
     baseFreq = glideFrom;
     updateLfoOut (s, 0, mc);
     ModState m;
@@ -299,6 +300,82 @@ static double lfoSyncBeats (int idx)
 {
     if (idx <= 0 || idx >= kListLfoSync.size) return 0.0;
     return syncBeats (kListLfoSync.keys[idx]);
+}
+
+//==============================================================================
+// Unison: side voices at symmetric positions around the oscillator (which stays the centre voice).
+static float uniSidePos (int j, int m)
+{
+    // m side voices: +1, -1, then halves... for m = 1 just +1
+    const int pairs = (m + 1) / 2;
+    const float mag = (float) (j / 2 + 1) / (float) pairs;
+    return (j % 2 == 0) ? mag : -mag;
+}
+
+void Voice::startUnison (const Snapshot& s)
+{
+    const bool same = s.v[P_uniSamePhase] > 0.5f;
+    for (auto& row : wtU) for (auto& u : row) { u.pos = -1.0; u.loaded = false; u.stopped = false; }
+    for (int k = 0; k < kUniOscs; ++k)
+    {
+        const int n = clampv (s.i (P_uni1Voices + kUniStride * k), 1, 8);
+        if (n <= 1) continue;   // (no random numbers drawn: patches without unison play exactly as before)
+        for (int j = 0; j < kUniSide; ++j)
+        {
+            const double ph = same ? std::fmod (0.137 + 0.618034 * (j + 1) + 0.23 * k, 1.0) : (double) voiceRand01();
+            if (k < 3) uniPh[k][j] = ph;
+            else if (k == 5) { uniPhCar[j] = ph; uniPhMod[j] = same ? std::fmod (0.31 + 0.381966 * (j + 1), 1.0) : (double) voiceRand01(); }
+            else { wtU[k - 3][j].pos = -1.0 - ph; wtU[k - 3][j].stopped = false; wtU[k - 3][j].loaded = false; }   // (start offset set on the first update)
+        }
+    }
+}
+
+void Voice::updateUnison (const Snapshot& s)
+{
+    uniAny = false;
+    for (int k = 0; k < kUniOscs; ++k)
+    {
+        const int b = P_uni1Voices + kUniStride * k;
+        const int n = clampv (s.i (b), 1, 8);
+        uniN[k] = n;
+        if (n <= 1) { uniGc[k] = 1.0f; continue; }
+        const int m = n - 1;
+        const float det = clampv (s.f (b + 1), 0.0f, 100.0f), spread = clampv (s.f (b + 2), 0.0f, 1.0f), blend = clampv (s.f (b + 3), 0.0f, 1.0f);
+        const bool ssCurve = s.i (b + 4) == 1;
+        // level: the centre at 1, the sides at Blend, normalised so the sum keeps about the same power
+        const float norm = 1.0f / std::sqrt (1.0f + (float) m * blend * blend);
+        uniGc[k] = norm; uniGs[k] = blend * norm;
+        for (int j = 0; j < m; ++j)
+        {
+            const float p = uniSidePos (j, m);
+            const float shaped = ssCurve ? (p < 0 ? -1.0f : 1.0f) * (0.3f * std::abs (p) + 0.7f * std::abs (p) * p * p) : p;
+            uniRatio[k][j] = (float) std::exp2 (det * shaped / 1200.0);
+            const float pan = clampv (p * spread, -1.0f, 1.0f);
+            const float a = (pan + 1.0f) * 0.25f * (float) kPi;
+            uniPL[k][j] = std::cos (a) * 1.41421356f; uniPR[k][j] = std::sin (a) * 1.41421356f;
+        }
+        if (spread > 0.001f) uniAny = true;
+        if (k == 3 || k == 4)
+        {
+            // sample playback: the side players follow the main one's settings, at their own rate
+            const WtPlayer& w = wt[k - 3];
+            for (int j = 0; j < m; ++j)
+            {
+                WtPlayer& u = wtU[k - 3][j];
+                u.wav = w.wav; u.loop = w.loop; u.reverse = w.reverse; u.ls = w.ls; u.le = w.le; u.comp = w.comp;
+                u.rate.v = w.rate.v * uniRatio[k][j];
+                if (w.loaded && w.pos >= 0.0 && u.pos < 0.0)
+                {
+                    // start alongside the main player, a little later (up to 30 ms) unless Same Phase
+                    const double off = (-u.pos - 1.0) * 0.03 * w.wav->sampleRate;
+                    u.pos = w.pos + off;
+                    if (u.loop && u.pos >= u.le) u.pos = u.ls + std::fmod (u.pos - u.ls, std::max (1.0e-6, u.le - u.ls));
+                    u.stopped = false;
+                }
+                u.loaded = w.loaded && u.pos >= 0.0;
+            }
+        }
+    }
 }
 
 void Voice::advanceLfos (const Snapshot& s, int n)
@@ -637,8 +714,9 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
         }
     }
 
-    // stereo processing is only needed for the SuperSaw spread or a stereo sample
-    bool stereoWt = false;
+    updateUnison (s);
+    // stereo processing is only needed for the SuperSaw spread, a stereo sample or spread unison
+    bool stereoWt = uniAny;
     for (auto& w : wt) if (w.loaded && w.wav->numChannels > 1 && w.level.target > 0) stereoWt = true;
     if (! stereo && ((lSS.target > 0 && width > 0.001f) || stereoWt))
     {
@@ -878,10 +956,23 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             double fr = ! ARType::value ? (double) (f2.v + fmIn (1)) : f2.v * pm (AD_P2) + fmIn (1);
             const float o2 = bank.sample (wave2, ph2, (float) std::abs (fr) * fisr);
             ph2 = wrap01 (ph2 + fr * isr); srcVals[1] = o2;
+            float uL[kUniOscs] {}, uR[kUniOscs] {};
+            auto uniOsc = [&] (int k, int wave, double f0)
+            {
+                for (int j = 0; j < uniN[k] - 1; ++j)
+                {
+                    const double f = f0 * uniRatio[k][j];
+                    const float x = bank.sample (wave, uniPh[k][j], (float) std::abs (f) * fisr);
+                    uniPh[k][j] = wrap01 (uniPh[k][j] + f * isr);
+                    uL[k] += x * uniPL[k][j]; uR[k] += x * uniPR[k][j];
+                }
+            };
+            if (uniN[1] > 1) uniOsc (1, wave2, fr);
 
             fr = ! ARType::value ? (double) (f3.v + fmIn (2)) : f3.v * pm (AD_P3) + fmIn (2);
             const float o3 = bank.sample (wave3, ph3, (float) std::abs (fr) * fisr);
             ph3 = wrap01 (ph3 + fr * isr); srcVals[2] = o3;
+            if (uniN[2] > 1) uniOsc (2, wave3, fr);
 
             const double fsub = ! ARType::value ? (double) fSub.v : fSub.v * pm (AD_PSub);
             const float osub = bank.sample (waveSub, phSub, (float) fsub * fisr);
@@ -901,6 +992,18 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             }
             const float o4m = 0.5f * (o4L + o4R);
             srcVals[3] = o4m;
+            for (int w = 0; w < 2; ++w)
+            {
+                const int k = 3 + w;
+                if (uniN[k] <= 1) continue;
+                const double fmw = w == 0 ? (double) fmIn (3) : 0.0;
+                for (int j = 0; j < uniN[k] - 1; ++j)
+                {
+                    float a, b;
+                    wtU[w][j].tick (fmw * uniRatio[k][j], isr, a, b);
+                    uL[k] += a * uniPL[k][j]; uR[k] += b * uniPR[k][j];
+                }
+            }
 
             // Osc 5: complex oscillator (B frequency-modulates A, blended, then wavefolded)
             float cOut = 0, cRaw = 0;
@@ -917,6 +1020,24 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 const float shapeK = ! ARType::value ? cShapeK : clampv (cShapeK + ad[AD_CxShape], 1.0f, 25.0f);
                 cRaw = driveShape (oc * cMixS.v + om * (1.0f - cMixS.v), shapeK);
                 cOut = cRaw * lvl (lC.v, AD_LCx);
+                if (uniN[5] > 1)
+                {
+                    const float fmc = fmIn (4);
+                    const float cFmNow = ! ARType::value ? cFm.v : std::max (0.0f, cFm.v + ad[AD_CxFm]);
+                    for (int j = 0; j < uniN[5] - 1; ++j)
+                    {
+                        const double cbj = cb * uniRatio[5][j], mfj = cbj * cRatio.v;
+                        const float omj = bank.sample (waveB, uniPhMod[j], (float) std::abs (mfj) * fisr);
+                        uniPhMod[j] = wrap01 (uniPhMod[j] + mfj * isr);
+                        const double cfj = cbj + cFmNow * omj + fmc;
+                        const float ocj = bank.sample (waveA, uniPhCar[j], (float) std::abs (cfj) * fisr);
+                        uniPhCar[j] = wrap01 (uniPhCar[j] + cfj * isr);
+                        const float x = driveShape (ocj * cMixS.v + omj * (1.0f - cMixS.v), shapeK);
+                        uL[5] += x * uniPL[5][j]; uR[5] += x * uniPR[5][j];
+                    }
+                    const float gc = lvl (lC.v, AD_LCx);
+                    uL[5] *= gc; uR[5] *= gc;
+                }
             }
             srcVals[4] = cOut;
 
@@ -946,15 +1067,22 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                           : f1.v * pm (AD_P1) + std::max (0.0f, legacyFm.v + ad[AD_LegFm]) * o2 + fmIn (0);
             const float o1 = bank.sample (wave1, ph1, (float) std::abs (fr) * fisr);
             ph1 = wrap01 (ph1 + fr * isr); srcVals[0] = o1;
+            if (uniN[0] > 1) uniOsc (0, wave1, fr);
             aPrev[0] = o1; aPrev[1] = o2; aPrev[2] = o3; aPrev[3] = osub;
 
             // mixer
             const float g1 = lvl (l1.v, AD_L1), g2 = lvl (l2.v, AD_L2), g3 = lvl (l3.v, AD_L3), gs = lvl (lSub.v, AD_LSub);
             const float o4g = lvl (wt[0].level.v, AD_LWt1) * wt[0].comp;
             const float w2g = lvl (wt[1].level.v, AD_LWt2) * wt[1].comp;
-            const float mono = o1 * g1 + o2 * g2 + o3 * g3 + osub * gs + cOut;
-            float mL = mono + o4L * o4g + w2L * w2g + ssL;
-            float mR = mono + o4R * o4g + w2R * w2g + ssR;
+            const float mono = o1 * g1 * uniGc[0] + o2 * g2 * uniGc[1] + o3 * g3 * uniGc[2] + osub * gs + cOut * uniGc[5];
+            float mL = mono + o4L * o4g * uniGc[3] + w2L * w2g * uniGc[4] + ssL;
+            float mR = mono + o4R * o4g * uniGc[3] + w2R * w2g * uniGc[4] + ssR;
+            if (uniN[0] > 1 || uniN[1] > 1 || uniN[2] > 1 || uniN[3] > 1 || uniN[4] > 1 || uniN[5] > 1)
+            {
+                const float gk[kUniOscs] = { g1, g2, g3, o4g, w2g, 1.0f };
+                for (int k = 0; k < kUniOscs; ++k)
+                    if (uniN[k] > 1) { mL += uL[k] * gk[k] * uniGs[k]; mR += uR[k] * gk[k] * uniGs[k]; }
+            }
             if (dnaOn)
             {
                 // the splice of A and B, blended with the oscillator mix

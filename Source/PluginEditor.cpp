@@ -1874,6 +1874,46 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Unison (per oscillator)
+    {
+        auto* page = addPage ("Unison");
+        const char* oscNames[] = { "Oscillator 1", "Oscillator 2", "Oscillator 3", "Wavetable 1", "Wavetable 2", "Complex (Osc 5)" };
+        const juce::Colour oscCol[] = { col::osc, col::osc, col::osc, col::wavetable, col::wavetable, col::complex };
+        Section* rows[kUniOscs]; UnisonView* views[kUniOscs];
+        for (int k = 0; k < kUniOscs; ++k)
+        {
+            const int b = P_uni1Voices + kUniStride * k;
+            rows[k] = sec (page, oscNames[k], oscCol[k]);
+            rows[k]->knob (b, "Voices", 64);
+            rows[k]->knob (b + 1, "Detune", 64);
+            rows[k]->knob (b + 2, "Spread", 64);
+            rows[k]->knob (b + 3, "Blend", 64);
+            rows[k]->choice (b + 4, "Detune Curve", 118);
+            views[k] = page->own (new UnisonView (proc, k));
+        }
+        auto* same = page->own (new ParamToggle (proc, P_uniSamePhase, "Same phase every note", col::osc));
+        same->setTooltip ("Off: the extra voices start at random phases on every note (livelier). On: the same every time (punchier, repeatable).");
+        auto* help = page->own (new juce::Label ({}, "Each oscillator can stack up to 8 voices: the oscillator itself in the centre, plus detuned copies spread "
+                                                     "across the stereo field. Blend sets the copies' level against the centre. FM, ring and DNA Splice use the "
+                                                     "centre voice. Each extra voice costs about as much CPU as the oscillator itself."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.0f)));
+        help->setJustificationType (juce::Justification::topLeft);
+        page->onResize = [page, rows, views, same, help]
+        {
+            const int g = 10, W = page->getWidth(), w2 = (W - 3 * g) / 2, h = 160;
+            for (int k = 0; k < kUniOscs; ++k)
+            {
+                const int x = g + (k % 2) * (w2 + g), y = g + (k / 2) * (h + g);
+                rows[k]->setBounds (x, y, w2, h);
+                views[k]->setBounds (x + w2 - 170, y + 36, 160, h - 46);
+                views[k]->toFront (false);
+            }
+            same->setBounds (g, g + 3 * (h + g), 240, 26);
+            help->setBounds (g + 250, g + 3 * (h + g), W - 2 * g - 250, 40);
+        };
+    }
+
     // ---------------------------------------------------------------- LFOs (sync, retrigger, shapes)
     {
         auto* page = addPage ("LFOs");

@@ -110,3 +110,41 @@ void ChordDisplay::paint (juce::Graphics& g)
 }
 
 } // namespace tgui
+
+namespace tgui
+{
+void UnisonView::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (col::panel2);
+    g.fillRoundedRectangle (r, 6.0f);
+    auto pv = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+    const int b = P_uni1Voices + kUniStride * k;
+    const int n = juce::jlimit (1, 8, juce::roundToInt (pv (b)));
+    const float det = pv (b + 1), spread = pv (b + 2), blend = pv (b + 3);
+    const bool ss = juce::roundToInt (pv (b + 4)) == 1;
+    auto a = r.reduced (10.0f, 8.0f);
+    g.setColour (col::border);
+    g.drawHorizontalLine ((int) a.getCentreY(), a.getX(), a.getRight());
+    g.drawVerticalLine ((int) a.getCentreX(), a.getY(), a.getBottom());
+    auto dot = [&] (float pan, float cents, float size, float alpha)
+    {
+        const float x = a.getCentreX() + pan * a.getWidth() * 0.5f;
+        const float y = a.getCentreY() - cents / 100.0f * a.getHeight() * 0.5f;
+        g.setColour (col::osc.withAlpha (alpha));
+        g.fillEllipse (x - size * 0.5f, y - size * 0.5f, size, size);
+    };
+    dot (0.0f, 0.0f, 12.0f, 1.0f);
+    const int m = n - 1;
+    for (int j = 0; j < m; ++j)
+    {
+        const int pairs = (m + 1) / 2;
+        const float p = ((j % 2 == 0) ? 1.0f : -1.0f) * (float) (j / 2 + 1) / (float) pairs;
+        const float shaped = ss ? (p < 0 ? -1.0f : 1.0f) * (0.3f * std::abs (p) + 0.7f * std::abs (p) * p * p) : p;
+        dot (p * spread, det * shaped, 6.0f + 6.0f * blend, 0.4f + 0.5f * blend);
+    }
+    g.setColour (col::muted);
+    g.setFont (juce::Font (juce::FontOptions (10.0f)));
+    g.drawText (n == 1 ? juce::String ("off") : juce::String (n) + " voices", r.reduced (6.0f, 3.0f), juce::Justification::topLeft);
+}
+} // namespace tgui

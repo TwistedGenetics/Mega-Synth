@@ -46,6 +46,10 @@ inline juce::String formatParam (int idx, float v)
         if (id == "flpFeedback") { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
         if (id == "sttHaas") return v < 0.05f ? juce::String ("off") : fixed (v, 1) + " ms";
     }
+    // ---- unison
+    if (id.startsWith ("uni") && id.endsWith ("Voices")) { const int n = juce::roundToInt (v); return n <= 1 ? juce::String ("off") : juce::String (n) + " voices"; }
+    if (id.startsWith ("uni") && id.endsWith ("Detune")) return fixed (v, 1) + " cents";
+    if (id.startsWith ("uni") && (id.endsWith ("Spread") || id.endsWith ("Blend"))) return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     // ---- sidechain
     if (id == "schThresh") return fixed (v, 1) + " dB";
     if (id == "schAttack" || id == "schRelease") return fixed (v, v < 10.0f ? 1 : 0) + " ms";

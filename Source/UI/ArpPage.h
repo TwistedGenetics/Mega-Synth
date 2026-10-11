@@ -52,3 +52,19 @@ private:
 };
 
 } // namespace tgui
+
+namespace tgui
+{
+// Unison: where each voice sits (left-right = pan, up-down = detune), centre voice larger
+class UnisonView : public juce::Component, private juce::Timer
+{
+public:
+    UnisonView (MegaSynthProcessor& p, int osc) : proc (p), k (osc) { startTimerHz (10); }
+    ~UnisonView() override { stopTimer(); }
+    void paint (juce::Graphics&) override;
+private:
+    void timerCallback() override { if (isShowing()) repaint(); }
+    MegaSynthProcessor& proc;
+    const int k;
+};
+} // namespace tgui

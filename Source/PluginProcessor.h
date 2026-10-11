@@ -155,7 +155,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 9;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain
+    static constexpr int kStateVersion = 10;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -183,7 +183,8 @@ private:
     void setFxDefaultsForOldPatch();
     void setLfoDefaultsForOldPatch();      // ... and from before LFO sync / custom shapes
     void setArpDefaultsForOldPatch();      // ... and from before chord memory / the arpeggiator
-    void setSidechainDefaultsForOldPatch(); // ... and from before the sidechain input       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
+    void setSidechainDefaultsForOldPatch(); // ... and from before the sidechain input
+    void setUnisonDefaultsForOldPatch();   // ... and from before per-oscillator unison       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();

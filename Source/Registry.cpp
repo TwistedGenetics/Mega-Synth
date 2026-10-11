@@ -65,6 +65,7 @@ namespace
         if (id.startsWith ("mut")) return "Master Mutate";
         if (id.startsWith ("ds")) return "DNA Sequencer";
         if (id.startsWith ("arp")) return "Arpeggiator";
+        if (id.startsWith ("uni")) return "Unison";
         if (id.startsWith ("chd")) return "Chord Memory";
         if (id.startsWith ("ar")) return "Audio-Rate Transform";
         if (id.startsWith ("scene")) return "Scenes";
@@ -154,6 +155,8 @@ namespace
                 { m.category = Category::Performance; m.group = MutGroup::None; }
             else if (id.startsWith ("mod") && id.endsWith ("Amt"))
                 { m.category = Category::Mod; m.group = MutGroup::Modulation; }
+            else if (id.startsWith ("uni"))
+                { m.category = Category::Osc; m.group = MutGroup::Oscillators; }
             else if (id.startsWith ("ds") || id.startsWith ("arp") || id.startsWith ("chd"))
                 { m.category = Category::Seq; m.group = MutGroup::Rhythm; }
             else if (startsAny (id, { "wm", "ar", "dna", "res", "gr", "sp", "bus", "fb", "cap", "ci", "mut" }) && ! id.startsWith ("arp"))
@@ -176,7 +179,8 @@ namespace
             // ---- modulation capability: continuous sound parameters yes; administrative ones no
             const bool admin = isAny (id, { "polyphony", "keyboardOctave", "bendRange", "seqLength", "seqEuclidPulses",
                                             "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum", "mutSeed", "dsSteps",
-                                            "chdSpread", "chdInversion", "arpOctaves", "arpVelFixed", "arpRepeats", "arpSteps" });
+                                            "chdSpread", "chdInversion", "arpOctaves", "arpVelFixed", "arpRepeats", "arpSteps",
+                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices" });
             m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin;
             float adScale;
             m.audioRate = m.modulatable && audioDestFor (i, adScale) >= 0;   // what the voice can drive per sample

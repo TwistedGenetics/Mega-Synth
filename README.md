@@ -125,6 +125,20 @@ Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (W
 
 The first tab shows the whole synth at a glance: the **signal flow** (each note's chain, then the bus, with the stages that are switched in lit up, cyan badges for Mod Matrix routes into each stage and red arcs for Feedback Matrix paths), the **genetic network** (every active route as a line from its source to its destination, pulsing with the source's live value), a **spectrum** of the output, and the **DNA strand**: 13 base pairs for the 13 genetic groups, glowing with how hard the current seed and Mutate amount push each one, grey when locked. All of it is drawn from values the audio already publishes; the only addition to the audio path is copying the output into the analyser's buffer.
 
+## Unison tab
+
+- Osc 1-3, both wavetables and the Complex oscillator can each stack up to 8 voices: the oscillator itself in the centre, plus detuned copies.
+- Per oscillator:
+  - **Voices** (1 = off, exactly as before)
+  - **Detune** (cents, at the outermost copies)
+  - **Spread** (how far the copies pan across the stereo field)
+  - **Blend** (the copies' level against the centre; the total is normalised so the level stays about the same)
+  - **Detune Curve** (Linear, or SuperSaw-style with the outer voices further out)
+- The extra voices start at random phases on every note unless **Same phase every note** is on.
+- FM, ring modulation and DNA Splice use the centre voice. The SuperSaw keeps its own unison.
+- Each extra voice costs about as much CPU as the oscillator itself: around 0.05% of one core per note per extra voice on our test machine.
+- Detune, Spread and Blend are Mod Matrix destinations.
+
 ## Sidechain input
 
 Mega Synth has an optional stereo sidechain input, so a kick or break on another track can drive it. In Ableton Live (11 and later), open the device's sidechain section, or the routing chooser in its title bar, and pick the track. In Logic, use the plug-in window's Side Chain menu. With nothing routed, nothing changes, and the sidechain is never heard in the output.

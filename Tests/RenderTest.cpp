@@ -1484,7 +1484,7 @@ int main()
             r->importBrowserPatch (juce::JSON::toString (obj));
             CHECK (r->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f && r->param (P_lfo1Custom + 2 * X)->getValue() < 0.5f, "old patches load with the original LFOs");
             // an old project: state version 6
-            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"9\"", "stateVersion=\"6\"");
+            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"10\"", "stateVersion=\"6\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (xml), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (o->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f, "old projects load with the original LFOs");
@@ -1705,7 +1705,7 @@ int main()
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->arpStore.toJson() == p->arpStore.toJson() && r->param (P_chdPreset)->getValue() == p->param (P_chdPreset)->getValue(), "arp and chord saved in patches");
             setP (*p, P_arpOn, 1.0f); juce::MemoryBlock mb2; p->getStateInformation (mb2);
-            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"9\"", "stateVersion=\"7\"");
+            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"10\"", "stateVersion=\"7\"");
             {   // a version 7 project has no arpeggiator data at all
                 const int a0 = x2.indexOf (" arp=\"");
                 if (a0 >= 0) { const int a1 = x2.indexOfChar (a0 + 6, '"'); x2 = x2.substring (0, a0) + x2.substring (a1 + 1); }
@@ -1828,7 +1828,7 @@ int main()
             CHECK (p->getEngine().liveSrc[MS_Sidechain].load() > 0.3f, "Sidechain Envelope mod source");
             setP (*p, P_vshSidechain, 1.0f); setP (*p, P_schThresh, -10.0f);
             juce::MemoryBlock mb; p->getStateInformation (mb);
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"9\"", "stateVersion=\"8\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"10\"", "stateVersion=\"8\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (q->param (P_vshSidechain)->getValue() < 0.5f && std::abs (q->param (P_schThresh)->convertFrom0to1 (q->param (P_schThresh)->getValue()) + 24.0f) < 0.1f, "old projects: sidechain off");
@@ -1840,6 +1840,126 @@ int main()
     {
         scTests();
         std::cout << (failures == 0 ? "SC TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
+    // ---- Unison on every oscillator (state version 10)
+    auto uniTests = [&]
+    {
+        std::cout << "Unison" << std::endl;
+        auto clean = [&]
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain, P_osc2Gain, P_osc3Gain, P_subGain }) setP (*p, i, 0.0f);
+            setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_lfoAssignAmt0, 0.0f);
+            return p;
+        };
+        auto renderNote = [&] (MegaSynthProcessor& p, juce::AudioBuffer<float>& cap, int note = 57) { render (p, 1.0, chord (0.0, 0.9, { note }), &cap); };
+        auto maxDiff = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+        {
+            double d = 0; for (int c = 0; c < 2; ++c) for (int i = 0; i < a.getNumSamples(); ++i) d = std::max (d, (double) std::abs (a.getSample (c, i) - b.getSample (c, i))); return d;
+        };
+        {
+            // one voice: exactly the oscillator as it was, whatever the other unison settings
+            auto a = clean(), b = clean();
+            setP (*b, P_uni1Detune, 70.0f); setP (*b, P_uni1Spread, 1.0f); setP (*b, P_uni1Blend, 1.0f); setP (*b, P_uni1Curve, 1.0f); setP (*b, P_uniSamePhase, 1.0f);
+            juce::AudioBuffer<float> ca, cb; renderNote (*a, ca); renderNote (*b, cb);
+            CHECK (maxDiff (ca, cb) == 0.0, "1 voice = no unison, bit for bit");
+        }
+        {
+            // detune lands where it should: 2 voices, sine, centred, 50 cents apart
+            auto p = clean(); setP (*p, P_osc1Wave, 3.0f); setP (*p, P_uni1Voices, 2.0f); setP (*p, P_uni1Detune, 50.0f); setP (*p, P_uni1Spread, 0.0f); setP (*p, P_uni1Blend, 1.0f);
+            juce::AudioBuffer<float> c; renderNote (*p, c, 69);
+            std::vector<float> x (32768, 0.0f);
+            for (int i = 0; i < 16384; ++i) x[(size_t) i] = c.getSample (0, 8000 + i) * (0.5f - 0.5f * (float) std::cos (2.0 * kPi * i / 16383.0));
+            juce::dsp::FFT fft (15); x.resize (65536, 0.0f); fft.performFrequencyOnlyForwardTransform (x.data());
+            auto peakNear = [&] (double f) { const double bin = f * 32768.0 / sr; int best = (int) bin; for (int k = (int) bin - 6; k <= (int) bin + 6; ++k) if (x[(size_t) k] > x[(size_t) best]) best = k; return best * sr / 32768.0; };
+            const double f0 = peakNear (440.0), f1 = peakNear (440.0 * std::pow (2.0, 50.0 / 1200.0));
+            std::cout << "  2 voices, 50 cents: peaks at " << juce::String (f0, 1) << " and " << juce::String (f1, 1) << " Hz" << std::endl;
+            CHECK (std::abs (f0 - 440.0) < 1.5 && std::abs (f1 - 452.9) < 1.5, "unison detune in cents");
+        }
+        {
+            // more voices: wider in stereo, about the same loudness
+            auto a = clean(), b = clean();
+            setP (*b, P_uni1Voices, 7.0f); setP (*b, P_uni1Detune, 25.0f); setP (*b, P_uni1Spread, 1.0f);
+            juce::AudioBuffer<float> ca, cb; renderNote (*a, ca); renderNote (*b, cb);
+            auto rms = [] (const juce::AudioBuffer<float>& c, int ch) { double e = 0; for (int i = 4800; i < 40000; ++i) e += c.getSample (ch, i) * c.getSample (ch, i); return std::sqrt (e / 35200); };
+            double side = 0; for (int i = 4800; i < 40000; ++i) { const double sd = 0.5 * (cb.getSample (0, i) - cb.getSample (1, i)); side += sd * sd; }
+            side = std::sqrt (side / 35200);
+            const double lvl = 20 * std::log10 (rms (cb, 0) / rms (ca, 0));
+            std::cout << "  7 voices: " << juce::String (lvl, 1) << " dB vs 1 voice, side " << juce::String (20 * std::log10 (side / rms (cb, 0)), 1) << " dB" << std::endl;
+            CHECK (std::abs (lvl) < 4.0 && side > rms (cb, 0) * 0.2, "unison spreads in stereo at about the same level");
+            // same phase every note: two notes identical; random: different
+            auto s1 = clean(), s2 = clean();
+            for (auto* q : { s1.get(), s2.get() }) { setP (*q, P_uni1Voices, 5.0f); setP (*q, P_uniSamePhase, 1.0f); }
+            juce::AudioBuffer<float> c1, c2; renderNote (*s1, c1); renderNote (*s2, c2);
+            CHECK (maxDiff (c1, c2) < 1e-6, "Same phase: every note starts the same");
+            auto r1 = clean(), r2 = clean();
+            for (auto* q : { r1.get(), r2.get() }) setP (*q, P_uni1Voices, 5.0f);
+            juce::AudioBuffer<float> d1, d2; renderNote (*r1, d1); renderNote (*r2, d2);
+            CHECK (maxDiff (d1, d2) > 1e-3, "random phases: notes differ");
+        }
+        {
+            // Osc 2 / 3, Complex and the wavetables
+            for (int k : { 1, 2, 5 })
+            {
+                auto p = clean();
+                setP (*p, P_osc1Gain, 0.0f);
+                setP (*p, k == 1 ? P_osc2Gain : (k == 2 ? P_osc3Gain : P_complexGain), 0.6f);
+                setP (*p, P_uni1Voices + kUniStride * k, 4.0f); setP (*p, P_uni1Spread + kUniStride * k, 1.0f);
+                juce::AudioBuffer<float> c; renderNote (*p, c);
+                double d = 0; for (int i = 4800; i < 40000; ++i) d = std::max (d, (double) std::abs (c.getSample (0, i) - c.getSample (1, i)));
+                CHECK (d > 0.01, "unison on oscillator " + juce::String (k + 1));
+            }
+            juce::AudioBuffer<float> sine (1, 48000);
+            for (int i = 0; i < 48000; ++i) sine.setSample (0, i, 0.5f * std::sin (2.0 * kPi * 440.0 * i / 48000.0) + 0.2f * std::sin (2.0 * kPi * 1320.0 * i / 48000.0));
+            juce::MemoryBlock wavData;
+            {
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::MemoryOutputStream (wavData, false), 48000.0, 1, 16, {}, 0));
+                w->writeFromAudioSampleBuffer (sine, 0, 48000);
+            }
+            for (int slot = 0; slot < 2; ++slot)
+            {
+                auto p = clean(); setP (*p, P_osc1Gain, 0.0f);
+                CHECK (p->loadSampleData (wavData, "u.wav", slot), "sample");
+                setP (*p, slot == 0 ? P_osc4Gain : P_wt2Gain, 0.8f);
+                setP (*p, P_uni1Voices + kUniStride * (3 + slot), 5.0f); setP (*p, P_uni1Spread + kUniStride * (3 + slot), 1.0f);
+                juce::AudioBuffer<float> c; render (*p, 1.0, chord (0.0, 0.9, { 69 }), &c);
+                double d = 0, e = 0; for (int i = 4800; i < 40000; ++i) { d = std::max (d, (double) std::abs (c.getSample (0, i) - c.getSample (1, i))); e = std::max (e, (double) std::abs (c.getSample (0, i))); }
+                CHECK (d > 0.01 && e < 4.0, "unison on wavetable " + juce::String (slot + 1));
+            }
+        }
+        {
+            // CPU per unison voice
+            auto cost = [&] (int voices)
+            {
+                auto p = make(); setP (*p, P_polyphony, 8.0f);
+                for (int k : { 0, 1, 2 }) setP (*p, P_uni1Voices + kUniStride * k, (float) voices);
+                double cpu = 0; render (*p, 2.0, chord (0.0, 2.0, { 48, 52, 55, 59, 62, 65, 69, 72 }), nullptr, &cpu);
+                return cpu / 2.0 * 100.0;
+            };
+            const double c1 = cost (1), c8 = cost (8);
+            const double perVoice = (c8 - c1) / (8 * 3 * 7);
+            std::cout << "  CPU: 8 notes, Osc 1-3 at 1 voice " << juce::String (c1, 1) << "%, at 8 voices " << juce::String (c8, 1)
+                      << "%: about " << juce::String (perVoice, 3) << "% of a core per extra unison voice" << std::endl;
+            CHECK (perVoice < 0.5, "unison voices are cheap enough");
+        }
+        {
+            auto p = make(); setP (*p, P_uni2Voices, 6.0f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"10\"", "stateVersion=\"9\"");
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
+            auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
+            CHECK (juce::roundToInt (q->param (P_uni2Voices)->convertFrom0to1 (q->param (P_uni2Voices)->getValue())) == 1, "old projects: no unison");
+            auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
+            CHECK (juce::roundToInt (r->param (P_uni2Voices)->convertFrom0to1 (r->param (P_uni2Voices)->getValue())) == 6, "unison saved in patches");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_UNIONLY", {}).isNotEmpty())
+    {
+        uniTests();
+        std::cout << (failures == 0 ? "UNI TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
 
@@ -2400,9 +2520,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 9"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 10"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"9\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"10\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -3498,6 +3618,7 @@ int main()
     lfoTests();
     arpTests();
     scTests();
+    uniTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {

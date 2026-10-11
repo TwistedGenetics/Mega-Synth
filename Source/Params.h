@@ -121,6 +121,8 @@ inline const char* const kArpVelKeys[]   = { "played","fixed" };
 inline const char* const kArpVelLabels[] = { "As played","Fixed" };
 inline const char* const kArpRestartKeys[]   = { "first","bar" };
 inline const char* const kArpRestartLabels[] = { "First note","Each bar" };
+inline const char* const kUniCurveKeys[]   = { "linear","supersaw" };
+inline const char* const kUniCurveLabels[] = { "Linear","SuperSaw (outer voices wider)" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -265,9 +267,12 @@ inline const ChoiceList kListArpMode     = TG_LIST(kArpMode);
 inline const ChoiceList kListArpRate     = TG_LIST(kArpRate);
 inline const ChoiceList kListArpVel      = TG_LIST(kArpVel);
 inline const ChoiceList kListArpRestart  = TG_LIST(kArpRestart);
+inline const ChoiceList kListUniCurve    = TG_LIST(kUniCurve);
 
 // LFO extras (state version 7): 8 parameters per LFO, LFO k at P_lfo1Sync + kLfoXStride * k
 constexpr int kLfoXStride = 8;
+// Unison (state version 10): 5 parameters per oscillator (Osc 1-3, WT 1, WT 2, Complex) at P_uni1Voices + kUniStride * k
+constexpr int kUniStride = 5, kUniOscs = 6;
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
@@ -801,7 +806,38 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(mbcSidechain, "Multiband Sidechain", false) \
     F(schThresh,   "Sidechain Threshold", -60, 0, -24, 0.1, 0) \
     F(schAttack,   "Sidechain Attack", 0.1, 50, 1, 0.1, 5) \
-    F(schRelease,  "Sidechain Release", 10, 500, 80, 1, 80)
+    F(schRelease,  "Sidechain Release", 10, 500, 80, 1, 80) \
+    F(uni1Voices, "Osc1 Unison Voices", 1, 8, 1, 1, 0) \
+    F(uni1Detune, "Osc1 Unison Detune", 0, 100, 20, 0.1, 0) \
+    F(uni1Spread, "Osc1 Unison Spread", 0, 1, 0.5, 0.01, 0) \
+    F(uni1Blend,  "Osc1 Unison Blend", 0, 1, 0.5, 0.01, 0) \
+    C(uni1Curve,  "Osc1 Unison Detune Curve", kListUniCurve, 0) \
+    F(uni2Voices, "Osc2 Unison Voices", 1, 8, 1, 1, 0) \
+    F(uni2Detune, "Osc2 Unison Detune", 0, 100, 20, 0.1, 0) \
+    F(uni2Spread, "Osc2 Unison Spread", 0, 1, 0.5, 0.01, 0) \
+    F(uni2Blend,  "Osc2 Unison Blend", 0, 1, 0.5, 0.01, 0) \
+    C(uni2Curve,  "Osc2 Unison Detune Curve", kListUniCurve, 0) \
+    F(uni3Voices, "Osc3 Unison Voices", 1, 8, 1, 1, 0) \
+    F(uni3Detune, "Osc3 Unison Detune", 0, 100, 20, 0.1, 0) \
+    F(uni3Spread, "Osc3 Unison Spread", 0, 1, 0.5, 0.01, 0) \
+    F(uni3Blend,  "Osc3 Unison Blend", 0, 1, 0.5, 0.01, 0) \
+    C(uni3Curve,  "Osc3 Unison Detune Curve", kListUniCurve, 0) \
+    F(uni4Voices, "WT1 Unison Voices", 1, 8, 1, 1, 0) \
+    F(uni4Detune, "WT1 Unison Detune", 0, 100, 20, 0.1, 0) \
+    F(uni4Spread, "WT1 Unison Spread", 0, 1, 0.5, 0.01, 0) \
+    F(uni4Blend,  "WT1 Unison Blend", 0, 1, 0.5, 0.01, 0) \
+    C(uni4Curve,  "WT1 Unison Detune Curve", kListUniCurve, 0) \
+    F(uni5Voices, "WT2 Unison Voices", 1, 8, 1, 1, 0) \
+    F(uni5Detune, "WT2 Unison Detune", 0, 100, 20, 0.1, 0) \
+    F(uni5Spread, "WT2 Unison Spread", 0, 1, 0.5, 0.01, 0) \
+    F(uni5Blend,  "WT2 Unison Blend", 0, 1, 0.5, 0.01, 0) \
+    C(uni5Curve,  "WT2 Unison Detune Curve", kListUniCurve, 0) \
+    F(uni6Voices, "Complex Unison Voices", 1, 8, 1, 1, 0) \
+    F(uni6Detune, "Complex Unison Detune", 0, 100, 20, 0.1, 0) \
+    F(uni6Spread, "Complex Unison Spread", 0, 1, 0.5, 0.01, 0) \
+    F(uni6Blend,  "Complex Unison Blend", 0, 1, 0.5, 0.01, 0) \
+    C(uni6Curve,  "Complex Unison Detune Curve", kListUniCurve, 0) \
+    B(uniSamePhase, "Unison Same Phase Every Note", false)
 
 enum ParamIndex
 {

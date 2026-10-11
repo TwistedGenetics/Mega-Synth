@@ -37,7 +37,7 @@ namespace
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
-            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch");
+            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -922,6 +922,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 7) setLfoDefaultsForOldPatch();
     if (version < 8) setArpDefaultsForOldPatch();
     if (version < 9) setSidechainDefaultsForOldPatch();
+    if (version < 10) setUnisonDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1234,6 +1235,19 @@ void MegaSynthProcessor::resetPatchState()
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
+}
+
+void MegaSynthProcessor::setUnisonDefaultsForOldPatch()
+{
+    // Before per-oscillator unison: one voice each
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        if (! juce::String (kParamIds[i]).startsWith ("uni")) continue;
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
 }
 
 void MegaSynthProcessor::setSidechainDefaultsForOldPatch()

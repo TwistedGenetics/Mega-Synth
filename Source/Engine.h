@@ -138,6 +138,16 @@ private:
         }
     };
     WtPlayer wt[2];
+    // ---- unison: up to 7 extra (side) voices per oscillator: Osc 1-3, WT 1, WT 2, Complex
+    static constexpr int kUniSide = 7;
+    int uniN[kUniOscs] { 1, 1, 1, 1, 1, 1 };              // voices (1 = off: the oscillator as it always was)
+    float uniRatio[kUniOscs][kUniSide] {}, uniPL[kUniOscs][kUniSide] {}, uniPR[kUniOscs][kUniSide] {};
+    float uniGc[kUniOscs] { 1, 1, 1, 1, 1, 1 }, uniGs[kUniOscs] {};   // centre and side gains
+    double uniPh[3][kUniSide] {}, uniPhCar[kUniSide] {}, uniPhMod[kUniSide] {};
+    WtPlayer wtU[2][kUniSide];
+    bool uniAny = false;
+    void updateUnison (const Snapshot&);
+    void startUnison (const Snapshot&);
     void updateWt (int slot, const Snapshot&, const ModState&, double bendC, float cPort, float c10);
     S legacyFm, ringMix, dry, ringGainS, srcMute, vGain;
     S cFm, cMixS;

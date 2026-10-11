@@ -90,6 +90,11 @@ inline juce::String formatParam (int idx, float v)
     if (id == "mutSeed") return "#" + juce::String (juce::roundToInt (v));
     if (id == "ciRate") return fixed (v, 2) + " Hz";
     if (id == "fbTime") return fixed (v, v < 100 ? 1 : 0) + " ms";
+    if (id == "bcTempo") return v < 1.0f ? juce::String ("auto") : fixed (v, 1) + " BPM";
+    if (id == "bcKeyBase") { const int n = juce::roundToInt (v); return juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")"; }
+    if (id == "bcCycle") return fixed (v, v < 100 ? 1 : 0) + " ms";
+    if (id == "bcPitch") return (v > 0 ? "+" : "") + fixed (v, 2) + " st";
+    if (id == "bcXfade" || id == "bcVelSens" || id == "bcLevel" || id == "bcSens" || id == "bsSwing") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id == "gsSize" || id == "gsSpray") return fixed (v, v < 100 ? 1 : 0) + " ms";
     if (id == "gsDensity") return fixed (v, v < 10 ? 1 : 0) + " /s";
     if (id == "gsScan") return std::abs (v) < 0.005f ? juce::String ("frozen") : fixed (v, 2) + "x";
@@ -164,6 +169,8 @@ inline float parseParam (int idx, const juce::String& text)
     if (id == "pfCrushRate" && text.containsIgnoreCase ("k")) return v * 1000.0f;
     if ((id == "gsPosition" || id == "gsReverse" || id == "gsSpread" || id == "gsLevel") && text.contains ("%")) return v / 100.0f;
     if (id == "gsScan" && text.containsIgnoreCase ("frozen")) return 0.0f;
+    if (id == "bcTempo" && text.containsIgnoreCase ("auto")) return 0.0f;
+    if ((id == "bcXfade" || id == "bcVelSens" || id == "bcLevel" || id == "bcSens" || id == "bsSwing") && text.contains ("%")) return v / 100.0f;
     if (id == "pfDjPos") { const float n = text.retainCharacters ("-0123456789.").getFloatValue(); const float a = text.contains ("%") ? n / 100.0f : n; return text.containsIgnoreCase ("lp") ? -std::abs (a) : (text.containsIgnoreCase ("centre") ? 0.0f : a); }
     if ((id == "pfGateDepth" || id == "pfDjRes" || id == "pfVinylAmt" || id == "pfEchoFb" || id == "pfEchoMix" || id == "pfVerbSize" || id == "pfVerbMix") && text.contains ("%")) return v / 100.0f;
     if (id.startsWith ("lfo") && id.endsWith ("Phase") && ! text.contains ("%")) return juce::jlimit (0.0f, 1.0f, v / 360.0f);   // degrees

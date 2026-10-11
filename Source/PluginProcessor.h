@@ -2,6 +2,8 @@
 #include <JuceHeader.h>
 #include "Params.h"
 #include "Engine.h"
+#include "Break/BreakAnalysis.h"
+#include "Break/BreakTools.h"
 #include "Sequencer.h"
 #include "Mut/Capture.h"
 #include "Lab/Breeder.h"
@@ -55,6 +57,13 @@ public:
     tg::LfoShapeStore lfoShapes;              // the four LFOs' custom shapes
     tg::ArpStore arpStore;                    // the arpeggiator's step pattern and the learned chord
     tg::MsegStore msegs;                      // the two multi-stage envelopes
+    tg::BreakStore breakStore;                // the Break Chopper's slice settings and markers, the Break Sequencer's patterns
+    void refreshBreakAnalysis (bool force = false);
+    double getHostTempoShown() const { const double h = hostTempo.load(); return h > 0.0 ? h : (double) raw[tg::P_seqTempo]->load(); }   // slice the loaded break again when its sample or slicing changed (message thread)
+    std::atomic<int> breakAudition { -1 };    // the editor asks for a slice to be played
+    std::atomic<int> bsStepShown { -1 }, bsPatternShown { 0 };   // the Break Sequencer's playing step and pattern
+    struct BsLogEntry { double beat; int64_t step; int pattern, slice; bool fired; };
+    std::vector<BsLogEntry>* bsLog = nullptr;   // tests: every Break Sequencer step with the beat it played on
     std::atomic<int> arpStepShown { -1 };     // for the editor
     struct ArpLogEntry { double beat; int note; bool on; float vel; };
     std::vector<ArpLogEntry>* arpLog = nullptr;   // tests: every arpeggiator event with its beat
@@ -182,7 +191,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 15;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth
+    static constexpr int kStateVersion = 16;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -217,7 +226,8 @@ private:
     void setMixerDefaultsForOldPatch();
     void setCharDefaultsForOldPatch();
     void setPerfDefaultsForOldPatch();      // ... and from before Performance FX
-    void setGranDefaultsForOldPatch();      // ... and from before the Granular Synth      // ... and from before the filter character models     // ... and from before the Mixer strips (pan / mute / solo)     // ... and from before the wheel / sustain switches
+    void setGranDefaultsForOldPatch();      // ... and from before the Granular Synth
+    void setBreakDefaultsForOldPatch();     // ... and from before the Break Chopper      // ... and from before the filter character models     // ... and from before the Mixer strips (pan / mute / solo)     // ... and from before the wheel / sustain switches
     void setEnvDefaultsForOldPatch();      // ... and from before the pitch envelope and MSEGs       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
@@ -227,7 +237,7 @@ private:
     struct Snapshot
     {
         juce::ValueTree params;
-        juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps, fxRack, lfoShapes, arpStore, msegs;
+        juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps, fxRack, lfoShapes, arpStore, msegs, breakStore;
         int sceneEdit = 0;
         std::shared_ptr<const juce::MemoryBlock> wave[4];
         juce::String waveName[4];
@@ -272,7 +282,18 @@ private:
     std::atomic<int> learnParam { -1 };
     std::atomic<uint32_t> midiMapVersion { 0 };
     double fxBeatStart = 0.0, fxBeatInc = 0.0, fxBeatsInternal = 0.0;   // the effects' beat clock for this block
-    uint32_t lastRackVersion = 0, lastLfoShapeVersion = 0, lastArpVersion = 0, lastMsegVersion = 0;
+    uint32_t lastRackVersion = 0, lastLfoShapeVersion = 0, lastArpVersion = 0, lastMsegVersion = 0, lastBreakVersion = 0;
+    juce::String lastBreakKey;
+    // the Break Sequencer (audio thread)
+    int64_t bsLastStep = INT64_MIN;
+    int bsPlaying = 0, bsChainIdx = -1;
+    bool bsRunning = false;
+    uint32_t bsRng = 0x9E3779B9u;
+    struct BsRoll { double beat; tg::BreakChopper::Trigger t; };
+    BsRoll bsRolls[16]; int bsNumRolls = 0;
+    double bsDue() const;          // the beat of the next step or roll
+    void bsTick (double beat);     // plays what's due at this beat
+    void bsStart (double beat);
     double hostStartBeat = 0.0; bool hostWasPlayingLfo = false;
     bool dnaGateRouted() const;     // a Mod Matrix route uses the DNA step gate
     tg::GlobalModInputs modInputs;

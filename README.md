@@ -50,13 +50,13 @@ The tabs follow the signal: the oscillators, the mix, the filters, the envelopes
 |---|---|
 | Perform | Perform, Performance FX |
 | Overview | (one page) |
-| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring, Granular Synth |
+| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring, Granular Synth, Break Chopper |
 | Mixer | (one page) |
 | Filters | (one page) |
 | Envelopes | Amp & Filter, Mod Envelopes, Pitch Envelope, MSEG 1 & 2 |
 | FX & Mutation | Note Mutation, Bus Mutation, Space, Dirt, Motion, Rack |
 | Modulation | LFOs, Mod Matrix, Assignments, Macros & Scenes, Cell Instability |
-| Sequencers | Step Sequencer, Arp / Chord, DNA Sequencer |
+| Sequencers | Step Sequencer, Arp / Chord, DNA Sequencer, Break Sequencer |
 | Lab | Mutate / Lab, Capture |
 
 Moved from earlier versions:
@@ -145,7 +145,7 @@ Each filter has a **Character** menu next to its Model. *Off* uses the classic M
 
 A console, in the order the sound flows:
 
-- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, the Ring modulator and the Granular Synth, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
+- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, the Ring modulator, the Granular Synth and the Break Chopper, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
   - Pan is a balance: centred, both sides stay at full level, so a centred mix sounds exactly as it did before the strips. Panning turns the other side down.
   - A muted source still works as an FM or ring modulator. With any Solo on, only soloed sources are heard. Mute and Solo ramp over a few milliseconds, so they don't click.
   - Pan is a Mod Matrix destination. The strips aren't changed by Mutate.
@@ -188,6 +188,75 @@ A playable granular oscillator. Each note plays its own cloud of grains from a s
 - **Approximations:**
   - Grains read the sample with linear interpolation.
   - Without Spray, the cloud repeats at the Density rate. Like any synchronous granular engine, that colours the sound with a comb of Density-spaced partials, so a little Spray gives a cleaner pitch.
+
+## Break Chopper (Oscillators > Break Chopper)
+
+Load a drum break and play it in slices, from the keys or from the Break Sequencer.
+
+- **Loading:**
+  - Load a WAV, AIFF, FLAC or MP3. Loading switches the chopper on.
+  - The break is saved inside the project and the patch, and comes back with undo and A/B.
+  - **Length cap: 30 s**, which is 8 bars at 64 BPM. A longer file is cut to its first 30 s, and only that part is saved. That keeps a project to roughly 10 MB at most.
+  - The page shows the file's size in the project, and warns above 8 MB.
+- **Tempo:**
+  - **Bars** set to Auto picks the bar count that puts the break nearest 130 BPM, within 88-190, assuming the file is trimmed to whole 4/4 bars.
+  - You can also choose the bar count, or type the **Tempo** in, which overrides both.
+  - The page shows the break's BPM, the song's tempo, and the stretch ratio.
+- **Slicing:**
+  - **Transients** finds hits by how fast the level rises. **Sensitivity** sets how small a rise counts and how close together hits can be.
+  - **Equal** 4, 8, 16 or 32 divides the break evenly.
+  - **Manual markers:** Shift-click the wave to add a marker, and right-click to remove the nearest one. **Slices to markers** turns the current slices into markers you can then edit.
+  - Up to 32 slices.
+- **Keys:**
+  - Slices play from **First Key** up. The default is C1 (MIDI 36), and the key names are drawn on the wave.
+  - Those keys play slices only while the chopper is on. Performance FX keys, if set to the same range, take priority.
+  - Clicking a slice plays it and selects it.
+- **Per slice:** Pitch, Gain, Pan, Trim Start and Trim End, Attack, Decay (off means it plays to its end), Choke group, Reverse and Loop.
+  - **Choke group:** slices in the same group cut each other off with a 3 ms fade. The default is group 1, so a new hit stops the last one, like a mono sampler. Set it to none to let hits ring over each other.
+  - **Loop:** the slice loops while its key is held.
+- **Stretch:**
+  - **Repitch:** played faster or slower, so pitch moves with tempo, like a sampler.
+  - **Akai Cyclic:** the slice is cut into cycles of **Cycle Length** (10-200 ms). Each cycle plays at the slice's pitch from where the slice should be by now, so cycles repeat when slowing down and skip when speeding up. Successive cycles are joined with a **Crossfade**.
+  - **Clean (WSOLA):** overlapping windows, each placed where it best continues the last (a search within a fifth of a window). This keeps tone and transients far cleaner. **Quality** sets how finely it searches.
+  - **Tempo Sync** (on by default) stretches the break to the song's tempo. Off, it plays at its own speed.
+- **Sound:**
+  - **Colour:** the Vintage Sampler's SP-1200, S950 and E-mu models, or a plain 12-bit.
+  - **Pitch** and **Velocity** (how much key velocity sets the level).
+  - **Level**, plus its own strip on the Mixer page (pan, mute, solo, meter).
+  - It joins the bus **before the bus stages and the effects**.
+  - **Through Synth Filter** (off by default) runs it through Filter 1's model, type, slope, cutoff, resonance, drive and character.
+- **Mod Matrix:** every continuous control except First Key and Tempo is a destination. Nothing here is changed by Mutate or the scenes.
+- **CPU:** 8 slices at once cost about 0.3-0.6% of one core with Repitch and 0.4-0.9% with Akai Cyclic. Clean costs about 3-4% at Eco, 5-6% at Normal and 15-17% at High (its search). A single slice is a fraction of that.
+- **How close is Akai Cyclic to a real S1000?**
+  - It follows the same idea: fixed-length cycles, repeated or skipped, with a crossfade.
+  - It isn't a copy of Akai's code or of its exact crossfade shape, timing or 16-bit/12-bit converters. Use the Colour models for the converter side.
+  - It has the character you'd expect: a "flutter" at 1 / Cycle Length. A steady tone becomes a set of partials that far apart, for example 25 Hz apart at 40 ms.
+  - Real S1000 users tuned the cycle length to the tempo to hide this; here you do it with Cycle Length.
+- **Factory content:** no copyrighted breaks are included.
+  - The three new presets (**Break Chop 170**, **Break Rollers**, **Break Keys**) use a two-bar 170 BPM break synthesised by the plugin itself: a sine-sweep kick, a tone-and-noise snare with ghost notes, and noise hats, in an original pattern.
+
+## Break Sequencer (Sequencers > Break Sequencer)
+
+- **Patterns:**
+  - Eight patterns, **A-H**, each of **16 or 32** sixteenth steps (one or two bars).
+  - Each step has: on/off, **Slice**, **Velocity**, **Accent**, **Pitch**, **Reverse**, **Roll** (2, 3 or 4 hits within the step), **Probability**, and **Tie** (no new hit; the last slice rings on).
+  - Click a step to edit it below the grid; double-click switches it on or off. The playing step is lit.
+- **Timing:**
+  - Locked to the song while the DAW plays, starting on the right step even if you press play mid-bar. **Swing** pushes the off-beat sixteenths.
+  - It waits while the DAW is stopped. With no transport at all (standalone), it runs on the synth's own tempo.
+- **Switching patterns:**
+  - Pick a pattern with the A-H buttons, or from 8 keys (**Pattern Keys**: C0-G0, C4-G4, C5-G5 or C6-G6).
+  - A new pattern starts on the **next step, beat or bar** (Switch).
+  - **Chain** plays a typed order, e.g. AABA, moving on each time a pattern ends.
+- **Tools:**
+  - **Original:** the break's slices in order, each on the step where it falls.
+  - **Reverse:** the pattern back to front.
+  - **Shuffle:** the same slices in a new order.
+  - **Jungle:** an edit of the original, with snare ghosts and swaps late in each bar, a kick double, a reversed hit, a cut-up of two 1/8s, and a rising snare roll into the end.
+  - **Copy / Paste** and **Clear**.
+  - Shuffle and Jungle use a seed that moves on with each press. Pressing again gives a new one, and undo goes back.
+- **Mod Matrix sources:** **Break Seq Step** (where in the pattern), **Break Seq Pattern** (which one) and **Break Slice** (the last slice played), all 0..1.
+- **What's saved:** patterns, chain and per-slice settings are saved in patches, projects, undo and A/B.
 
 ## Performance FX (Perform > Performance FX)
 
@@ -358,7 +427,7 @@ Each of the four LFOs has, on top of Wave, Rate and Depth:
 
 ## Factory presets
 
-The patch menu (and *Browse*) starts with 32 built-in presets, followed by your saved patches. The arrows step through both.
+The patch menu (and *Browse*) starts with 35 built-in presets (the last three play the Break Chopper), followed by your saved patches. The arrows step through both.
 Each preset is an ordinary patch - routes, macros (named), scenes, DNA steps and the effects rack included - so it can be
 edited, saved, mutated or bred. Loading one can be undone.
 

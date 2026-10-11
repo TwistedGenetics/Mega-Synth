@@ -73,6 +73,8 @@ namespace
         if (id == "outGain") return "Output";
         if (id.startsWith ("pf")) return "Performance FX";
         if (id.startsWith ("gs")) return "Granular Synth";
+        if (id.startsWith ("bc")) return "Break Chopper";
+        if (id.startsWith ("bs")) return "Break Sequencer";
         if (id.startsWith ("pEnv")) return "Pitch Envelope";
         if (id.startsWith ("mseg")) return "MSEG";
         if (id.startsWith ("chd")) return "Chord Memory";
@@ -190,10 +192,13 @@ namespace
             if (id.startsWith ("mx")) { m.category = Category::Mixer; m.group = MutGroup::None; }   // the mix stays put when mutating
             if (id.startsWith ("flt") || id.startsWith ("mfChar")) { m.category = Category::Filter; m.group = MutGroup::None; }   // character models: chosen, not mutated
             if (id.startsWith ("pf")) { m.category = Category::Fx; m.group = MutGroup::None; }   // Performance FX: played, not mutated
-            if (id.startsWith ("gs")) { m.category = Category::Osc; m.group = MutGroup::None; }  // Granular Synth: per voice; not mutated (old patches mutate as before)
+            if (id.startsWith ("gs")) { m.category = Category::Osc; m.group = MutGroup::None; }
+            if (id.startsWith ("bc")) { m.category = Category::Fx; m.group = MutGroup::None; }    // Break Chopper: on the bus, before the effects
+            if (id.startsWith ("bs")) { m.category = Category::Seq; m.group = MutGroup::None; }  // Granular Synth: per voice; not mutated (old patches mutate as before)
             m.unit = unitFor (id);
             if (id.startsWith ("gs")) m.unit = (id == "gsSize" || id == "gsSpray") ? "ms" : id == "gsDensity" ? "/s" : (id == "gsSemi" || id == "gsPitchRand") ? "st"
                                              : id == "gsCents" ? "cents" : id == "gsRoot" ? "note" : juce::String();
+            if (id.startsWith ("bc") || id.startsWith ("bs")) m.unit = id == "bcTempo" ? "BPM" : id == "bcCycle" ? "ms" : id == "bcPitch" ? "st" : id == "bcKeyBase" ? "note" : juce::String();
             if (id.startsWith ("pf")) m.unit = id == "pfCrushRate" ? "Hz" : id == "pfPitchGlide" ? "s" : id == "pfPitchAmt" ? "st" : id == "pfTapeTime" ? "beats" : juce::String();
             if (id == "mfCutoff") m.unit = "Hz";
             if (id == "mfDrive" || id == "outGain") m.unit = "dB";
@@ -203,7 +208,7 @@ namespace
             const bool admin = isAny (id, { "polyphony", "keyboardOctave", "bendRange", "seqLength", "seqEuclidPulses",
                                             "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum", "mutSeed", "dsSteps",
                                             "chdSpread", "chdInversion", "arpOctaves", "arpVelFixed", "arpRepeats", "arpSteps",
-                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot" });
+                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot", "bcKeyBase", "bcTempo" });
             m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin
                             && ! isAny (id, { "pfX1", "pfY1", "pfX2", "pfY2" });   // the XY pads are sources, not destinations
             float adScale;

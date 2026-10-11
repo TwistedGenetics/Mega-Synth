@@ -10,6 +10,7 @@
 #include "UI/Overview.h"
 #include "UI/PerfFxPage.h"
 #include "UI/SamplePages.h"
+#include "UI/BreakPages.h"
 
 using namespace tg;
 using namespace tgui;
@@ -1360,12 +1361,12 @@ void MegaSynthEditor::buildPages()
     struct TabDef { const char* name; juce::StringArray subs; juce::Colour colour; };
     const TabDef layout[] = {
         { "Perform", { "Perform", "Performance FX" }, col::accent }, { "Overview", {}, col::accent },
-        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth" }, col::osc },
+        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Break Chopper" }, col::osc },
         { "Mixer", {}, col::mixer }, { "Filters", {}, col::filter },
         { "Envelopes", { "Amp & Filter", "Mod Envelopes", "Pitch Envelope", "MSEG 1 & 2" }, col::env },
         { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Space", "Dirt", "Motion", "Rack" }, col::fx },
         { "Modulation", { "LFOs", "Mod Matrix", "Assignments", "Macros & Scenes", "Cell Instability" }, col::mod },
-        { "Sequencers", { "Step Sequencer", "Arp / Chord", "DNA Sequencer" }, col::seq },
+        { "Sequencers", { "Step Sequencer", "Arp / Chord", "DNA Sequencer", "Break Sequencer" }, col::seq },
         { "Lab", { "Mutate / Lab", "Capture" }, col::wavetable } };
     for (auto& t : layout)
     {
@@ -1776,6 +1777,263 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Oscillators > Break Chopper
+    {
+        auto* page = addPage ("Break Chopper");
+        const int slot = MegaSynthProcessor::kSlotBreak;
+        auto* ticker = page->own (new StoreTicker());
+        auto selected = std::make_shared<int> (0);
+        auto* smp = sec (page, "Break  (Load a drum break: it's cut into slices, played from First Key up (C1 by default). Click a slice to hear "
+                               "and edit it. In Manual markers mode, Shift-click adds a marker and right-click removes the nearest one. "
+                               "The break is saved inside the project and patch; anything longer than 30 s (8 bars at 64 BPM) is cut to "
+                               "30 s, which keeps a project to about 10 MB at most. The Break Sequencer (Sequencers tab) plays its patterns.)", col::complex);
+        auto* wave = page->own (new SampleWaveView (proc, slot, col::complex));
+        wave->emptyText = "Load a break (WAV, AIFF, FLAC or MP3)";
+        wave->markers = [this, slot, selected]
+        {
+            std::vector<SampleWaveView::Marker> m;
+            const auto d = proc.breakStore.get();
+            const auto* w = proc.getSample (slot);
+            if (w == nullptr || d.nSlices <= 0) return m;
+            const int kb = juce::roundToInt (proc.param (P_bcKeyBase)->convertFrom0to1 (proc.param (P_bcKeyBase)->getValue()));
+            for (int k = 0; k < d.nSlices; ++k)
+                m.push_back ({ (double) d.start[k] / w->length, k == *selected ? col::text : col::complex.brighter (0.4f),
+                               juce::MidiMessage::getMidiNoteName (kb + k, true, true, 3), k == *selected });
+            const double ph = proc.getEngine().breakPlayheadShown.load();
+            if (ph >= 0.0) m.push_back ({ ph, col::supersaw, {}, false });
+            return m;
+        };
+        wave->shade = [this, slot, selected]
+        {
+            const auto d = proc.breakStore.get(); const auto* w = proc.getSample (slot);
+            if (w == nullptr || *selected >= d.nSlices) return juce::Range<double>();
+            return juce::Range<double> ((double) d.start[*selected] / w->length, (double) d.start[*selected + 1] / w->length);
+        };
+        wave->onClick = [this, slot, selected] (double f, const juce::MouseEvent& e)
+        {
+            const auto* w = proc.getSample (slot);
+            if (w == nullptr) return;
+            const bool manual = juce::roundToInt (proc.param (P_bcSliceMode)->convertFrom0to1 (proc.param (P_bcSliceMode)->getValue())) == 5;
+            if (manual && e.mods.isShiftDown())
+            {
+                proc.breakStore.edit ([f] (tg::BreakData& d)
+                {
+                    if (d.nMarkers < tg::BreakData::kSlices - 1) { d.markers[d.nMarkers++] = (float) f; std::sort (d.markers, d.markers + d.nMarkers); }
+                });
+                proc.refreshBreakAnalysis();
+                return;
+            }
+            const auto d = proc.breakStore.get();
+            for (int k = 0; k < d.nSlices; ++k)
+                if (f * w->length >= d.start[k] && f * w->length < d.start[k + 1]) { *selected = k; proc.breakAudition.store (k); break; }
+        };
+        wave->onRightClick = [this] (double f)
+        {
+            if (juce::roundToInt (proc.param (P_bcSliceMode)->convertFrom0to1 (proc.param (P_bcSliceMode)->getValue())) != 5) return;
+            proc.breakStore.edit ([f] (tg::BreakData& d)
+            {
+                if (d.nMarkers <= 0) return;
+                int best = 0; for (int i = 1; i < d.nMarkers; ++i) if (std::abs (d.markers[i] - f) < std::abs (d.markers[best] - f)) best = i;
+                for (int i = best; i + 1 < d.nMarkers; ++i) d.markers[i] = d.markers[i + 1];
+                --d.nMarkers;
+            });
+            proc.refreshBreakAnalysis();
+        };
+        auto* load = page->own (new juce::TextButton ("Load Break"));
+        auto* clear = page->own (new juce::TextButton ("Clear"));
+        auto* toMarkers = page->own (new juce::TextButton ("Slices to markers"));
+        toMarkers->setTooltip ("Manual markers mode, starting from the slices you have now");
+        auto* info = page->own (new juce::Label());
+        info->setColour (juce::Label::textColourId, col::muted);
+        info->setFont (juce::Font (juce::FontOptions (11.0f)));
+        info->setJustificationType (juce::Justification::topLeft);
+        load->onClick = [this, slot]
+        {
+            chooser = std::make_unique<juce::FileChooser> ("Load a break", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [this, slot] (const juce::FileChooser& fc)
+                                  {
+                                      const auto f = fc.getResult();
+                                      if (f == juce::File()) return;
+                                      const bool ok = proc.loadSampleFile (f, slot);
+                                      setStatus (ok ? "Break loaded" : "Couldn't read that audio file");
+                                      if (ok && proc.param (P_bcOn)->getValue() < 0.5f) proc.param (P_bcOn)->setValueNotifyingHost (1.0f);
+                                      proc.pushHistory ("Load break");
+                                  });
+        };
+        clear->onClick = [this, slot] { proc.clearSample (slot); proc.pushHistory ("Clear break"); setStatus ("Break cleared"); };
+        toMarkers->onClick = [this, slot]
+        {
+            const auto* w = proc.getSample (slot);
+            if (w == nullptr) return;
+            proc.breakStore.edit ([w] (tg::BreakData& d)
+            {
+                d.nMarkers = 0;
+                for (int k = 1; k < d.nSlices && d.nMarkers < tg::BreakData::kSlices - 1; ++k) d.markers[d.nMarkers++] = (float) d.start[k] / (float) w->length;
+            });
+            proc.param (P_bcSliceMode)->setValueNotifyingHost (proc.param (P_bcSliceMode)->convertTo0to1 (5.0f));
+            proc.refreshBreakAnalysis();
+        };
+        auto* on = page->own (new ParamToggle (proc, P_bcOn, "On", col::complex));
+
+        auto* sl = sec (page, "Slicing & Tempo", col::complex);
+        sl->choice (P_bcSliceMode, "Slicing", 132);
+        sl->knob (P_bcSens, "Sensitivity", 66);
+        sl->choice (P_bcBars, "Bars", 90);
+        sl->knob (P_bcTempo, "Tempo (0 = auto)", 92);
+        sl->knob (P_bcKeyBase, "First Key", 66);
+        auto* sn = sec (page, "Stretch & Sound  (Repitch: faster = higher, like a sampler. Akai Cyclic: S1000-style cyclic time-stretch, Cycle "
+                              "Length and Crossfade set its grain and flutter. Clean: WSOLA, which finds the best place to splice; Quality sets how "
+                              "hard it searches. Tempo Sync stretches the break to the song's tempo. Colour runs it through the Vintage Sampler's "
+                              "SP-1200 / S950 / E-mu models. Through Synth Filter sends it through Filter 1's settings.)", col::complex);
+        sn->choice (P_bcStretch, "Stretch", 140);
+        sn->add (new ParamToggle (proc, P_bcSync, "Tempo Sync", col::complex), 110, 40);
+        sn->knob (P_bcCycle, "Cycle", 62);
+        sn->knob (P_bcXfade, "Crossfade", 62);
+        sn->knob (P_bcPitch, "Pitch", 62);
+        sn->knob (P_bcVelSens, "Velocity", 62);
+        sn->newRow();
+        sn->choice (P_bcColour, "Colour", 130);
+        sn->add (new ParamToggle (proc, P_bcThruFilter, "Through Synth Filter", col::filter), 170, 40);
+        sn->knob (P_bcLevel, "Level", 62);
+        sn->knob (P_mxBreakPan, "Pan", 62);
+        sn->add (new ParamToggle (proc, P_mxBreakMute, "Mute", col::mixer), 70, 40);
+        sn->add (new ParamToggle (proc, P_mxBreakSolo, "Solo", col::mixer), 70, 40);
+
+        auto* ed = sec (page, "Slice", col::complex);
+        auto& store = proc.breakStore;
+        auto sliceGet = [&store, selected] (auto fn) { return [&store, selected, fn] { const auto d = store.get(); return fn (d.slice[juce::jlimit (0, 31, *selected)]); }; };
+        auto sliceSet = [&store, selected] (auto fn) { return [&store, selected, fn] (auto v) { store.edit ([&] (tg::BreakData& d) { fn (d.slice[juce::jlimit (0, 31, *selected)], v); }); }; };
+        auto num = [] (int dp, const char* unit) { return [dp, unit] (double v) { return juce::String (v, dp) + unit; }; };
+        juce::Array<StoreKnob*> knobs; juce::Array<StoreToggle*> toggles;
+        knobs.add (new StoreKnob ("Pitch", -24, 24, 0.1, col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.pitch; }), sliceSet ([] (tg::BreakSlice& x, float v) { x.pitch = v; }), num (1, " st")));
+        knobs.add (new StoreKnob ("Gain", 0, 2, 0.01, col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.gain; }), sliceSet ([] (tg::BreakSlice& x, float v) { x.gain = v; }), num (2, "")));
+        knobs.add (new StoreKnob ("Pan", -1, 1, 0.01, col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.pan; }), sliceSet ([] (tg::BreakSlice& x, float v) { x.pan = v; }), num (2, "")));
+        knobs.add (new StoreKnob ("Trim Start", 0, 0.95, 0.01, col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.trimStart; }), sliceSet ([] (tg::BreakSlice& x, float v) { x.trimStart = std::min (v, x.trimEnd - 0.05f); }), [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; }));
+        knobs.add (new StoreKnob ("Trim End", 0.05, 1, 0.01, col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.trimEnd; }), sliceSet ([] (tg::BreakSlice& x, float v) { x.trimEnd = std::max (v, x.trimStart + 0.05f); }), [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; }));
+        knobs.add (new StoreKnob ("Attack", 0, 0.5, 0.001, col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.attack; }), sliceSet ([] (tg::BreakSlice& x, float v) { x.attack = v; }), [] (double v) { return juce::String (juce::roundToInt (v * 1000)) + " ms"; }));
+        knobs.add (new StoreKnob ("Decay", 0, 4, 0.01, col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.decay; }), sliceSet ([] (tg::BreakSlice& x, float v) { x.decay = v; }), [] (double v) { return v < 0.005 ? juce::String ("off") : juce::String (v, 2) + " s"; }));
+        knobs.add (new StoreKnob ("Choke", 0, 8, 1, col::complex, sliceGet ([] (const tg::BreakSlice& x) { return (float) x.choke; }), sliceSet ([] (tg::BreakSlice& x, float v) { x.choke = juce::roundToInt (v); }), [] (double v) { return v < 0.5 ? juce::String ("none") : "group " + juce::String (juce::roundToInt (v)); }));
+        toggles.add (new StoreToggle ("Reverse", col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.reverse; }), sliceSet ([] (tg::BreakSlice& x, bool v) { x.reverse = v; })));
+        toggles.add (new StoreToggle ("Loop", col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.loop; }), sliceSet ([] (tg::BreakSlice& x, bool v) { x.loop = v; })));
+        for (auto* k : knobs) ed->add (k, 70, 84);
+        for (auto* t : toggles) ed->add (t, 90, 40);
+        auto* sliceName = page->own (new juce::Label());
+        sliceName->setColour (juce::Label::textColourId, col::text);
+        sliceName->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        ticker->tick = [this, knobs, toggles, info, sliceName, selected]
+        {
+            for (auto* k : knobs) k->refresh();
+            for (auto* t : toggles) t->refresh();
+            info->setText (breakInfoText (proc), juce::dontSendNotification);
+            const auto d = proc.breakStore.get();
+            if (*selected >= std::max (1, d.nSlices)) *selected = 0;
+            const int kb = juce::roundToInt (proc.param (P_bcKeyBase)->convertFrom0to1 (proc.param (P_bcKeyBase)->getValue()));
+            sliceName->setText (d.nSlices > 0 ? "Slice " + juce::String (*selected + 1) + "  (" + juce::MidiMessage::getMidiNoteName (kb + *selected, true, true, 3) + ")" : juce::String ("No slices"),
+                                juce::dontSendNotification);
+        };
+        ticker->tick();
+        breakWaveForTests = wave;
+        page->onResize = [page, smp, wave, load, clear, toMarkers, info, on, sl, sn, ed, sliceName]
+        {
+            const int g = 10, W = page->getWidth();
+            smp->setBounds (g, g, W - 2 * g, 196);
+            wave->setBounds (g + 10, g + 34, W - 2 * g - 20, 112);
+            on->setBounds (g + 10, g + 154, 60, 28);
+            load->setBounds (g + 72, g + 156, 100, 26);
+            clear->setBounds (g + 176, g + 156, 60, 26);
+            toMarkers->setBounds (g + 240, g + 156, 130, 26);
+            info->setBounds (g + 380, g + 150, W - 2 * g - 390, 40);
+            sl->setBounds (g, g + 204, 510, 134);
+            sn->setBounds (g + 520, g + 204, W - 2 * g - 520, 230);
+            ed->setBounds (g, g + 346, 510, 228);
+            sliceName->setBounds (g + 70, g + 352, 300, 20);
+        };
+    }
+
+    // ---------------------------------------------------------------- Sequencers > Break Sequencer
+    {
+        auto* page = addPage ("Break Sequencer");
+        auto* ticker = page->own (new StoreTicker());
+        auto* top = sec (page, "Patterns  (Eight patterns, A-H, of 16 or 32 sixteenth steps, locked to the song while it plays (and to the synth's "
+                               "tempo when it doesn't). Pick the pattern to edit and play here, or from 8 keys (Pattern Keys); a new pattern starts "
+                               "on the next step, beat or bar (Switch). Chain plays patterns in order, e.g. AABA. Each step plays a slice of the "
+                               "Break Chopper's break, with its own velocity, accent, pitch, reverse, roll (2, 3 or 4 hits in the step), probability "
+                               "or tie (let the last slice ring on). Step, pattern and slice are Mod Matrix sources.)", col::seq);
+        auto* pat = new Segmented (proc, P_bsPattern, { "A", "B", "C", "D", "E", "F", "G", "H" }, col::seq);
+        top->add (new ParamToggle (proc, P_bsOn, "Run", col::seq), 70, 40);
+        top->add (pat, 280, 30);
+        top->choice (P_bsSteps, "Length", 100);
+        top->choice (P_bsSwitch, "Switch", 110);
+        top->choice (P_bsKeys, "Pattern Keys", 170);
+        top->knob (P_bsSwing, "Swing", 62);
+        top->newRow();
+        top->add (new ParamToggle (proc, P_bsChainOn, "Chain", col::seq), 76, 40);
+        auto* chainEd = new juce::TextEditor();
+        chainEd->setTooltip ("Patterns to play in order, e.g. AABA (up to 16)");
+        chainEd->setInputRestrictions (16, "ABCDEFGHabcdefgh");
+        chainEd->onTextChange = [this, chainEd] { const auto t = chainEd->getText(); proc.breakStore.edit ([t] (tg::BreakData& d) { tg::BreakStore::setChain (d, t); }); };
+        top->add (chainEd, 130, 26);
+        juce::Array<juce::TextButton*> tools;
+        for (auto* n : { "Original", "Reverse", "Shuffle", "Jungle", "Copy", "Paste", "Clear" }) { auto* b = new juce::TextButton (n); tools.add (b); top->add (b, 76, 26); }
+        auto* grid = page->own (new BreakStepGrid (proc));
+        auto clip = std::make_shared<std::vector<tg::BreakStep>>();
+        auto edited = [grid] { return grid->editedPattern(); };
+        tools[0]->onClick = [this, grid, edited] { proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::original (d, edited(), grid->numSteps()); }); };
+        tools[1]->onClick = [this, grid, edited] { proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::reverseOrder (d, edited(), grid->numSteps()); }); };
+        tools[2]->onClick = [this, grid, edited] { proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::shuffle (d, edited(), grid->numSteps(), d.seed++); }); };
+        tools[3]->onClick = [this, grid, edited] { proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::jungle (d, edited(), grid->numSteps(), d.seed++); }); };
+        tools[4]->onClick = [this, edited, clip] { const auto d = proc.breakStore.get(); clip->assign (d.step[edited()], d.step[edited()] + tg::BreakData::kSteps); setStatus ("Pattern copied"); };
+        tools[5]->onClick = [this, edited, clip] { if (clip->empty()) return; proc.breakStore.edit ([&] (tg::BreakData& d) { std::copy (clip->begin(), clip->end(), d.step[edited()]); }); };
+        tools[6]->onClick = [this, edited] { proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::clear (d, edited()); }); };
+        tools[0]->setTooltip ("The break as it was: its slices in order, each on the step where it falls");
+        tools[1]->setTooltip ("The pattern back to front");
+        tools[2]->setTooltip ("The same slices in a new order (each press a new shuffle)");
+        tools[3]->setTooltip ("A jungle edit of the original: snare ghosts and swaps, a kick double, a reversed hit, a cut-up and a snare roll (each press a new one)");
+
+        auto* stepSec = sec (page, "Step", col::seq);
+        auto& store = proc.breakStore;
+        auto stepGet = [&store, grid] (auto fn) { return [&store, grid, fn] { const auto d = store.get(); return fn (d.step[grid->editedPattern()][juce::jlimit (0, 31, grid->selected)]); }; };
+        auto stepSet = [&store, grid] (auto fn) { return [&store, grid, fn] (auto v) { store.edit ([&] (tg::BreakData& d) { fn (d.step[grid->editedPattern()][juce::jlimit (0, 31, grid->selected)], v); }); }; };
+        juce::Array<StoreKnob*> knobs; juce::Array<StoreToggle*> toggles;
+        toggles.add (new StoreToggle ("On", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.on; }), stepSet ([] (tg::BreakStep& x, bool v) { x.on = v; })));
+        knobs.add (new StoreKnob ("Slice", 1, 32, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) (x.slice + 1); }), stepSet ([] (tg::BreakStep& x, float v) { x.slice = juce::roundToInt (v) - 1; x.on = true; }), [] (double v) { return juce::String (juce::roundToInt (v)); }));
+        knobs.add (new StoreKnob ("Velocity", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.vel; }), stepSet ([] (tg::BreakStep& x, float v) { x.vel = v; }), [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; }));
+        toggles.add (new StoreToggle ("Accent", col::supersaw, stepGet ([] (const tg::BreakStep& x) { return x.accent; }), stepSet ([] (tg::BreakStep& x, bool v) { x.accent = v; })));
+        knobs.add (new StoreKnob ("Pitch", -24, 24, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.pitch; }), stepSet ([] (tg::BreakStep& x, float v) { x.pitch = v; }), [] (double v) { return (v > 0 ? "+" : "") + juce::String (juce::roundToInt (v)) + " st"; }));
+        toggles.add (new StoreToggle ("Reverse", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.reverse; }), stepSet ([] (tg::BreakStep& x, bool v) { x.reverse = v; })));
+        knobs.add (new StoreKnob ("Roll", 1, 4, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.roll; }), stepSet ([] (tg::BreakStep& x, float v) { x.roll = juce::roundToInt (v); }), [] (double v) { return v < 1.5 ? juce::String ("off") : "x" + juce::String (juce::roundToInt (v)); }));
+        knobs.add (new StoreKnob ("Probability", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.prob; }), stepSet ([] (tg::BreakStep& x, float v) { x.prob = v; }), [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; }));
+        toggles.add (new StoreToggle ("Tie", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.tie; }), stepSet ([] (tg::BreakStep& x, bool v) { x.tie = v; })));
+        stepSec->add (toggles[0], 60, 40);
+        for (auto* k : knobs) stepSec->add (k, 76, 84);
+        for (int i = 1; i < toggles.size(); ++i) stepSec->add (toggles[i], 86, 40);
+        auto* stepName = page->own (new juce::Label());
+        stepName->setColour (juce::Label::textColourId, col::text);
+        stepName->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        grid->onSelect = [] (int) {};
+        ticker->tick = [this, grid, knobs, toggles, chainEd, stepName]
+        {
+            grid->refresh();
+            for (auto* k : knobs) k->refresh();
+            for (auto* t : toggles) t->refresh();
+            const auto d = proc.breakStore.get();
+            if (! chainEd->hasKeyboardFocus (true) && chainEd->getText() != juce::String (d.chain)) chainEd->setText (juce::String (d.chain), false);
+            stepName->setText ("Step " + juce::String (grid->selected + 1) + " of pattern " + juce::String::charToString ((juce::juce_wchar) ('A' + grid->editedPattern())),
+                               juce::dontSendNotification);
+        };
+        ticker->tick();
+        breakGridForTests = grid;
+        page->onResize = [page, top, grid, stepSec, stepName]
+        {
+            const int g = 10, W = page->getWidth();
+            top->setBounds (g, g, W - 2 * g, 156);
+            grid->setBounds (g + 4, g + 164, W - 2 * g - 8, 200);
+            stepSec->setBounds (g, g + 372, W - 2 * g, 140);
+            stepName->setBounds (g + 70, g + 378, 300, 20);
+        };
+    }
+
     // ---------------------------------------------------------------- Mixer & FM
     {
         auto* page = addPage ("Mixer");
@@ -1791,7 +2049,8 @@ void MegaSynthEditor::buildPages()
             { "Complex", P_complexGain, P_uni1Voices + 5 * kUniStride, "Voices", 7, col::complex },
             { "SuperSaw", P_supersawGain, P_supersawVoices, "Voices", 8, col::supersaw },
             { "Ring", P_ringGain, P_ringMix, "Ring Mix", -1, col::fm },
-            { "Granular", P_gsLevel, P_gsDensity, "Density", 99, col::supersaw } };   // (99: lit only when the pitch envelope moves all)
+            { "Granular", P_gsLevel, P_gsDensity, "Density", 99, col::supersaw },
+            { "Break", P_bcLevel, P_bcPitch, "Pitch", -1, col::complex } };   // (99: lit only when the pitch envelope moves all)
         juce::Array<ChannelStrip*> stripList;
         for (int k = 0; k < kMxStrips; ++k)
             stripList.add (page->own (new ChannelStrip (proc, k, strips[k].name, strips[k].level, strips[k].extra, strips[k].extraCap, strips[k].pEnv, strips[k].c)));
@@ -1860,16 +2119,16 @@ void MegaSynthEditor::buildPages()
         auto* outS = sec (page, "Output", col::master);
         outS->addInfo ("Master Volume comes before the effects, as it always has. At the very end: the Master Filter (Filters tab), "
                        "then Output. The meter shows what leaves the plug-in, with the peak held.");
-        outS->knob (P_masterVolume, "Master", 64);
-        outS->add (new ParamToggle (proc, P_mfOn, "Master Filter", col::filter), 120, 40);
-        outS->knob (P_mfCutoff, "Filter Cutoff", 80);
-        outS->knob (P_outGain, "Output", 64);
+        outS->knob (P_masterVolume, "Master", 58);
+        outS->add (new ParamToggle (proc, P_mfOn, "Master Filter", col::filter), 112, 40);
+        outS->knob (P_mfCutoff, "MF Cutoff", 66);
+        outS->knob (P_outGain, "Output", 58);
         auto* outL = page->own (new LevelMeter()); auto* outR = page->own (new LevelMeter());
         outMeters[0] = outL; outMeters[1] = outR;
         page->onResize = [page, stripList, srcHelp, engS, chipList, rt, w, outS, outL, outR]
         {
             const int g = 10, W = page->getWidth();
-            const int stripW = 74, stripsW = stripW * kMxStrips + 2 * 4;
+            const int stripW = 70, stripsW = stripW * kMxStrips + 2 * 4;
             srcHelp->setBounds (g, g, stripsW + 8, 32 + 360 + 8);
             for (int k = 0; k < stripList.size(); ++k) { stripList[k]->setBounds (g + 4 + k * stripW, g + 32, stripW - 4, 360); stripList[k]->toFront (false); }
             w->setBounds (g, g + 410, 260, 130);

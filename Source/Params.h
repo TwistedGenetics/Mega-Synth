@@ -147,6 +147,23 @@ inline const char* const kGsShapeKeys[]   = { "hann","triangle","tukey","perc","
 inline const char* const kGsShapeLabels[] = { "Hann (smooth)","Triangle","Flat top","Percussive","Gaussian" };
 inline const char* const kGsDnaKeys[]     = { "off","a","b" };
 inline const char* const kGsDnaLabels[]   = { "Off","Replaces DNA Source A","Replaces DNA Source B" };
+// Break Chopper and Break Sequencer (state version 16)
+inline const char* const kBcBarsKeys[]    = { "auto","1","2","4","8","16" };
+inline const char* const kBcBarsLabels[]  = { "Auto","1 bar","2 bars","4 bars","8 bars","16 bars" };
+inline const char* const kBcSliceKeys[]   = { "transient","eq4","eq8","eq16","eq32","manual" };
+inline const char* const kBcSliceLabels[] = { "Transients","Equal 4","Equal 8","Equal 16","Equal 32","Manual markers" };
+inline const char* const kBcStretchKeys[]   = { "repitch","cyclic","clean" };
+inline const char* const kBcStretchLabels[] = { "Repitch","Akai Cyclic","Clean (WSOLA)" };
+inline const char* const kBcColourKeys[]   = { "off","sp1200","s950","emu","12bit" };
+inline const char* const kBcColourLabels[] = { "Off","SP-1200","Akai S950","E-mu","12-bit" };
+inline const char* const kBsPatKeys[]    = { "A","B","C","D","E","F","G","H" };
+inline const char* const kBsPatLabels[]  = { "A","B","C","D","E","F","G","H" };
+inline const char* const kBsStepsKeys[]   = { "16","32" };
+inline const char* const kBsStepsLabels[] = { "16 steps","32 steps" };
+inline const char* const kBsSwitchKeys[]   = { "step","beat","bar" };
+inline const char* const kBsSwitchLabels[] = { "Next step","Next beat","Next bar" };
+inline const char* const kBsKeysKeys[]   = { "off","24","72","84","96" };
+inline const char* const kBsKeysLabels[] = { "Off","MIDI 24-31 (C0-G0)","MIDI 72-79 (C4-G4)","MIDI 84-91 (C5-G5)","MIDI 96-103 (C6-G6)" };
 inline const char* const kPfKeysKeys[]    = { "off","36","48","60","72","84","96" };
 inline const char* const kPfKeysLabels[]  = { "Off","MIDI 36-48 (C1-C2)","MIDI 48-60 (C2-C3)","MIDI 60-72 (C3-C4)","MIDI 72-84 (C4-C5)","MIDI 84-96 (C5-C6)","MIDI 96-108 (C6-C7)" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
@@ -306,6 +323,14 @@ inline const ChoiceList kListPfEcho  = TG_LIST(kPfEcho);
 inline const ChoiceList kListPfKeys  = TG_LIST(kPfKeys);
 inline const ChoiceList kListGsShape = TG_LIST(kGsShape);
 inline const ChoiceList kListGsDna   = TG_LIST(kGsDna);
+inline const ChoiceList kListBcBars    = TG_LIST(kBcBars);
+inline const ChoiceList kListBcSlice   = TG_LIST(kBcSlice);
+inline const ChoiceList kListBcStretch = TG_LIST(kBcStretch);
+inline const ChoiceList kListBcColour  = TG_LIST(kBcColour);
+inline const ChoiceList kListBsPat     = TG_LIST(kBsPat);
+inline const ChoiceList kListBsSteps   = TG_LIST(kBsSteps);
+inline const ChoiceList kListBsSwitch  = TG_LIST(kBsSwitch);
+inline const ChoiceList kListBsKeys    = TG_LIST(kBsKeys);
 // Performance FX pads, in the order they're processed: P_pfRoll + k
 constexpr int kPfPads = 13;
 
@@ -315,8 +340,8 @@ constexpr int kLfoXStride = 8;
 constexpr int kUniStride = 5, kUniOscs = 6;
 // Mixer channel strips: Pan, Mute, Solo per source (Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, Ring), from P_mxOsc1Pan
 constexpr int kMxStride = 3, kMxSources = 9;
-// ... plus strips added later, each Pan / Mute / Solo in a row: 9 = Granular Synth
-constexpr int kMxStrips = 10;
+// ... plus strips added later, each Pan / Mute / Solo in a row: 9 = Granular Synth, 10 = Break Chopper
+constexpr int kMxStrips = 11;
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
@@ -993,7 +1018,32 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(gsDna,       "Granular as DNA Source", kListGsDna, 0) \
     F(mxGranPan,   "Granular Pan", -1, 1, 0, 0.01, 0) \
     B(mxGranMute,  "Granular Mute", false) \
-    B(mxGranSolo,  "Granular Solo", false)
+    B(mxGranSolo,  "Granular Solo", false) \
+    B(bcOn,        "Break Chopper On", false) \
+    F(bcLevel,     "Break Level", 0, 1, 0.8, 0.01, 0) \
+    C(bcBars,      "Break Bars", kListBcBars, 0) \
+    F(bcTempo,     "Break Original Tempo", 0, 250, 0, 0.01, 0) \
+    C(bcSliceMode, "Break Slicing", kListBcSlice, 0) \
+    F(bcSens,      "Break Transient Sensitivity", 0, 1, 0.5, 0.01, 0) \
+    F(bcKeyBase,   "Break First Key", 0, 108, 36, 1, 0) \
+    C(bcStretch,   "Break Stretch", kListBcStretch, 1) \
+    B(bcSync,      "Break Tempo Sync", true) \
+    F(bcCycle,     "Break Cycle Length", 10, 200, 40, 0.1, 50) \
+    F(bcXfade,     "Break Crossfade", 0, 1, 0.35, 0.01, 0) \
+    F(bcPitch,     "Break Pitch", -24, 24, 0, 0.01, 0) \
+    F(bcVelSens,   "Break Velocity", 0, 1, 0.5, 0.01, 0) \
+    C(bcColour,    "Break Colour", kListBcColour, 0) \
+    B(bcThruFilter,"Break Through Synth Filter", false) \
+    F(mxBreakPan,  "Break Pan", -1, 1, 0, 0.01, 0) \
+    B(mxBreakMute, "Break Mute", false) \
+    B(mxBreakSolo, "Break Solo", false) \
+    B(bsOn,        "Break Sequencer Run", false) \
+    C(bsPattern,   "Break Pattern", kListBsPat, 0) \
+    C(bsSteps,     "Break Pattern Length", kListBsSteps, 0) \
+    C(bsSwitch,    "Break Pattern Switch", kListBsSwitch, 2) \
+    B(bsChainOn,   "Break Pattern Chain", false) \
+    C(bsKeys,      "Break Pattern Keys", kListBsKeys, 0) \
+    F(bsSwing,     "Break Swing", 0, 0.75, 0, 0.01, 0)
 
 enum ParamIndex
 {
@@ -1022,6 +1072,6 @@ inline const char* const kParamIds[] = {
 };
 
 // a Mixer strip's Pan parameter (Mute and Solo follow it)
-inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : P_mxGranPan + kMxStride * (strip - kMxSources); }
+inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : (strip == kMxSources ? P_mxGranPan : P_mxBreakPan); }
 
 } // namespace tg

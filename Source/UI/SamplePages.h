@@ -16,6 +16,7 @@ public:
     std::function<std::vector<Marker>()> markers;          // what to draw over the wave (fractions of its length)
     std::function<juce::Range<double>()> shade;            // a highlighted span (fractions), optional
     std::function<void (double frac, const juce::MouseEvent&)> onClick, onDrag;
+    std::function<void (double frac)> onRightClick;
     juce::String emptyText = "Load a sample (WAV, AIFF, FLAC or MP3)";
 
     void paint (juce::Graphics& g) override
@@ -63,7 +64,11 @@ public:
                 }
             }
     }
-    void mouseDown (const juce::MouseEvent& e) override { if (onClick && ! e.mods.isPopupMenu()) onClick (fracAt (e), e); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu()) { if (onRightClick) onRightClick (fracAt (e)); return; }
+        if (onClick) onClick (fracAt (e), e);
+    }
     void mouseDrag (const juce::MouseEvent& e) override { if (onDrag) onDrag (fracAt (e), e); }
     double fracAt (const juce::MouseEvent& e) const
     {

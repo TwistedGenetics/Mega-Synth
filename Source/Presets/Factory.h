@@ -1,5 +1,7 @@
 #pragma once
-// Factory presets: the 32 demo patches that ship inside the plugin.
+#include <functional>
+#include "../Break/BreakTools.h"
+// Factory presets: the 35 demo patches that ship inside the plugin.
 //
 // Each preset is written as code against the parameter table (so it can never refer to a
 // control that doesn't exist) and is built on top of a clean starting point: every parameter
@@ -41,6 +43,8 @@ struct PresetBuilder
     struct ArpStep { int i, state; float prob; };
     std::vector<ArpStep> arpPattern;                          // steps that differ from "on, 100%"
     std::vector<int> learnedChord;                            // chord memory's Learned chord (empty: default)
+    int breakDemo = -1;                                       // Break Chopper: load the synthesised demo break (variant)
+    std::function<void (BreakData&)> breakEdit;               // ... then set up its slices / patterns (after slicing)
 
     PresetBuilder()
     {
@@ -742,12 +746,60 @@ namespace factory_detail
         b.macro (0, "Space", { { P_reverbMix, 0.3f }, { P_delayMix, 0.2f } });
         b.macro (1, "Bright", { { P_filterCutoff, 0.3f } });
     }
+
+    // 33 ---------------------------------------------------------------------------------------- Break Chopper
+    inline void breakBase (B& b)
+    {
+        // a sine sub on the keys below / above the slices; the break on C1 up, patterns on C0-G0
+        b.set (P_subWave, 0).set (P_subGain, 0.55f).set (P_subOct, 0).set (P_osc1Gain, 0.0f).set (P_osc2Gain, 0.0f)
+         .set (P_filterCutoff, 900).set (P_ampA, 0.004f).set (P_ampR, 0.12f).set (P_polyphony, 1)
+         .set (P_reverbMix, 0.1f).set (P_delayMix, 0.0f).set (P_chorusMix, 0.0f).set (P_masterVolume, 0.5f)
+         .set (P_bcOn, 1).set (P_bcSliceMode, 3).set (P_bcBars, 2).set (P_bcLevel, 0.85f)
+         .set (P_bsKeys, 1).set (P_bsSteps, 1);
+        b.breakDemo = 0;
+    }
+    inline void breakChop170 (B& b)
+    {
+        breakBase (b);
+        b.set (P_bcStretch, 1).set (P_bcColour, 2).set (P_bcCycle, 35).set (P_bsOn, 1).set (P_bsSwitch, 2);
+        b.breakEdit = [] (BreakData& d)
+        {
+            breaktools::original (d, 0, 32);
+            breaktools::jungle (d, 1, 32, 7);
+            breaktools::original (d, 2, 32); breaktools::reverseOrder (d, 2, 32);
+            breaktools::jungle (d, 3, 32, 21);
+        };
+        b.macro (0, "Crunch", { { P_bcCycle, 0.4f } });
+        b.macro (1, "Break Pitch", { { P_bcPitch, 0.15f } });
+    }
+    inline void breakRollers (B& b)
+    {
+        breakBase (b);
+        b.set (P_bcStretch, 2).set (P_bcColour, 1).set (P_bsOn, 1).set (P_bsChainOn, 1).set (P_bsSwing, 0.12f)
+         .set (P_subGain, 0.6f).set (P_filterCutoff, 600);
+        b.breakEdit = [] (BreakData& d)
+        {
+            breaktools::original (d, 0, 32);
+            breaktools::jungle (d, 1, 32, 3);
+            BreakStore::setChain (d, "AABA");
+        };
+    }
+    inline void breakKeys (B& b)
+    {
+        breakBase (b);
+        b.set (P_bcStretch, 0).set (P_bcColour, 3).set (P_bcSync, 0).set (P_bsOn, 0).set (P_bcVelSens, 0.8f);
+        b.breakEdit = [] (BreakData& d)
+        {
+            for (int k = 0; k < BreakData::kSlices; ++k) d.slice[k].choke = 0;   // poly: hits ring over each other
+            d.slice[2].pitch = -2.0f; d.slice[6].reverse = true; d.slice[15].loop = true;
+        };
+    }
 }
 
-inline const std::array<FactoryPreset, 32>& factoryPresets()
+inline const std::array<FactoryPreset, 35>& factoryPresets()
 {
     using namespace factory_detail;
-    static const std::array<FactoryPreset, 32> list { {
+    static const std::array<FactoryPreset, 35> list { {
         { "Init Genome",           "Init",   "Two saws and a sub, with the eight macros wired to the main mutation engines.", initGenome },
         { "Reese Mutation",        "Bass",   "Detuned reese with slow wave-fold and filter drift plus Cell Instability.", reeseMutation },
         { "Sub Helix",             "Bass",   "Sine sub with an audio-rate FM blip at the front of each note.", subHelix },
@@ -780,6 +832,9 @@ inline const std::array<FactoryPreset, 32>& factoryPresets()
         { "Synced Wob Bass",       "Jungle / DnB", "Bass: a drawn wub shape on LFO 1 at 1/8, locked to the song position, sweeping a resonant low pass.", syncedWobBass },
         { "Arp Hoover",            "Jungle / DnB", "Arp: up/down 2-octave 1/16 hoover arpeggio with accents and rests; a 1-bar LFO opens the filter.", arpHoover },
         { "Liquid Arp",            "Jungle / DnB", "Arp: one key plays a spread minor 9 as a swung 1/16 arpeggio with probability steps, phaser and space.", liquidArp },
+        { "Break Chop 170",        "Jungle / DnB", "Break: a synthesised 170 BPM break, Akai Cyclic to the song, S950. Patterns A-D on C0-D#0 (original, jungle edit, reversed, edit 2); slices on C1 up; sub on the other keys.", breakChop170 },
+        { "Break Rollers",         "Jungle / DnB", "Break: the demo break, Clean stretch, SP-1200, swung, chained AABA (original, original, jungle edit, original) under a sine sub.", breakRollers },
+        { "Break Keys",            "Jungle / DnB", "Break: the demo break's 16 slices on C1 up to play by hand, no sequencer, E-mu colour, velocity on; one slice reversed, one loops.", breakKeys },
     } };
     return list;
 }

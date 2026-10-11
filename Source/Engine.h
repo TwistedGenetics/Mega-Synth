@@ -12,6 +12,7 @@
 #include "Fx/MasterFilter.h"
 #include "Fx/PerfFx.h"
 #include "GranSynth.h"
+#include "Break/BreakChopper.h"
 #include "Mut/Granular.h"
 #include "Mut/Spectral.h"
 #include "Mut/FeedbackMatrix.h"
@@ -289,6 +290,13 @@ public:
     FxBus& fx() { return fxBus; }
     const FxBus& fx() const { return fxBus; }
     PerfFx& perf() { return perfFx; }
+    BreakChopper& breaks() { return chopper; }
+    const BreakChopper& breaks() const { return chopper; }
+    void setBreakStore (const BreakStore* st) { breakStore = st; }
+    void pullBreak (const WaveSample* w) { if (breakStore != nullptr) breakStore->pull (chopper.data(), breakSeen); chopper.setSample (w); }
+    BreakChopper::Settings breakSettings (const Snapshot& s) const;   // the chopper's settings from the parameters
+    std::atomic<double> breakPlayheadShown { -1.0 };
+    std::atomic<int> breakSliceShown { -1 };
     const PerfFx& perf() const { return perfFx; }
     const Granular& granular() const { return gran; }
     // DNA Sequencer: the step store, and its position (in steps) at the middle of the next render call
@@ -326,6 +334,11 @@ private:
     Voice voices[kMaxVoices];
     FxBus fxBus;
     PerfFx perfFx;               // Performance FX: after the effects rack, before the Master Filter
+    BreakChopper chopper;        // the Break Chopper: into the bus before the effects
+    const BreakStore* breakStore = nullptr;
+    uint32_t breakSeen = 0;
+    float breakGateL = 1.0f, breakGateR = 1.0f;
+    bool breakWasRunning = false;
     MasterFilter masterFilter;   // after every effect
     OutputTrim outTrim;          // the very last stage
     Granular gran;           // bus stages: summed voices -> granular / spectral -> effects

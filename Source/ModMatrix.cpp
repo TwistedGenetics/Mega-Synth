@@ -134,13 +134,14 @@ const NormTable& normTable()
             t.global[i] = m.category == Category::Fx || i == P_masterVolume || i == P_warmth || m.module == "Granular" || m.module == "Spectral" || m.module == "Feedback Matrix"
                           || m.module == "Master Filter" || i == P_outGain   // bus stages
                          || m.id.startsWith ("ds")    // the DNA Sequencer runs once for all voices
-                         || m.id.startsWith ("arp");  // ... and so does the arpeggiator
+                         || m.id.startsWith ("arp")   // ... and so does the arpeggiator
+                         || m.id.startsWith ("bs");   // ... and the Break Sequencer
             t.envTime[i] = m.category == Category::Env && m.unit == "s";
             t.modulatable[i] = m.modulatable;
             t.audioRate[i] = m.audioRate;
             const bool modAmt = m.id.startsWith ("mod") && m.id.endsWith ("Amt");
             t.scene[i] = (m.modulatable || m.scale == Scale::Choice) && m.category != Category::Seq && ! modAmt
-                         && ! m.id.startsWith ("macro") && ! m.id.startsWith ("pf") && i != P_sceneX && i != P_sceneY && i != P_masterVolume && i != P_outGain
+                         && ! m.id.startsWith ("macro") && ! m.id.startsWith ("pf") && ! m.id.startsWith ("bc") && i != P_sceneX && i != P_sceneY && i != P_masterVolume && i != P_outGain
                          && i != P_spSize && i != P_busOrder && i != P_capPoint && i != P_mutAmount && i != P_quality;   // these change the plugin's latency / structure
             t.discrete[i] = m.scale == Scale::Choice;
         }

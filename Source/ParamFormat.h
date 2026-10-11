@@ -46,6 +46,9 @@ inline juce::String formatParam (int idx, float v)
         if (id == "flpFeedback") { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
         if (id == "sttHaas") return v < 0.05f ? juce::String ("off") : fixed (v, 1) + " ms";
     }
+    // ---- sidechain
+    if (id == "schThresh") return fixed (v, 1) + " dB";
+    if (id == "schAttack" || id == "schRelease") return fixed (v, v < 10.0f ? 1 : 0) + " ms";
     // ---- chord memory / arpeggiator
     if (id == "arpOctaves" || id == "chdSpread") { const int n = juce::roundToInt (v); return id == "chdSpread" && n == 0 ? juce::String ("closed") : juce::String (n) + (n == 1 ? " oct" : " octs"); }
     if (id == "arpRepeats") return juce::String (juce::roundToInt (v)) + "x";
@@ -125,6 +128,7 @@ inline float parseParam (int idx, const juce::String& text)
     if ((id == "filterDrive" || id == "filter2Drive") && text.containsIgnoreCase ("db")) return std::pow (10.0f, v / 20.0f);
     if (text.containsIgnoreCase ("khz") || text.trim().endsWithIgnoreCase ("k")) return v * 1000.0f;
     if (text.contains ("%")) v /= 100.0f;
+    else if (id.startsWith ("sch")) {}   // sidechain attack / release are in ms already
     else if (text.contains ("ms") || ((id == "chorusDepth" || id == "tapeFlutter" || id == "reversePitch") && v > 0.5f)) v /= 1000.0f;
     return v;
 }

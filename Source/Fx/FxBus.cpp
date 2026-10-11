@@ -246,6 +246,7 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
     FxContext ctx;
     ctx.sr = sr; ctx.tempo = s.fxTempo; ctx.beat = s.fxBeat; ctx.beatInc = s.fxBeatInc; ctx.dnaGate = dnaGate;
     ctx.quality = s.i (P_quality);
+    ctx.scL = scL; ctx.scR = scR;
     const bool stutterHeld = s.f (P_rptTrigger) > 0.5f || stutterMidi;
 
     int pos = 0;

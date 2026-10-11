@@ -53,6 +53,19 @@ private:
     juce::String tip;
 };
 
+// The sidechain input's level, with the threshold marked
+class SidechainMeter : public juce::Component, private juce::Timer
+{
+public:
+    explicit SidechainMeter (MegaSynthProcessor& p) : proc (p) { startTimerHz (30); }
+    ~SidechainMeter() override { stopTimer(); }
+    void paint (juce::Graphics&) override;
+private:
+    void timerCallback() override { if (isShowing()) repaint(); }
+    MegaSynthProcessor& proc;
+    float shown = 0.0f;
+};
+
 class RackList : public juce::Component, private juce::Timer
 {
 public:

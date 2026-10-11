@@ -796,7 +796,12 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(arpVelFixed, "Arpeggiator Fixed Velocity", 0.05, 1, 0.8, 0.01, 0) \
     F(arpRepeats,  "Arpeggiator Repeats", 1, 4, 1, 1, 0) \
     C(arpRestart,  "Arpeggiator Restart", kListArpRestart, 0) \
-    F(arpSteps,    "Arpeggiator Pattern Steps", 1, 16, 16, 1, 0)
+    F(arpSteps,    "Arpeggiator Pattern Steps", 1, 16, 16, 1, 0) \
+    B(vshSidechain, "Volume Shaper Sidechain Trigger", false) \
+    B(mbcSidechain, "Multiband Sidechain", false) \
+    F(schThresh,   "Sidechain Threshold", -60, 0, -24, 0.1, 0) \
+    F(schAttack,   "Sidechain Attack", 0.1, 50, 1, 0.1, 5) \
+    F(schRelease,  "Sidechain Release", 10, 500, 80, 1, 80)
 
 enum ParamIndex
 {

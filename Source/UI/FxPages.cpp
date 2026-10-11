@@ -122,6 +122,28 @@ void StutterPad::paint (juce::Graphics& g)
 }
 
 //==============================================================================
+void SidechainMeter::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (col::panel2);
+    g.fillRoundedRectangle (r, 6.0f);
+    const float lv = proc.scMeter.load();
+    shown = std::max (lv, shown * 0.85f);
+    const float db = juce::jlimit (-60.0f, 0.0f, 20.0f * std::log10 (shown + 1.0e-6f));
+    auto bar = r.reduced (8.0f, 0.0f).withTrimmedTop (r.getHeight() - 24.0f).withHeight (12.0f);
+    g.setColour (col::panel3);
+    g.fillRoundedRectangle (bar, 3.0f);
+    g.setColour (col::fx);
+    g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * (db + 60.0f) / 60.0f), 3.0f);
+    const float thr = proc.param (P_schThresh)->convertFrom0to1 (proc.param (P_schThresh)->getValue());
+    g.setColour (col::text);
+    g.drawVerticalLine ((int) (bar.getX() + bar.getWidth() * (thr + 60.0f) / 60.0f), bar.getY() - 3.0f, bar.getBottom() + 3.0f);
+    g.setColour (col::muted);
+    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+    g.drawText (shown > 1.0e-5f ? "Sidechain in: " + juce::String (db, 1) + " dB" : juce::String ("No sidechain routed"), r.reduced (8.0f, 4.0f).withHeight (16.0f), juce::Justification::centredLeft);
+}
+
+//==============================================================================
 RackList::RackList (MegaSynthProcessor& p) : proc (p)
 {
     for (int s = 0; s < FS_COUNT; ++s)

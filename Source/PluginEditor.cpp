@@ -1745,6 +1745,7 @@ void MegaSynthEditor::buildPages()
         for (int b = 0; b < 3; ++b)
             for (auto [off, n] : { std::pair<int, const char*> { 0, "Up" }, { 1, "Down" }, { 2, "In" }, { 3, "Out" } })
                 mb->knob (P_mbcUpL + 4 * b + off, juce::String (bandName[b]) + " " + n);
+        toggle (mb, P_mbcSidechain, "Sidechain", 100)->setTooltip ("The downward compression listens to the sidechain input (a kick or break routed in from another track) instead of the synth");
         auto* metersC = keep (sub[1], new MultibandMeters (proc));
 
         // ---- MOTION
@@ -1784,6 +1785,12 @@ void MegaSynthEditor::buildPages()
             b->onClick = [this, k] { proc.fxRack.setCurvePreset (k); };
             vs->add (b, 76, 28);
         }
+        vs->newRow();
+        toggle (vs, P_vshSidechain, "Sidechain hits", 130)->setTooltip ("Each hit on the sidechain input (a kick routed in from another track) restarts the curve, instead of the Trigger");
+        vs->knob (P_schThresh, "Threshold");
+        vs->knob (P_schAttack, "Attack");
+        vs->knob (P_schRelease, "Release");
+        vs->add (new SidechainMeter (proc), 150, 60);
         auto* curve = keep (sub[2], new ShaperCurve (proc));
 
         // ---- RACK
@@ -1807,8 +1814,8 @@ void MegaSynthEditor::buildPages()
             metersC->setBounds (W - g - 220, 146, 220, 236);
             br->setBounds (g, 0, w2, 290);
             fl->setBounds (g * 2 + w2, 0, w2, 290);
-            vs->setBounds (g, 300, 560, 250);
-            curve->setBounds (g + 570, 300, W - 2 * g - 570, 250);
+            vs->setBounds (g, 296, 600, 258);
+            curve->setBounds (g + 610, 296, W - 2 * g - 610, 258);
             rack->setBounds (g, 4, W - 2 * g, H - 50);
         };
     }

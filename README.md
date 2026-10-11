@@ -125,6 +125,16 @@ Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (W
 
 The first tab shows the whole synth at a glance: the **signal flow** (each note's chain, then the bus, with the stages that are switched in lit up, cyan badges for Mod Matrix routes into each stage and red arcs for Feedback Matrix paths), the **genetic network** (every active route as a line from its source to its destination, pulsing with the source's live value), a **spectrum** of the output, and the **DNA strand**: 13 base pairs for the 13 genetic groups, glowing with how hard the current seed and Mutate amount push each one, grey when locked. All of it is drawn from values the audio already publishes; the only addition to the audio path is copying the output into the analyser's buffer.
 
+## Sidechain input
+
+Mega Synth has an optional stereo sidechain input, so a kick or break on another track can drive it. In Ableton Live (11 and later), open the device's sidechain section, or the routing chooser in its title bar, and pick the track. In Logic, use the plug-in window's Side Chain menu. With nothing routed, nothing changes, and the sidechain is never heard in the output.
+
+- **Volume Shaper > Sidechain hits**: each hit on the sidechain restarts the shaper's curve, instead of its Trigger. So the drawn pump follows your actual kick, even an off-grid one. **Threshold**, **Attack** and **Release** set what counts as a hit. The meter shows the sidechain level, with the threshold marked.
+- **Multiband > Sidechain**: the downward compression listens to the sidechain, split into the same three bands; the upward side still listens to the synth. Good for ducking a sub under a kick.
+- **Sidechain Envelope** is a Mod Matrix source.
+- In VST3 the input is declared as an aux (sidechain) bus, so hosts still treat Mega Synth as an instrument.
+- Old patches and projects load with both sidechain options off.
+
 ## LFOs tab
 
 Each of the four LFOs has, on top of Wave, Rate and Depth:

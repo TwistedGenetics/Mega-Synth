@@ -13,6 +13,8 @@ namespace tg
 class FxBus
 {
 public:
+    void setSidechain (const float* l, const float* r) { scL = l; scR = r; }   // for the next process call (null: none)
+
     void prepare (double sr, int maxBlock);
     void reset();
     // In-place: L/R hold the summed voices on input and the final mix on output.
@@ -78,6 +80,7 @@ private:
     juce::AudioBuffer<float> convBuf;
     std::atomic<double> irSeconds { 0.0 };
     bool convReady = false;
+    const float* scL = nullptr; const float* scR = nullptr;
 };
 
 } // namespace tg

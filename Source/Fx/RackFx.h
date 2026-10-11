@@ -21,6 +21,24 @@ struct FxContext
     double beatInc = 0.0;     // beats per sample
     float dnaGate = 0.0f;     // DNA Step Gate (Mod Matrix source)
     int quality = 1;          // 0 Eco, 1 Normal, 2 High
+    const float* scL = nullptr; const float* scR = nullptr;   // the sidechain input for this block (null: none routed)
+};
+
+// Sidechain envelope follower (peak, attack / release) with a hit detector: a hit is the envelope
+// crossing the threshold upwards; it re-arms 6 dB below the threshold.
+struct SidechainDetector
+{
+    float env = 0.0f; bool armed = true;
+    void reset() { env = 0.0f; armed = true; }
+    // returns true on a hit
+    inline bool tick (float l, float r, float att, float rel, float thr)
+    {
+        const float a = std::max (std::abs (l), std::abs (r));
+        env += (a - env) * (a > env ? att : rel);
+        if (armed && env > thr) { armed = false; return true; }
+        if (! armed && env < thr * 0.5f) armed = true;
+        return false;
+    }
 };
 
 //==============================================================================
@@ -139,8 +157,8 @@ public:
     std::atomic<float> meter[3] { 0, 0, 0 };   // net gain per band, dB (negative = compressing)
 private:
     double sr = 48000.0;
-    LR4 x1, x2;
-    float env[3] { 0, 0, 0 }, gainDb[3] { 0, 0, 0 };
+    LR4 x1, x2, sx1, sx2;              // sx: the sidechain's own band split
+    float env[3] { 0, 0, 0 }, gainDb[3] { 0, 0, 0 }, scEnv[3] { 0, 0, 0 };
     float shownDb[3] { 0, 0, 0 };
 };
 
@@ -208,11 +226,12 @@ private:
 class VolumeShaper
 {
 public:
-    void reset() { g = 1.0f; anchor = 0.0; prevGate = 0.0f; }
+    void reset() { g = 1.0f; anchor = 0.0; prevGate = 0.0f; sc.reset(); }
     void process (float* L, float* R, int n, const float* v, const FxContext&, const FxRackStore&);
     void noteOn (double beatNow) { pendingNote = true; noteBeat = beatNow; }
     std::atomic<float> phaseShown { 0.0f };
 private:
+    SidechainDetector sc;
     float g = 1.0f, prevGate = 0.0f;
     double anchor = 0.0;
     bool pendingNote = false; double noteBeat = 0.0;

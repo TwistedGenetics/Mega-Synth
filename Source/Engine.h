@@ -262,6 +262,7 @@ public:
     const float* preFx (int ch) const { return preFxBuf[ch].data(); }
     int activeVoiceCount() const;
     void setLfoShapes (const LfoShapeStore* st) { lfoShapes = st; }
+    void setSidechain (const float* l, const float* r) { fxBus.setSidechain (l, r); }   // for the next render call
     int polyFloor = 0;   // chord memory: a chord's notes always get their own voices, even in mono
     // Arpeggiator Swing / Gate as moved by the Mod Matrix last block (offsets; 0 when unmodulated)
     float arpModOffset (int which) const { return arpMod[juce::jlimit (0, 1, which)]; }

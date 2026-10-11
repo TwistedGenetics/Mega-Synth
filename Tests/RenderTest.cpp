@@ -1484,7 +1484,7 @@ int main()
             r->importBrowserPatch (juce::JSON::toString (obj));
             CHECK (r->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f && r->param (P_lfo1Custom + 2 * X)->getValue() < 0.5f, "old patches load with the original LFOs");
             // an old project: state version 6
-            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"8\"", "stateVersion=\"6\"");
+            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"9\"", "stateVersion=\"6\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (xml), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (o->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f, "old projects load with the original LFOs");
@@ -1705,7 +1705,7 @@ int main()
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->arpStore.toJson() == p->arpStore.toJson() && r->param (P_chdPreset)->getValue() == p->param (P_chdPreset)->getValue(), "arp and chord saved in patches");
             setP (*p, P_arpOn, 1.0f); juce::MemoryBlock mb2; p->getStateInformation (mb2);
-            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"8\"", "stateVersion=\"7\"");
+            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"9\"", "stateVersion=\"7\"");
             {   // a version 7 project has no arpeggiator data at all
                 const int a0 = x2.indexOf (" arp=\"");
                 if (a0 >= 0) { const int a1 = x2.indexOfChar (a0 + 6, '"'); x2 = x2.substring (0, a0) + x2.substring (a1 + 1); }
@@ -1721,6 +1721,125 @@ int main()
     {
         arpTests();
         std::cout << (failures == 0 ? "ARP TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
+    // ---- Sidechain input (state version 9)
+    auto scTests = [&]
+    {
+        std::cout << "Sidechain" << std::endl;
+        {
+            // every parameter's range is sound (a skew centre outside the range gives NaN)
+            auto p = make();
+            for (int i = 0; i < P_COUNT; ++i)
+            {
+                auto* prm = p->param (i);
+                const float d = prm->convertTo0to1 (meta (i).def);
+                CHECK (std::isfinite (d) && d >= -1e-6f && d <= 1.0f + 1e-6f && std::isfinite (prm->convertFrom0to1 (0.5f)), juce::String ("range of ") + meta (i).id);
+            }
+        }
+        {
+            auto p = std::make_unique<MegaSynthProcessor>();
+            CHECK (p->getBusCount (true) == 1 && p->getBus (true, 0)->getName() == "Sidechain" && ! p->getBus (true, 0)->isEnabledByDefault(), "an optional sidechain input, off by default");
+            juce::AudioProcessor::BusesLayout l; l.outputBuses.add (juce::AudioChannelSet::stereo());
+            l.inputBuses.add (juce::AudioChannelSet::disabled()); CHECK (p->checkBusesLayoutSupported (l), "no sidechain");
+            l.inputBuses.getReference (0) = juce::AudioChannelSet::stereo(); CHECK (p->checkBusesLayoutSupported (l), "stereo sidechain");
+            l.inputBuses.getReference (0) = juce::AudioChannelSet::mono(); CHECK (p->checkBusesLayoutSupported (l), "mono sidechain");
+            CHECK (p->getVST3ClientExtensions() != nullptr && ! p->getVST3ClientExtensions()->getPluginHasMainInput(), "VST3: the input is an aux (sidechain) bus");
+        }
+        // a processor with the sidechain switched on; kick-like hits on the input
+        auto makeSc = [&]
+        {
+            auto p = std::make_unique<MegaSynthProcessor>();
+            juce::AudioProcessor::BusesLayout l; l.outputBuses.add (juce::AudioChannelSet::stereo()); l.inputBuses.add (juce::AudioChannelSet::stereo());
+            p->setBusesLayout (l);
+            p->setRateAndBufferSizeDetails (sr, 512);
+            p->prepareToPlay (sr, 512);
+            return p;
+        };
+        auto runSc = [&] (MegaSynthProcessor& p, double secs, std::function<float (int)> scSig, std::vector<std::pair<double, juce::MidiMessage>> ev, std::vector<float>& outL)
+        {
+            juce::AudioBuffer<float> buf (2, 512);
+            const int total = (int) (secs * sr);
+            for (int pos = 0; pos < total; pos += 512)
+            {
+                for (int i = 0; i < 512; ++i) { const float x = scSig (pos + i); buf.setSample (0, i, x); buf.setSample (1, i, x); }
+                juce::MidiBuffer midi;
+                for (auto& e : ev) { const int at = (int) (e.first * sr); if (at >= pos && at < pos + 512) midi.addEvent (e.second, at - pos); }
+                p.processBlock (buf, midi);
+                for (int i = 0; i < 512; ++i) outL.push_back (buf.getSample (0, i));
+            }
+        };
+        // kicks every 0.37 s (deliberately off the beat grid)
+        auto kicks = [&] (int i) { const int per = (int) (0.37 * sr), k = i % per; return k < 2400 ? 0.9f * std::exp (-k / 600.0f) * (float) std::sin (k * 0.012) : 0.0f; };
+        {
+            auto p = makeSc(); std::vector<float> o;
+            runSc (*p, 0.75, kicks, {}, o);   // ends just after a kick
+            float pk = 0; for (float x : o) pk = std::max (pk, std::abs (x));
+            CHECK (pk < 1e-6f, "the sidechain is never heard in the output (" + juce::String (pk) + ")");
+            CHECK (p->scMeter.load() > 0.1f, "sidechain meter");
+        }
+        {
+            // Volume Shaper on sidechain hits: the dips follow the kicks, not the beat
+            auto p = makeSc();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix }) setP (*p, i, 0.0f);
+            setP (*p, P_fxOnShaper, 1.0f); setP (*p, P_vshSidechain, 1.0f); setP (*p, P_vshDepth, 1.0f); setP (*p, P_vshSmooth, 0.0f); setP (*p, P_vshRate, 0.0f);
+            std::vector<float> o;
+            runSc (*p, 2.0, kicks, { { 0.0, juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100) } }, o);
+            auto rmsAt = [&] (double t0, double t1) { double e = 0; int n = 0; for (int i = (int) (t0 * sr); i < (int) (t1 * sr); ++i) { e += o[(size_t) i] * o[(size_t) i]; ++n; } return std::sqrt (e / std::max (1, n)); };
+            double dip = 0, after = 0;
+            for (int k = 1; k < 5; ++k) { const double t = k * 0.37; dip += rmsAt (t + 0.005, t + 0.03); after += rmsAt (t + 0.2, t + 0.3); }
+            std::cout << "  shaper on sidechain hits: just after a kick " << juce::String (20 * std::log10 (dip / after + 1e-9), 1) << " dB vs later" << std::endl;
+            CHECK (dip < after * 0.3, "each sidechain hit ducks the synth");
+            auto q = makeSc();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix }) setP (*q, i, 0.0f);
+            setP (*q, P_fxOnShaper, 1.0f); setP (*q, P_vshSidechain, 1.0f); setP (*q, P_vshDepth, 1.0f); setP (*q, P_schThresh, -3.0f);   // above the kicks: no hits
+            std::vector<float> o2;
+            runSc (*q, 2.0, kicks, { { 0.0, juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100) } }, o2);
+            double d2 = 0; for (int k = 2; k < 5; ++k) { const double t = k * 0.37; double e = 0; for (int i = (int) ((t + 0.005) * sr); i < (int) ((t + 0.03) * sr); ++i) e += o2[(size_t) i] * o2[(size_t) i]; d2 += std::sqrt (e / (0.025 * sr)); }
+            CHECK (d2 / 3.0 > (dip / 4.0) * 2.5, "the threshold decides what counts as a hit");
+        }
+        {
+            // Multiband: the downward side listens to the sidechain
+            auto level = [&] (bool sc, bool kicking)
+            {
+                auto p = makeSc();
+                for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix }) setP (*p, i, 0.0f);
+                setP (*p, P_fxOnMultiband, 1.0f); setP (*p, P_mbcSidechain, sc ? 1.0f : 0.0f); setP (*p, P_mbcDepth, 1.0f);
+                for (int b = 0; b < 3; ++b) { setP (*p, P_mbcUpL + 4 * b, 0.0f); setP (*p, P_mbcDownL + 4 * b, 1.0f); }
+                setP (*p, P_masterVolume, 0.05f);   // the synth itself stays under the threshold
+                for (int i : { P_analogDrift, P_supersawGain, P_complexGain }) setP (*p, i, 0.0f);   // no random start phases
+                std::vector<float> o;
+                runSc (*p, 1.5, kicking ? std::function<float (int)> ([&] (int i) { return 0.9f * (float) std::sin (i * 0.02); }) : [] (int) { return 0.0f; },
+                       { { 0.0, juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100) } }, o);
+                double e = 0; for (size_t i = o.size() / 2; i < o.size(); ++i) e += o[i] * o[i];
+                return std::sqrt (e / (o.size() / 2));
+            };
+            const double quiet = level (true, false), loud = level (true, true), off = level (false, true);
+            std::cout << "  multiband sidechain: " << juce::String (20 * std::log10 (loud / quiet), 1) << " dB when the sidechain is loud" << std::endl;
+            CHECK (loud < quiet * 0.5 && std::abs (off / quiet - 1.0) < 0.05, "multiband sidechain ducks only when switched on");
+        }
+        {
+            // mod source, and old projects
+            auto p = makeSc();
+            RouteConfig c; c.on = true; c.src = MS_Sidechain; c.dst = P_filterRes; p->routes.set (0, c);
+            std::vector<float> o;
+            runSc (*p, 0.3, [] (int i) { return 0.5f * (float) std::sin (i * 0.02); }, { { 0.0, juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100) } }, o);
+            CHECK (p->getEngine().liveSrc[MS_Sidechain].load() > 0.3f, "Sidechain Envelope mod source");
+            setP (*p, P_vshSidechain, 1.0f); setP (*p, P_schThresh, -10.0f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"9\"", "stateVersion=\"8\"");
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
+            auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
+            CHECK (q->param (P_vshSidechain)->getValue() < 0.5f && std::abs (q->param (P_schThresh)->convertFrom0to1 (q->param (P_schThresh)->getValue()) + 24.0f) < 0.1f, "old projects: sidechain off");
+            auto r = make(); r->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (r->param (P_vshSidechain)->getValue() > 0.5f, "sidechain settings saved");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_SCONLY", {}).isNotEmpty())
+    {
+        scTests();
+        std::cout << (failures == 0 ? "SC TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
 
@@ -2281,9 +2400,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 8"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 9"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"8\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"9\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -3378,6 +3497,7 @@ int main()
     hardTests();
     lfoTests();
     arpTests();
+    scTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {

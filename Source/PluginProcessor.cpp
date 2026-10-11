@@ -37,7 +37,7 @@ namespace
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
-            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd");
+            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -130,7 +130,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout MegaSynthProcessor::createLa
 }
 
 MegaSynthProcessor::MegaSynthProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                                       .withInput ("Sidechain", juce::AudioChannelSet::stereo(), false)),   // off unless the host routes something in
       apvts (*this, nullptr, "MegaSynth", createLayout (*this))
 {
     for (int i = 0; i < P_COUNT; ++i)
@@ -164,7 +165,9 @@ MegaSynthProcessor::~MegaSynthProcessor()
 bool MegaSynthProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto out = layouts.getMainOutputChannelSet();
-    return out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono();
+    const auto in = layouts.getMainInputChannelSet();   // the sidechain (input bus 0)
+    return (out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono())
+        && (in.isDisabled() || in == juce::AudioChannelSet::stereo() || in == juce::AudioChannelSet::mono());
 }
 
 void MegaSynthProcessor::prepareToPlay (double sr, int block)
@@ -172,6 +175,7 @@ void MegaSynthProcessor::prepareToPlay (double sr, int block)
     sampleRate = sr;
     maxBlock = std::max (32, block);
     engine.prepare (sr, maxBlock);
+    scBuf.setSize (2, maxBlock, false, true, false);
     updateLatency();
     capRecording = false; capStopReq = false; capPos = 0;
     capBuf.setSize (2, (int) (kCaptureSeconds * sr) + 8, false, true, false);
@@ -473,6 +477,30 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
+    // the sidechain arrives in the same channels the synth writes to: take a copy first
+    bool scActive = false;
+    if (auto* inBus = getBus (true, 0); inBus != nullptr && inBus->isEnabled() && getTotalNumInputChannels() > 0 && n <= scBuf.getNumSamples())
+    {
+        auto in = getBusBuffer (buffer, true, 0);
+        if (in.getNumChannels() > 0)
+        {
+            scBuf.copyFrom (0, 0, in, 0, 0, n);
+            scBuf.copyFrom (1, 0, in, in.getNumChannels() > 1 ? 1 : 0, 0, n);
+            scActive = true;
+            const float rel = (float) std::exp (-1.0 / (0.08 * sampleRate));
+            float e = scEnvelope, pk = 0.0f;
+            for (int i = 0; i < n; ++i)
+            {
+                const float a = std::max (std::abs (scBuf.getSample (0, i)), std::abs (scBuf.getSample (1, i)));
+                e = a > e ? a : e * rel;
+                pk = std::max (pk, a);
+            }
+            scEnvelope = e;
+            scMeter.store (std::max (pk, scMeter.load() * 0.8f));
+        }
+    }
+    if (! scActive) { scEnvelope = 0.0f; scMeter.store (scMeter.load() * 0.8f); }
+    modInputs.sidechain = juce::jlimit (0.0f, 1.0f, scEnvelope);
     buffer.clear();
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
 
@@ -629,6 +657,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             engine.keepPreFx = capRecording.load (std::memory_order_relaxed) && snap.i (P_capPoint) == 0;
             engine.setDnaPosition (dsOn ? dnaClock.stepsAt (pos + 0.5 * len) : 0.0);
             snap.fxBeat = fxBeatStart + fxBeatInc * pos; snap.fxBeatInc = fxBeatInc;
+            engine.setSidechain (scActive ? scBuf.getReadPointer (0) + pos : nullptr, scActive ? scBuf.getReadPointer (1) + pos : nullptr);
             engine.render (L + pos, R + pos, len, snap, wavs);
             if (capRecording.load (std::memory_order_relaxed))
             {
@@ -892,6 +921,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 6) setFxDefaultsForOldPatch();
     if (version < 7) setLfoDefaultsForOldPatch();
     if (version < 8) setArpDefaultsForOldPatch();
+    if (version < 9) setSidechainDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1204,6 +1234,18 @@ void MegaSynthProcessor::resetPatchState()
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
+}
+
+void MegaSynthProcessor::setSidechainDefaultsForOldPatch()
+{
+    // Before the sidechain input: nothing listens to it
+    for (int i : { P_vshSidechain, P_mbcSidechain, P_schThresh, P_schAttack, P_schRelease })
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
 }
 
 void MegaSynthProcessor::setArpDefaultsForOldPatch()

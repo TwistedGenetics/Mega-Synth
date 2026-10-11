@@ -133,6 +133,8 @@ public:
     juce::String midiMapToString() const;
     void midiMapFromString (const juce::String&);
     std::atomic<int> uiWidth { 0 };
+    std::atomic<float> scMeter { 0.0f };     // sidechain input level (peak, for the editor)
+    juce::VST3ClientExtensions* getVST3ClientExtensions() override { return &vst3Ext; }
     std::atomic<int> curProgram { 0 }, pendingProgram { -1 };          // editor width the project was saved with (0 = default)
     // DNA Sequencer editing (message thread, undoable). lane 0/1; acts on the selected pattern.
     enum DnaEdit { DE_Generate, DE_SeedDown, DE_SeedUp, DE_Copy, DE_Paste, DE_ShiftLeft, DE_ShiftRight, DE_Reverse, DE_Clear };
@@ -153,7 +155,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 8;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory
+    static constexpr int kStateVersion = 9;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -180,7 +182,8 @@ private:
     void setDnaDefaultsForOldPatch();      // ... and from before the DNA Sequencer update
     void setFxDefaultsForOldPatch();
     void setLfoDefaultsForOldPatch();      // ... and from before LFO sync / custom shapes
-    void setArpDefaultsForOldPatch();      // ... and from before chord memory / the arpeggiator       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
+    void setArpDefaultsForOldPatch();      // ... and from before chord memory / the arpeggiator
+    void setSidechainDefaultsForOldPatch(); // ... and from before the sidechain input       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();
@@ -226,6 +229,10 @@ private:
     bool arpWasOn = false;
     uint32_t arpRng = 0x2545F491u;
     double fxBeatAtBlock = 0.0;
+    juce::AudioBuffer<float> scBuf;
+    float scEnvelope = 0.0f;
+    // VST3: the input bus is a sidechain (aux), not a main input, so hosts treat this as an instrument
+    struct Vst3Ext : juce::VST3ClientExtensions { bool getPluginHasMainInput() const override { return false; } } vst3Ext;
     std::array<std::atomic<int>, 128> ccMap;   // MIDI learn: controller -> parameter (-1 = none)
     std::atomic<int> learnParam { -1 };
     std::atomic<uint32_t> midiMapVersion { 0 };

@@ -16,6 +16,7 @@ void MultibandComp::prepare (double s) { sr = s; reset(); }
 void MultibandComp::reset()
 {
     x1.reset(); x2.reset(); x1.f = x2.f = -1;
+    sx1.reset(); sx2.reset(); sx1.f = sx2.f = -1; scEnv[0] = scEnv[1] = scEnv[2] = 0.0f;
     for (int b = 0; b < 3; ++b) { env[b] = 0.0f; gainDb[b] = 0.0f; shownDb[b] = 0.0f; meter[b].store (0.0f); }
 }
 
@@ -24,6 +25,8 @@ void MultibandComp::process (float* L, float* R, int n, const float* v, const Fx
     const float fLow = clampv (v[P_mbcXLow], 40.0f, 1000.0f);
     const float fHigh = clampv (std::max (v[P_mbcXHigh], fLow * 1.5f), 1000.0f, (float) std::min (12000.0, sr * 0.45));
     x1.set (fLow, sr); x2.set (fHigh, sr);
+    const bool useSc = v[P_mbcSidechain] > 0.5f && ctx.scL != nullptr;   // the downward side listens to the sidechain
+    if (useSc) { sx1.set (fLow, sr); sx2.set (fHigh, sr); }
     const float depth = clampv (v[P_mbcDepth], 0.0f, 1.0f);
     const double tscale = std::pow (2.0, (clampv (v[P_mbcTime], 0.0f, 1.0f) - 0.5) * 4.0);   // 0.25x .. 4x
     static const double baseA[3] = { 0.010, 0.005, 0.002 }, baseR[3] = { 0.15, 0.08, 0.05 };
@@ -55,13 +58,25 @@ void MultibandComp::process (float* L, float* R, int n, const float* v, const Fx
             const float a = std::max (std::abs (band[b][0]), std::abs (band[b][1]));
             env[b] += (a - env[b]) * (a > env[b] ? att[b] : rel[b]);
         }
+        if (useSc)
+        {
+            float sb[3] = { 0, 0, 0 };
+            const float sx[2] = { ctx.scL[i], ctx.scR[i] };
+            for (int c = 0; c < 2; ++c)
+            {
+                const float lo = sx1.process (sx[c], c), rest = sx[c] - lo, mid = sx2.process (rest, c);
+                sb[0] = std::max (sb[0], std::abs (lo * inG[0])); sb[1] = std::max (sb[1], std::abs (mid * inG[1])); sb[2] = std::max (sb[2], std::abs ((rest - mid) * inG[2]));
+            }
+            for (int b = 0; b < 3; ++b) scEnv[b] += (sb[b] - scEnv[b]) * (sb[b] > scEnv[b] ? att[b] : rel[b]);
+        }
         if (i % step == 0)
             for (int b = 0; b < 3; ++b)
             {
                 const float lv = 20.0f * std::log10 (env[b] + 1.0e-9f);
+                const float lvD = useSc ? 20.0f * std::log10 (scEnv[b] + 1.0e-9f) : lv;
                 float gd = 0.0f;
                 const float Td = -18.0f, Tu = -36.0f;
-                if (lv > Td) gd -= (lv - Td) * (1.0f - 1.0f / (1.0f + 19.0f * down[b]));                 // up to 20:1 above -18 dB
+                if (lvD > Td) gd -= (lvD - Td) * (1.0f - 1.0f / (1.0f + 19.0f * down[b]));                 // up to 20:1 above -18 dB
                 if (lv < Tu && lv > -80.0f)
                     gd += std::min (24.0f, (Tu - lv) * (1.0f - 1.0f / (1.0f + 3.0f * up[b]))) * clampv ((lv + 80.0f) / 10.0f, 0.0f, 1.0f);   // up to 4:1 below -36 dB
                 gainDb[b] = gd;
@@ -332,15 +347,21 @@ void VolumeShaper::process (float* L, float* R, int n, const float* v, const FxC
     const float depth = clampv (v[P_vshDepth], 0.0f, 1.0f);
     const float k = coefFor (0.0003 + clampv (v[P_vshSmooth], 0.0f, 1.0f) * 0.02, ctx.sr);
     const int trig = clampv ((int) std::lround (v[P_vshTrig]), 0, 2);
-    if (trig == 0) anchor = 0.0;
+    const bool scTrig = v[P_vshSidechain] > 0.5f;   // each sidechain hit restarts the curve (instead of the Trigger)
+    if (scTrig) {}
+    else if (trig == 0) anchor = 0.0;
     else if (trig == 1 && pendingNote) anchor = noteBeat;
     else if (trig == 2 && ctx.dnaGate > 0.6f && prevGate < 0.3f) anchor = ctx.beat;
     pendingNote = false;
     prevGate = ctx.dnaGate;
     double phase = 0.0;
+    const float scAtt = coefFor (clampv (v[P_schAttack], 0.1f, 50.0f) * 0.001, ctx.sr), scRel = coefFor (clampv (v[P_schRelease], 10.0f, 500.0f) * 0.001, ctx.sr);
+    const float scThr = dbToGain (clampv (v[P_schThresh], -60.0f, 0.0f));
     for (int i = 0; i < n; ++i)
     {
+        if (scTrig && ctx.scL != nullptr && sc.tick (ctx.scL[i], ctx.scR[i], scAtt, scRel, scThr)) anchor = ctx.beat + i * ctx.beatInc;
         phase = (ctx.beat + i * ctx.beatInc - anchor) / P;
+        if (scTrig) phase = std::min (phase, (FxRackStore::kCurve - 1.0) / FxRackStore::kCurve);   // after a hit: one pass of the curve, then hold its last point until the next hit
         const float target = 1.0f - depth * (1.0f - st.curveAt (phase));
         g += (target - g) * k;
         L[i] *= g; R[i] *= g;

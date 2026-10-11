@@ -24,11 +24,20 @@ namespace
         return false;
     }
 
+    // Parameters added with LFO sync and custom shapes (state version 7)
+    bool isLfoV2Param (const juce::String& id)
+    {
+        if (! id.startsWith ("lfo") || id.length() < 5 || ! juce::CharacterFunctions::isDigit (id[3])) return false;
+        const auto rest = id.substring (4);
+        for (auto* x : { "Sync", "Retrig", "Phase", "Mode", "Smooth", "Uni", "Fade", "Custom" }) if (rest == x) return true;
+        return false;
+    }
+
     bool isNewPluginParam (const juce::String& id)
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
-            || isFilterV2Param (id) || isFxV2Param (id);
+            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id);
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -135,6 +144,7 @@ MegaSynthProcessor::MegaSynthProcessor()
     engine.setModulation (&routes, &modInputs, &scenes);
     engine.setDnaSequencer (&dnaSteps);
     engine.fx().setRack (&fxRack);
+    engine.setLfoShapes (&lfoShapes);
     for (auto& c : ccMap) c.store (-1);
     normTable();
     addListener (this);
@@ -473,6 +483,17 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (dsOn && ! legacy) dsChunk = std::min (maxBlock, 64);
     }
 
+    // ---- bar and host-start positions for the LFOs' "Each bar" / "Host start" retrigger
+    {
+        const bool playing = hostPlaying && bpm > 0.0;
+        if (playing && ! hostWasPlayingLfo) hostStartBeat = ppq;
+        if (! playing) hostStartBeat = 0.0;
+        hostWasPlayingLfo = playing;
+        snap.fxHostStart = hostStartBeat;
+        snap.fxBarOrigin = playing && hasBar ? barStart : 0.0;
+        snap.fxBeatsPerBar = beatsPerBar > 0.0 ? beatsPerBar : 4.0;
+    }
+
     // ---- the effects' beat clock: the DAW's position while it plays, otherwise carrying on at the tempo
     {
         const double tempo = snap.fxTempo;
@@ -607,6 +628,8 @@ void MegaSynthProcessor::timerCallback()
         if (dv != lastDnaVersion) { lastDnaVersion = dv; snapshotPending = true; snapshotDelay = 0; }
         const auto fv = fxRack.getVersion();
         if (fv != lastRackVersion) { lastRackVersion = fv; snapshotPending = true; snapshotDelay = 0; }
+        const auto lv = lfoShapes.getVersion();
+        if (lv != lastLfoShapeVersion) { lastLfoShapeVersion = lv; snapshotPending = true; snapshotDelay = 0; }
         const auto rv = routes.getVersion();
         if (rv != lastRoutesVersion) { lastRoutesVersion = rv; snapshotPending = true; snapshotDelay = 0; }
         if (snapshotPending && ++snapshotDelay >= 6)
@@ -720,6 +743,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("dnaSeqSteps", dnaSteps.toString(), nullptr);   // pattern A lane 1, as older versions read it
     state.setProperty ("dnaSeq2", dnaSteps.toJson(), nullptr);         // everything
     state.setProperty ("fxRack", juce::JSON::toString (fxRack.toVar(), true), nullptr);
+    state.setProperty ("lfoShapes", lfoShapes.toJson(), nullptr);
     state.setProperty ("midiMap", midiMapToString(), nullptr);        // MIDI learn belongs to the project, not the patch
     state.setProperty ("uiWidth", uiWidth.load(), nullptr);
     state.setProperty ("program", curProgram.load(), nullptr);
@@ -757,7 +781,9 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 4) setFilter2DefaultsForOldPatch();
     if (version < 5) setDnaDefaultsForOldPatch();
     if (version < 6) setFxDefaultsForOldPatch();
+    if (version < 7) setLfoDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
+    lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     midiMapFromString (tree.getProperty ("midiMap").toString());
     if (tree.hasProperty ("uiWidth")) uiWidth.store ((int) tree.getProperty ("uiWidth"));
     pendingProgram.store (-1);   // a program change still waiting must not replace the restored state
@@ -837,6 +863,7 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
     root->setProperty ("dnaSequence", dnaSteps.toString());   // pattern A lane 1 (older versions)
     root->setProperty ("dnaSequencer", dnaSteps.toVar());     // everything
     root->setProperty ("fxRack", fxRack.toVar());
+    root->setProperty ("lfoShapes", lfoShapes.toVar());
     root->setProperty ("scenes", scenes.toVar());
     root->setProperty ("sceneEdit", getEditScene());
     root->setProperty ("capture", captureToVar());
@@ -959,7 +986,9 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (! dnaSteps.fromVar (patch["dnaSequencer"])) dnaSteps.fromString (patch["dnaSequence"].toString());
         if (extra == nullptr || ! extra->hasProperty ("dsSync")) setDnaDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("fxOnDelay")) setFxDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("lfo1Sync")) setLfoDefaultsForOldPatch();
         fxRack.fromVar (patch["fxRack"]);
+        lfoShapes.fromVar (patch["lfoShapes"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
         const juce::var names = patch["macroNames"];
@@ -1052,6 +1081,7 @@ void MegaSynthProcessor::resetPatchState()
     routes.clearAll();
     dnaSteps.fromString ({});
     fxRack.fromVar ({});
+    lfoShapes.fromVar ({});
     scenes.clear();
     sceneEditIndex = 0;
     for (int k = 0; k < 8; ++k) setMacroName (k, {});
@@ -1059,6 +1089,20 @@ void MegaSynthProcessor::resetPatchState()
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
+}
+
+void MegaSynthProcessor::setLfoDefaultsForOldPatch()
+{
+    // Before LFO sync and shapes: Hz rate, each note restarts the LFO, no phase / smoothing / fade, the waveform
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        if (! isLfoV2Param (kParamIds[i])) continue;
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
+    lfoShapes.fromVar ({});
 }
 
 void MegaSynthProcessor::setFxDefaultsForOldPatch()
@@ -1256,6 +1300,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
     s.routes = juce::JSON::toString (routes.toVar(), true);
     s.dnaSteps = dnaSteps.toJson();
     s.fxRack = juce::JSON::toString (fxRack.toVar(), true);
+    s.lfoShapes = lfoShapes.toJson();
     s.scenes = juce::JSON::toString (scenes.toVar(), true);
     s.sceneEdit = getEditScene();
     s.macroNames = macroNamesJoined();
@@ -1268,7 +1313,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
 
 bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
 {
-    return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.scenes == b.scenes && a.macroNames == b.macroNames
+    return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.lfoShapes == b.lfoShapes && a.scenes == b.scenes && a.macroNames == b.macroNames
         && a.sceneEdit == b.sceneEdit && a.patchName == b.patchName
         && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1]
         && a.params.isEquivalentTo (b.params);
@@ -1285,6 +1330,8 @@ void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
     lastDnaVersion = dnaSteps.getVersion();
     fxRack.fromVar (juce::JSON::parse (s.fxRack));
     lastRackVersion = fxRack.getVersion();
+    lfoShapes.fromVar (juce::JSON::parse (s.lfoShapes));
+    lastLfoShapeVersion = lfoShapes.getVersion();
     scenes.fromVar (juce::JSON::parse (s.scenes));
     lastScenesVersion = scenes.version.load();
     sceneEditIndex = s.sceneEdit;

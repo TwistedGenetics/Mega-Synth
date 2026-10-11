@@ -51,6 +51,7 @@ public:
     tg::RouteStore routes;
     tg::DnaSeqStore dnaSteps;                 // Sonic DNA Sequencer steps
     tg::FxRackStore fxRack;                   // effects rack order and the Volume Shaper curve
+    tg::LfoShapeStore lfoShapes;              // the four LFOs' custom shapes
     // Output tap for the spectrum display: the audio thread only copies samples in; the editor reads
     static constexpr int kScopeLen = 8192;
     float scope[kScopeLen] {};
@@ -147,7 +148,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 6;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack
+    static constexpr int kStateVersion = 7;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -172,7 +173,8 @@ private:
     void setFilterDefaultsForOldPatch();   // patches / projects from before the filter overhaul
     void setFilter2DefaultsForOldPatch();  // ... and from before Filter 2
     void setDnaDefaultsForOldPatch();      // ... and from before the DNA Sequencer update
-    void setFxDefaultsForOldPatch();       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
+    void setFxDefaultsForOldPatch();
+    void setLfoDefaultsForOldPatch();      // ... and from before LFO sync / custom shapes       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();
@@ -181,7 +183,7 @@ private:
     struct Snapshot
     {
         juce::ValueTree params;
-        juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps, fxRack;
+        juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps, fxRack, lfoShapes;
         int sceneEdit = 0;
         std::shared_ptr<const juce::MemoryBlock> wave[2];
         juce::String waveName[2];
@@ -209,7 +211,8 @@ private:
     std::atomic<int> learnParam { -1 };
     std::atomic<uint32_t> midiMapVersion { 0 };
     double fxBeatStart = 0.0, fxBeatInc = 0.0, fxBeatsInternal = 0.0;   // the effects' beat clock for this block
-    uint32_t lastRackVersion = 0;
+    uint32_t lastRackVersion = 0, lastLfoShapeVersion = 0;
+    double hostStartBeat = 0.0; bool hostWasPlayingLfo = false;
     bool dnaGateRouted() const;     // a Mod Matrix route uses the DNA step gate
     tg::GlobalModInputs modInputs;
     juce::AudioBuffer<float> capBuf;            // audio thread writes while recording

@@ -18,6 +18,9 @@ struct Snapshot
     double fxTempo = 130.0;   // tempo used for tempo-synced effects
     double fxBeat = 0.0;      // beat position (the DAW's while it plays, otherwise the synth's clock) at the render start
     double fxBeatInc = 0.0;   // beats per sample
+    double fxBarOrigin = 0.0; // a beat position where a bar starts (the DAW's bar while it plays, otherwise 0)
+    double fxBeatsPerBar = 4.0;
+    double fxHostStart = 0.0; // beat position where the DAW last started playing (0 when it isn't)
     float bendSemis = 0.0f;   // current pitch-bend in semitones
 
     inline float f (int p) const { return v[p]; }

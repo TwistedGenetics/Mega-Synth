@@ -102,6 +102,14 @@ inline const char* const kFilterRouteKeys[]   = { "serial","parallel" };
 inline const char* const kFilterRouteLabels[] = { "Serial (1 > 2)","Parallel (1 + 2)" };
 inline const char* const kFilterLfoKeys[]   = { "lfo1","lfo2","lfo3","lfo4" };
 inline const char* const kFilterLfoLabels[] = { "LFO 1","LFO 2","LFO 3","LFO 4" };
+// LFO sync (Off = the Rate knob in Hz), retrigger and mode
+inline const char* const kLfoSyncKeys[]   = { "off","1/32","1/16t","1/16","1/16d","1/8t","1/8","1/8d","1/4t","1/4","1/4d","1/2t","1/2","1/2d","1bar","2bar","4bar" };
+inline const char* const kLfoSyncLabels[] = { "Off (Hz)","1/32","1/16 Triplet","1/16","1/16 Dotted","1/8 Triplet","1/8","1/8 Dotted","1/4 Triplet","1/4","1/4 Dotted",
+                                              "1/2 Triplet","1/2","1/2 Dotted","1 Bar","2 Bars","4 Bars" };
+inline const char* const kLfoRetrigKeys[]   = { "note","free","bar","hoststart" };
+inline const char* const kLfoRetrigLabels[] = { "Each note","Free (shared)","Each bar","Host start" };
+inline const char* const kLfoModeKeys[]   = { "loop","oneshot" };
+inline const char* const kLfoModeLabels[] = { "Loop","One-shot" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -238,6 +246,12 @@ inline const ChoiceList kListDsGrid      { kDsGridKeys, kDsGridKeys, 2 };
 inline const ChoiceList kListDsDir       { kDsDirKeys, kDsDirLabels, 4 };
 inline const ChoiceList kListDsPattern   { kDsPatKeys, kDsPatKeys, 4 };
 inline const ChoiceList kListDsMidi      { kDsMidiKeys, kDsMidiLabels, 4 };
+inline const ChoiceList kListLfoSync     = TG_LIST(kLfoSync);
+inline const ChoiceList kListLfoRetrig   = TG_LIST(kLfoRetrig);
+inline const ChoiceList kListLfoMode     = TG_LIST(kLfoMode);
+
+// LFO extras (state version 7): 8 parameters per LFO, LFO k at P_lfo1Sync + kLfoXStride * k
+constexpr int kLfoXStride = 8;
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
@@ -718,7 +732,39 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(sttMono,   "Bass Mono", true) \
     F(sttMonoFreq, "Bass Mono Below", 50, 300, 120, 1, -1) \
     F(sttWidth,  "Stereo Width", 0, 2, 1, 0.01, 0) \
-    F(sttHaas,   "Haas Delay", 0, 30, 0, 0.1, 0)
+    F(sttHaas,   "Haas Delay", 0, 30, 0, 0.1, 0) \
+    C(lfo1Sync,   "LFO1 Sync", kListLfoSync, 0) \
+    C(lfo1Retrig, "LFO1 Retrigger", kListLfoRetrig, 0) \
+    F(lfo1Phase,  "LFO1 Phase", 0, 1, 0, 0.001, 0) \
+    C(lfo1Mode,   "LFO1 Mode", kListLfoMode, 0) \
+    F(lfo1Smooth, "LFO1 Smooth", 0, 1, 0, 0.01, 0) \
+    B(lfo1Uni,    "LFO1 Unipolar", false) \
+    F(lfo1Fade,   "LFO1 Fade In", 0, 10, 0, 0.01, 0.4) \
+    B(lfo1Custom, "LFO1 Custom Shape", false) \
+    C(lfo2Sync,   "LFO2 Sync", kListLfoSync, 0) \
+    C(lfo2Retrig, "LFO2 Retrigger", kListLfoRetrig, 0) \
+    F(lfo2Phase,  "LFO2 Phase", 0, 1, 0, 0.001, 0) \
+    C(lfo2Mode,   "LFO2 Mode", kListLfoMode, 0) \
+    F(lfo2Smooth, "LFO2 Smooth", 0, 1, 0, 0.01, 0) \
+    B(lfo2Uni,    "LFO2 Unipolar", false) \
+    F(lfo2Fade,   "LFO2 Fade In", 0, 10, 0, 0.01, 0.4) \
+    B(lfo2Custom, "LFO2 Custom Shape", false) \
+    C(lfo3Sync,   "LFO3 Sync", kListLfoSync, 0) \
+    C(lfo3Retrig, "LFO3 Retrigger", kListLfoRetrig, 0) \
+    F(lfo3Phase,  "LFO3 Phase", 0, 1, 0, 0.001, 0) \
+    C(lfo3Mode,   "LFO3 Mode", kListLfoMode, 0) \
+    F(lfo3Smooth, "LFO3 Smooth", 0, 1, 0, 0.01, 0) \
+    B(lfo3Uni,    "LFO3 Unipolar", false) \
+    F(lfo3Fade,   "LFO3 Fade In", 0, 10, 0, 0.01, 0.4) \
+    B(lfo3Custom, "LFO3 Custom Shape", false) \
+    C(lfo4Sync,   "LFO4 Sync", kListLfoSync, 0) \
+    C(lfo4Retrig, "LFO4 Retrigger", kListLfoRetrig, 0) \
+    F(lfo4Phase,  "LFO4 Phase", 0, 1, 0, 0.001, 0) \
+    C(lfo4Mode,   "LFO4 Mode", kListLfoMode, 0) \
+    F(lfo4Smooth, "LFO4 Smooth", 0, 1, 0, 0.01, 0) \
+    B(lfo4Uni,    "LFO4 Unipolar", false) \
+    F(lfo4Fade,   "LFO4 Fade In", 0, 10, 0, 0.01, 0.4) \
+    B(lfo4Custom, "LFO4 Custom Shape", false)
 
 enum ParamIndex
 {

@@ -92,6 +92,14 @@ static std::vector<std::pair<double, juce::MidiMessage>> chord (double on, doubl
     return ev;
 }
 
+static bool isLfoV2ParamForTest (const juce::String& id)
+{
+    if (! id.startsWith ("lfo") || id.length() < 5 || ! juce::CharacterFunctions::isDigit (id[3])) return false;
+    const auto rest = id.substring (4);
+    for (auto* x : { "Sync", "Retrig", "Phase", "Mode", "Smooth", "Uni", "Fade", "Custom" }) if (rest == x) return true;
+    return false;
+}
+
 static int tabByName (juce::TabbedComponent* t, const juce::String& name)
 {
     if (t != nullptr) for (int i = 0; i < t->getNumTabs(); ++i) if (t->getTabNames()[i].equalsIgnoreCase (name)) return i;
@@ -593,6 +601,29 @@ int main()
             std::cout << list[(size_t) idx].name << ": peak " << out.getMagnitude (0, total) << std::endl;
             writeWav (out, sr, "demo_" + juce::String (list[(size_t) idx].name).replaceCharacter (' ', '_') + ".wav");
         }
+        return 0;
+    }
+
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_LFOSHOT", {}).isNotEmpty())
+    {
+        auto p = make();
+        p->lfoShapes.setPreset (1, LfoShapeStore::PR_Wub); setP (*p, P_lfo1Custom + kLfoXStride, 1);
+        setP (*p, P_lfo1Sync + kLfoXStride, 9); setP (*p, P_lfo1Retrig + 2 * kLfoXStride, 2);
+        p->lfoShapes.setPreset (3, LfoShapeStore::PR_Stairs); setP (*p, P_lfo1Custom + 3 * kLfoXStride, 1);
+        render (*p, 0.3, chord (0.0, 1.0, { 48 }));
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+        ed->setSize (1200, 860);
+        std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
+        {
+            if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
+            for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
+            return nullptr;
+        };
+        if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (tabByName (tabs, "LFOs"));
+        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+        auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+        auto f = dir.getChildFile ("lfo_ui.png"); f.deleteFile();
+        juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
         return 0;
     }
 
@@ -1284,6 +1315,182 @@ int main()
             CHECK (t->fxRack.getOrder() != moved, "rack moves are undoable");
         }
     };
+    // ---- LFO sync, retrigger, one-shot, shapes (state version 7)
+    auto lfoTests = [&]
+    {
+        std::cout << "LFOs" << std::endl;
+        struct FakeHead : juce::AudioPlayHead
+        {
+            PositionInfo info;
+            juce::Optional<PositionInfo> getPosition() const override { return info; }
+        };
+        const int X = kLfoXStride;
+        auto routeProbe = [] (MegaSynthProcessor& p, int src)   // a route so the voice computes its sources (depth 0: no effect)
+        {
+            RouteConfig c; c.on = true; c.src = src; c.dst = P_filterRes; p.routes.set (0, c); setP (p, P_mod1Amt, 0.0f);
+        };
+        // phases follow the song position, whatever the tempo and wherever play is pressed
+        for (double bpm : { 90.0, 140.0, 174.0 })
+        {
+            for (int retrig : { 1, 2, 3 })   // free (song position), each bar, host start
+            {
+                FakeHead head;
+                auto p = std::make_unique<MegaSynthProcessor>();
+                p->setPlayConfigDetails (0, 2, sr, 64); p->prepareToPlay (sr, 64);
+                p->setPlayHead (&head);
+                const int syncIdx = retrig == 2 ? 14 : 5;   // 1 bar / 1/8 triplet
+                const double cyc = retrig == 2 ? 4.0 : 1.0 / 3.0;
+                setP (*p, P_lfo1Sync, (float) syncIdx); setP (*p, P_lfo1Retrig, (float) retrig); setP (*p, P_lfo1Phase, 0.125f);
+                const double start = 5.37, inc = bpm / 60.0 / sr;
+                double ppq = start, worst = 0.0;
+                juce::AudioBuffer<float> buf (2, 64);
+                for (int b = 0; b < 600; ++b)
+                {
+                    head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+                    head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+                    head.info.setTimeSignature (juce::AudioPlayHead::TimeSignature { 4, 4 });
+                    juce::MidiBuffer midi; if (b == 3) midi.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100), 10);
+                    buf.clear(); p->processBlock (buf, midi);
+                    if (b > 4)
+                    {
+                        const double at = ppq + 48 * inc;   // the last 16-sample control step of the block
+                        double origin = 0.0;
+                        if (retrig == 2) origin = std::floor (at / 4.0) * 4.0;
+                        if (retrig == 3) origin = start;
+                        double want = (at - origin) / cyc + 0.125; want -= std::floor (want);
+                        double d = std::abs (p->getEngine().lfoPlayhead[0].load() - want); d = std::min (d, 1.0 - d);
+                        worst = std::max (worst, d);
+                    }
+                    ppq += 64 * inc;
+                }
+                CHECK (worst < 1e-4, "LFO locked to the DAW (" + juce::String (bpm) + " BPM, retrigger " + juce::String (retrig) + "): worst phase error " + juce::String (worst));
+            }
+        }
+        // synced, each note: one cycle per 1/4 at the synth's own tempo when the DAW isn't playing
+        {
+            auto p = make();
+            setP (*p, P_lfo1Sync, 9.0f); setP (*p, P_seqTempo, 120.0f);
+            render (*p, 0.002, chord (0.0, 2.0, { 48 }));
+            double last = p->getEngine().lfoPlayhead[0].load(); int wraps = 0;
+            juce::AudioBuffer<float> buf (2, 512);
+            for (int b = 0; b < (int) (2.2 * sr / 512); ++b)   // 2.2 s: 4 full cycles
+            {
+                buf.clear(); juce::MidiBuffer m; p->processBlock (buf, m);
+                const double ph = p->getEngine().lfoPlayhead[0].load();
+                if (ph < last) ++wraps;
+                last = ph;
+            }
+            CHECK (wraps == 4, "1/4 at 120 BPM: 2 cycles a second (" + juce::String (wraps) + " wraps in 2.2 s)");
+        }
+        // Phase knob and one-shot (each note)
+        {
+            auto p = make();
+            setP (*p, P_lfo1Phase, 0.25f); setP (*p, P_lfo1Mode, 1.0f); setP (*p, P_lfo1Rate, 4.0f);
+            render (*p, 0.0004, chord (0.0, 2.0, { 48 }));
+            CHECK (std::abs (p->getEngine().lfoPlayhead[0].load() - 0.25f) < 0.01f, "Phase sets where each note starts");
+            render (*p, 0.5, {});
+            CHECK (p->getEngine().lfoPlayhead[0].load() > 0.9999f, "one-shot holds at the end");
+        }
+        // Free (Hz): one phase for every note
+        {
+            auto a = make(), b = make();
+            setP (*a, P_lfo1Retrig, 1.0f); setP (*b, P_lfo1Retrig, 1.0f);
+            render (*a, 0.3, chord (0.0, 2.0, { 48 })); render (*a, 0.2, {});
+            render (*b, 0.3, {}); render (*b, 0.2, chord (0.0, 2.0, { 55 }));
+            CHECK (std::abs (a->getEngine().lfoPlayhead[0].load() - b->getEngine().lfoPlayhead[0].load()) < 1e-4f, "Free LFO doesn't restart with notes");
+        }
+        // custom shapes: the table matches the drawn curve; steps hold; presets
+        {
+            LfoShapeStore st;
+            std::vector<LfoShapeStore::Point> pts { { 0.0f, 0.0f }, { 0.5f, 1.0f, LfoShapeStore::CV_Smooth }, { 0.75f, 0.2f, LfoShapeStore::CV_Step } };
+            st.setPoints (0, pts);
+            double worst = 0;
+            for (int i = 0; i < 2000; ++i) { const double x = (i + 0.37) / 2000.0; worst = std::max (worst, (double) std::abs (st.eval (0, x) - LfoShapeStore::shapeAt (pts, x))); }
+            CHECK (worst < 0.01, "custom shape table matches the curve (" + juce::String (worst) + ")");
+            CHECK (std::abs (st.eval (0, 0.8) - 0.2f) < 1e-6f && std::abs (st.eval (0, 0.99) - 0.2f) < 1e-6f, "stepped segment holds");
+            CHECK (std::abs (st.eval (0, 0.25) - 0.5f) < 0.01f && std::abs (st.eval (0, 0.625) - 0.6f) < 0.02f, "linear / smooth segments");
+            st.setPreset (1, LfoShapeStore::PR_SawDown);
+            CHECK (std::abs (st.eval (1, 0.25) - 0.75f) < 0.01f, "saw down preset");
+            st.setPreset (1, LfoShapeStore::PR_Square);
+            CHECK (st.eval (1, 0.2) > 0.99f && st.eval (1, 0.7) < 0.01f, "square preset");
+            pts[0].bend = 0.8f; st.setPoints (2, pts);
+            CHECK (st.eval (2, 0.1) > 0.3f, "bend bows a segment");
+            LfoShapeStore u; u.fromVar (st.toVar());
+            CHECK (std::abs (u.eval (0, 0.6) - st.eval (0, 0.6)) < 1e-6f && u.getPoints (0).size() == 3, "shapes save and load");
+        }
+        // in the synth: custom, unipolar, smoothing and fade change what LFO 1 sends
+        {
+            auto run = [&] (std::function<void (MegaSynthProcessor&)> setup)
+            {
+                auto p = make(); routeProbe (*p, MS_Lfo1); setP (*p, P_lfo1Depth, 1.0f); setP (*p, P_lfo1Rate, 5.0f); setP (*p, P_lfo1Wave, 3.0f);
+                setup (*p);
+                std::vector<float> v;
+                render (*p, 0.0004, chord (0.0, 2.0, { 48 }));
+                juce::AudioBuffer<float> buf (2, 64);
+                for (int b = 0; b < (int) (1.0 * sr / 64); ++b) { buf.clear(); juce::MidiBuffer m; p->processBlock (buf, m); v.push_back (p->getEngine().liveSrc[MS_Lfo1].load()); }
+                return v;
+            };
+            auto lo = [] (const std::vector<float>& v) { return *std::min_element (v.begin(), v.end()); };
+            auto maxJump = [] (const std::vector<float>& v) { float m = 0; for (size_t i = 1; i < v.size(); ++i) m = std::max (m, std::abs (v[i] - v[i - 1])); return m; };
+            const auto plain = run ([] (MegaSynthProcessor&) {});
+            CHECK (lo (plain) < -0.99f && maxJump (plain) > 1.9f, "square LFO swings -1..1");
+            const auto uni = run ([] (MegaSynthProcessor& p) { setP (p, P_lfo1Uni, 1.0f); });
+            CHECK (lo (uni) > -1e-6f, "unipolar stays 0..1");
+            const auto sm = run ([] (MegaSynthProcessor& p) { setP (p, P_lfo1Smooth, 0.6f); });
+            CHECK (maxJump (sm) < 0.6f, "smoothing slews the square (" + juce::String (maxJump (sm)) + ")");
+            const auto fd = run ([] (MegaSynthProcessor& p) { setP (p, P_lfo1Fade, 0.5f); });
+            float early = 0; for (int i = 0; i < 40; ++i) early = std::max (early, std::abs (fd[(size_t) i]));
+            float late = 0; for (size_t i = 600; i < fd.size(); ++i) late = std::max (late, std::abs (fd[i]));
+            CHECK (early < 0.4f && late > 0.99f, "fade in");
+            const auto cu = run ([] (MegaSynthProcessor& p) { p.lfoShapes.setPreset (0, LfoShapeStore::PR_Stairs); setP (p, P_lfo1Custom, 1.0f); });
+            std::set<int> lv; for (float x : cu) lv.insert (juce::roundToInt ((x + 1.0f) * 3.5f));
+            CHECK (lv.size() >= 7 && lv.size() <= 9, "custom stairs: 8 levels (" + juce::String ((int) lv.size()) + ")");
+            // also drives the legacy assignment slots and the filter's LFO amount
+            auto p = make(); setP (*p, P_filterLfoAmt, 0.5f); setP (*p, P_lfo1Uni, 1.0f); setP (*p, P_lfo1Depth, 1.0f);
+            auto q = make(); setP (*q, P_filterLfoAmt, 0.5f); setP (*q, P_lfo1Depth, 1.0f);
+            juce::AudioBuffer<float> c1, c2;
+            for (auto* x : { p.get(), q.get() }) { setP (*x, P_analogDrift, 0.0f); setP (*x, P_supersawGain, 0.0f); setP (*x, P_complexGain, 0.0f); }
+            render (*p, 0.5, chord (0.0, 0.5, { 48 }), &c1); render (*q, 0.5, chord (0.0, 0.5, { 48 }), &c2);
+            double diff = 0; for (int i = 0; i < c1.getNumSamples(); ++i) diff = std::max (diff, (double) std::abs (c1.getSample (0, i) - c2.getSample (0, i)));
+            CHECK (diff > 1e-3, "the filter's LFO follows the new options");
+        }
+        // saved with projects and patches; undo; old patches and projects get the original behaviour
+        {
+            auto p = make();
+            setP (*p, P_lfo1Sync + 2 * X, 6.0f); setP (*p, P_lfo1Custom + 2 * X, 1.0f);
+            p->lfoShapes.setPreset (2, LfoShapeStore::PR_Wub);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (juce::roundToInt (q->param (P_lfo1Sync + 2 * X)->convertFrom0to1 (q->param (P_lfo1Sync + 2 * X)->getValue())) == 6
+                   && q->lfoShapes.toJson() == p->lfoShapes.toJson(), "LFO settings and shapes saved with the project");
+            const auto patch = p->exportBrowserPatch();
+            auto r = make(); r->importBrowserPatch (patch);
+            CHECK (r->lfoShapes.toJson() == p->lfoShapes.toJson() && r->param (P_lfo1Custom + 2 * X)->getValue() > 0.5f, "LFO shapes saved in patches");
+            // a patch from before (no LFO extras): back to the original LFOs
+            auto obj = juce::JSON::parse (patch);
+            if (auto* ex = obj["plugin"].getDynamicObject()) for (auto& prop : juce::NamedValueSet (ex->getProperties())) if (isLfoV2ParamForTest (prop.name.toString())) ex->removeProperty (prop.name);
+            if (auto* o = obj.getDynamicObject()) o->removeProperty ("lfoShapes");
+            r->importBrowserPatch (juce::JSON::toString (obj));
+            CHECK (r->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f && r->param (P_lfo1Custom + 2 * X)->getValue() < 0.5f, "old patches load with the original LFOs");
+            // an old project: state version 6
+            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"7\"", "stateVersion=\"6\"");
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (xml), old);
+            auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
+            CHECK (o->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f, "old projects load with the original LFOs");
+            // undo
+            p->pushHistory ("x");
+            p->lfoShapes.setPreset (2, LfoShapeStore::PR_Stairs); p->pushHistory ("shape");
+            p->undo();
+            CHECK (p->lfoShapes.getPoints (2).size() == 4, "shape edits are undoable");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_LFOONLY", {}).isNotEmpty())
+    {
+        lfoTests();
+        std::cout << (failures == 0 ? "LFO TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
     // ---- Playability: MIDI learn, A/B compare, patch browser catalogue, window size memory
     auto playTests = [&]
     {
@@ -1841,9 +2048,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 6"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 7"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"6\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"7\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -2936,6 +3143,7 @@ int main()
     fxTests();
     playTests();
     hardTests();
+    lfoTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {

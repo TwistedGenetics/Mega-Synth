@@ -2,6 +2,7 @@
 #include "UI/FilterPanel.h"
 #include "UI/DnaSeqPage.h"
 #include "UI/FxPages.h"
+#include "UI/LfoPage.h"
 #include "ParamFormat.h"
 #include "Registry.h"
 #include "UI/Overview.h"
@@ -1854,6 +1855,19 @@ void MegaSynthEditor::buildPages()
             }
             mw->setBounds (g + 4, 450, W - 2 * g, 16);
             ci->setBounds (g, 470, W - 2 * g, 126);
+        };
+    }
+
+    // ---------------------------------------------------------------- LFOs (sync, retrigger, shapes)
+    {
+        auto* page = addPage ("LFOs");
+        LfoPanel* lp[4];
+        for (int k = 0; k < 4; ++k) lp[k] = page->own (new LfoPanel (proc, k, col::mod));
+        page->onResize = [page, lp]
+        {
+            const int g = 8, W = page->getWidth(), H = page->getHeight();
+            const int h = (H - 5 * g) / 4;
+            for (int k = 0; k < 4; ++k) lp[k]->setBounds (g, g + k * (h + g), W - 2 * g, h);
         };
     }
 

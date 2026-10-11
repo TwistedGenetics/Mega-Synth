@@ -94,7 +94,13 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     inst.seed (rng ^ 0xA5A5A5A5u);
     envF = audF = trFast = trSlow = 0.0f;
     for (auto& a : aPrev) a = 0.0f;
-    for (int i = 0; i < 4; ++i) { lfoPh[i] = 0.0; lfoDepthNow[i] = s.f (P_lfo1Depth + 3 * i); }
+    for (int i = 0; i < 4; ++i)
+    {
+        lfoPh[i] = 0.0; lfoDepthNow[i] = s.f (P_lfo1Depth + 3 * i);
+        lfoElapsed[i] = 0.0; lfoSmInit[i] = false;
+        const int xb = P_lfo1Sync + kLfoXStride * i;
+        lfoXMod[i][0] = s.f (xb + 2); lfoXMod[i][1] = s.f (xb + 4); lfoXMod[i][2] = s.f (xb + 6);
+    }
     rstate.reset();
     lastDt = 0.0f;
     waveMut.reset();
@@ -149,6 +155,7 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
 
     // Initialise every smoother at its target. Oscillators start at the glide-from pitch.
     baseFreq = glideFrom;
+    updateLfoOut (s, 0, mc);
     ModState m;
     computeMod (s, m);
     updateControl (s, nullptr, m, true);
@@ -176,7 +183,8 @@ void Voice::computeMod (const Snapshot& s, ModState& mod) const
         const int src = clampv (s.i (P_lfoAssignSource0 + 3 * k), 0, 2);
         const int wave = s.i (P_lfo1Wave + 3 * src);
         const float depth = s.f (P_lfo1Depth + 3 * src);
-        const float raw = lfoShape (wave, lfoPh[src]);   // phase advances at the (possibly modulated) rate
+        const float raw = lfoOut[src];   // phase advances at the (possibly modulated) rate
+        juce::ignoreUnused (wave);
         mod.m[tgt] += raw * depth * s.f (P_lfoAssignAmt0 + 3 * k) * kTargetRange[tgt];
     }
     for (int k = 0; k < 3; ++k)
@@ -193,7 +201,7 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
 {
     float* v = srcV;
     for (int k = 0; k < 4; ++k)
-        v[MS_Lfo1 + k] = lfoShape (clampv (s.i (P_lfo1Wave + 3 * k), 0, 3), lfoPh[k]) * lfoDepthNow[k];
+        v[MS_Lfo1 + k] = lfoOut[k] * lfoDepthNow[k];
     v[MS_AmpEnv]    = (float) ampEnv.eval (t);
     v[MS_FilterEnv] = (float) filtEnv.eval (t);
     for (int e = 0; e < 3; ++e) v[MS_ModEnv1 + e] = (float) modEnv[e].eval (t);
@@ -283,13 +291,90 @@ void Voice::applyInstability (Snapshot& sn, bool noteOn) const
     }
 }
 
+// Cycle length in beats of an LFO Sync choice (0 = off)
+static double lfoSyncBeats (int idx)
+{
+    if (idx <= 0 || idx >= kListLfoSync.size) return 0.0;
+    return syncBeats (kListLfoSync.keys[idx]);
+}
+
 void Voice::advanceLfos (const Snapshot& s, int n)
 {
     const double secs = n / sr;
     for (int k = 0; k < 4; ++k)
     {
-        lfoPh[k] = wrap01 (lfoPh[k] + s.f (P_lfo1Rate + 3 * k) * secs);
+        const int xb = P_lfo1Sync + kLfoXStride * k;
+        const double cyc = lfoSyncBeats (s.i (xb));
+        if (cyc > 0.0)
+        {
+            const double hz = s.fxBeatInc * sr / cyc;   // cycles per second at the current tempo
+            lfoPh[k] = wrap01 (lfoPh[k] + hz * secs);
+            lfoElapsed[k] += hz * secs;
+        }
+        else
+        {
+            lfoPh[k] = wrap01 (lfoPh[k] + s.f (P_lfo1Rate + 3 * k) * secs);
+            lfoElapsed[k] += s.f (P_lfo1Rate + 3 * k) * secs;
+        }
         lfoDepthNow[k] = s.f (P_lfo1Depth + 3 * k);
+        lfoXMod[k][0] = s.f (xb + 2); lfoXMod[k][1] = s.f (xb + 4); lfoXMod[k][2] = s.f (xb + 6);
+    }
+}
+
+void Voice::updateLfoOut (const Snapshot& s, int offset, const ModContext& mc)
+{
+    const double beat = s.fxBeat + s.fxBeatInc * offset;
+    const double secPerBeat = s.fxBeatInc > 0.0 ? 1.0 / (s.fxBeatInc * sr) : 0.5;
+    for (int k = 0; k < 4; ++k)
+    {
+        const int xb = P_lfo1Sync + kLfoXStride * k;
+        const double cyc = lfoSyncBeats (s.i (xb));
+        const int retrig = s.i (xb + 1);
+        const bool oneShot = s.i (xb + 3) == 1;
+        const double phOff = (double) clampv (lfoXMod[k][0], 0.0f, 1.0f);
+        double ph;
+        if (retrig == 0 || (retrig == 1 && cyc <= 0.0 && mc.lfoFree == nullptr))
+        {
+            // each note: the voice's own phase (the original behaviour)
+            ph = oneShot ? std::min (phOff + lfoElapsed[k], 0.9999999) : wrap01 (lfoPh[k] + phOff);
+        }
+        else if (retrig == 1)
+        {
+            // free: one phase shared by every voice (locked to the song position when synced)
+            ph = cyc > 0.0 ? wrap01 (beat / cyc + phOff)
+                           : wrap01 (mc.lfoFree[k] + s.f (P_lfo1Rate + 3 * k) * offset / sr + phOff);
+        }
+        else
+        {
+            // each bar / host start: cycles since that point
+            double origin;
+            if (retrig == 2)
+            {
+                const double bpb = s.fxBeatsPerBar > 0.0 ? s.fxBeatsPerBar : 4.0;
+                origin = s.fxBarOrigin + std::floor ((beat - s.fxBarOrigin) / bpb) * bpb;
+            }
+            else origin = s.fxHostStart;
+            const double beatsIn = std::max (0.0, beat - origin);
+            const double el = cyc > 0.0 ? beatsIn / cyc : beatsIn * secPerBeat * s.f (P_lfo1Rate + 3 * k);
+            ph = oneShot ? std::min (phOff + el, 0.9999999) : wrap01 (el + phOff);
+        }
+        lfoPhNow[k] = ph;
+        float raw;
+        if (s.v[xb + 7] > 0.5f && mc.lfoShapes != nullptr) raw = 2.0f * mc.lfoShapes->eval (k, ph) - 1.0f;
+        else raw = lfoShape (clampv (s.i (P_lfo1Wave + 3 * k), 0, 3), ph);
+        if (s.v[xb + 5] > 0.5f) raw = 0.5f + 0.5f * raw;                     // unipolar
+        const float fade = lfoXMod[k][2];
+        if (fade > 1.0e-4f && t < fade) raw *= (float) (t / fade);          // fade in after the note starts
+        const float sm = clampv (lfoXMod[k][1], 0.0f, 1.0f);
+        if (sm > 1.0e-4f && lfoSmInit[k])
+        {
+            const double tc = 0.001 + 0.5 * sm * sm;                         // up to half a second of slew
+            lfoSm[k] += (raw - lfoSm[k]) * (float) (1.0 - std::exp (-(double) kCtrl / (sr * tc)));
+            raw = lfoSm[k];
+        }
+        else lfoSm[k] = raw;
+        lfoSmInit[k] = true;
+        lfoOut[k] = raw;
     }
 }
 
@@ -428,7 +513,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
         if (la != 0.0f)
         {
             const int src = clampv (s.i (pLfoSrc), 0, 3);
-            octs += la * 4.0 * lfoShape (clampv (s.i (P_lfo1Wave + 3 * src), 0, 3), lfoPh[src]) * lfoDepthNow[src];   // 100% = +-4 octaves
+            octs += la * 4.0 * lfoOut[src] * lfoDepthNow[src];   // 100% = +-4 octaves
         }
         return octs;
     };
@@ -577,6 +662,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         // ---- modulation matrix: sources, then a per-voice copy of the parameters with the
         // routes applied. Everything below reads that copy, so every registered parameter is
         // a destination without the oscillators, filter or effects knowing about the matrix.
+        updateLfoOut (s, done, mc);
         const Snapshot* sp = &s;
         const bool ciOn = s.v[P_ciAmount] > 1.0e-4f;
         if (ciOn || routed) inst.advance (lastDt, s.v[P_ciRate]);
@@ -1065,6 +1151,7 @@ void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const S
 
     const double glide = (s.f (P_porta) > 0.0005f && lastFreq > 0) ? lastFreq : freq;
     ModContext mc;
+    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh;
     if (routeStore != nullptr)
     {
         routeSet.build (*routeStore);
@@ -1158,6 +1245,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     for (auto& v : voices) if (v.active && (! newest || v.order > newest->order)) newest = &v;
 
     ModContext mc;
+    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh;
     if (routeStore != nullptr)
     {
         routeSet.build (*routeStore);
@@ -1171,6 +1259,12 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     for (auto& v : voices)
         if (v.active)
             v.render (L, R, numSamples, s, wavs, &v == newest ? globalMod : scratch, mc, &v == newest ? liveScratch : nullptr);
+    // the shared "Free" LFO clocks (Hz mode) and the editor's playheads
+    for (int k = 0; k < 4; ++k)
+    {
+        lfoFreePh[k] = wrap01 (lfoFreePh[k] + (double) s.f (P_lfo1Rate + 3 * k) * numSamples / sr);
+        lfoPlayhead[k].store (newest != nullptr && newest->active ? newest->lfoPhaseShown (k) : -1.0f, std::memory_order_relaxed);
+    }
 
     // Global effects are shared by all voices, so routes onto them follow the newest voice's
     // sources (or, with no note playing, the MIDI controllers alone).

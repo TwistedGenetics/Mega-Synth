@@ -19,6 +19,7 @@
 #include "EngineTypes.h"
 #include "Fx/RackFx.h"
 #include "Fx/FxBus.h"
+#include "LfoShapes.h"
 
 namespace tg
 {
@@ -38,6 +39,8 @@ struct ModContext
     const MutationTable* mut = nullptr;   // set when routes move the Mutate amount: each voice mutates itself
     uint32_t lockMask = 0;
     float dnaSeq = 0.0f, dnaSeq2 = 0.0f, dnaGate = 0.0f;   // the DNA Sequencer's lanes and step gate (Mod Matrix sources)
+    const LfoShapeStore* lfoShapes = nullptr;   // custom LFO shapes
+    const double* lfoFree = nullptr;            // shared "Free" LFO phases (Hz mode) at the start of this render call
     bool any() const { return routes != nullptr && routes->n > 0; }
 };
 
@@ -79,10 +82,12 @@ public:
     float velGain = 1.0f;
 
     float currentLevel() const { return (float) ampEnv.eval (t); }
+    float lfoPhaseShown (int k) const { return (float) lfoPhNow[k & 3]; }
 
 private:
     void computeSources (const Snapshot&, const GlobalModInputs*, float dt);
     void advanceLfos (const Snapshot&, int numSamples);
+    void updateLfoOut (const Snapshot&, int offset, const ModContext&);   // the LFOs' outputs for this control step
     void computeMod (const Snapshot&, ModState&) const;
     void updateControl (const Snapshot&, const WaveSample* const* wavs, const ModState&, bool first);
 
@@ -184,6 +189,12 @@ private:
     float velocity = 1.0f;
     double lfoPh[4] {};          // LFO phases (free per voice, reset at note-on)
     float lfoDepthNow[4] {};
+    double lfoElapsed[4] {};     // cycles since note-on (one-shot)
+    double lfoPhNow[4] {};       // the phase actually used this step (for the editor's playhead)
+    float lfoOut[4] {};          // shaped output (before depth) this control step
+    float lfoSm[4] {};           // smoothing state
+    bool lfoSmInit[4] {};
+    float lfoXMod[4][3] {};      // Phase, Smooth and Fade In as modulated last step (they shape this step's output)
     uint32_t rng = 1;
     float randNote = 0.0f;
     double rndPh = 0.0, driftPh2 = 0.0;
@@ -249,8 +260,12 @@ public:
     bool keepPreFx = false;
     const float* preFx (int ch) const { return preFxBuf[ch].data(); }
     int activeVoiceCount() const;
+    void setLfoShapes (const LfoShapeStore* st) { lfoShapes = st; }
+    std::atomic<float> lfoPlayhead[4] { -1.0f, -1.0f, -1.0f, -1.0f };   // newest voice's LFO phases (-1: no voice)
 
 private:
+    const LfoShapeStore* lfoShapes = nullptr;
+    double lfoFreePh[4] {};
     Voice voices[kMaxVoices];
     FxBus fxBus;
     Granular gran;           // bus stages: summed voices -> granular / spectral -> effects

@@ -46,6 +46,10 @@ inline juce::String formatParam (int idx, float v)
         if (id == "flpFeedback") { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
         if (id == "sttHaas") return v < 0.05f ? juce::String ("off") : fixed (v, 1) + " ms";
     }
+    // ---- LFO extras
+    if (id.startsWith ("lfo") && id.endsWith ("Phase")) return juce::String (juce::roundToInt (v * 360.0f)) + juce::String::fromUTF8 ("\xc2\xb0");
+    if (id.startsWith ("lfo") && id.endsWith ("Smooth")) return v < 0.005f ? juce::String ("off") : juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    if (id.startsWith ("lfo") && id.endsWith ("Fade")) return v < 0.005f ? juce::String ("off") : fixed (v, 2) + " s";
     if (id == "dsLane2Steps") { const int n = juce::roundToInt (v); return juce::String (n) + (n == 1 ? " step" : " steps"); }
     if (id == "dsOffset") { const int n = juce::roundToInt (v); return n == 0 ? juce::String ("none") : "+" + juce::String (n) + (n == 1 ? " step" : " steps"); }
     if (id == "dsSwing" || id == "dsDensity" || id == "dsProbScale") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
@@ -111,6 +115,7 @@ inline float parseParam (int idx, const juce::String& text)
     const juce::String id (kParamIds[idx]);
     float v = text.trim().upToFirstOccurrenceOf (" ", false, false).retainCharacters ("-0123456789.").getFloatValue();
     if (id == "fEnvAmt" || id == "filter2EnvAmt") return text.contains ("%") || std::abs (v) <= 100.0f ? v * 100.0f : v;   // percent (100% = 10 kHz), or Hz
+    if (id.startsWith ("lfo") && id.endsWith ("Phase") && ! text.contains ("%")) return juce::jlimit (0.0f, 1.0f, v / 360.0f);   // degrees
     if ((id == "filterDrive" || id == "filter2Drive") && text.containsIgnoreCase ("db")) return std::pow (10.0f, v / 20.0f);
     if (text.containsIgnoreCase ("khz") || text.trim().endsWithIgnoreCase ("k")) return v * 1000.0f;
     if (text.contains ("%")) v /= 100.0f;

@@ -43,6 +43,7 @@ set(MEGASYNTH_SOURCES
     Source/UI/DnaSeqPage.cpp
     Source/UI/FxPages.cpp
     Source/UI/PatchBrowser.cpp
+    Source/UI/LfoPage.cpp
     Source/Filter/Filter.cpp
     Source/Fx/RackFx.cpp
     Source/Fx/FxBus.cpp)

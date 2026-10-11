@@ -2998,6 +2998,39 @@ int main()
         e->showPage ("Perform");
         e->showRoute (0);
         CHECK (e->currentPageName() == "Mod Matrix", "Show in Mod Matrix opens Modulation > Mod Matrix");
+        // section titles are short; their explanations sit behind an (i)
+        int infos = 0; juce::StringArray longTitles;
+        std::function<void (juce::Component*)> walk2 = [&] (juce::Component* c)
+        {
+            if (auto* sct = dynamic_cast<tgui::Section*> (c))
+            {
+                if (sct->getInfo().isNotEmpty()) ++infos;
+                if (sct->getTitle().contains ("  (") || sct->getTitle().length() > 40) longTitles.add (sct->getTitle());
+            }
+            for (auto* ch : c->getChildren()) walk2 (ch);
+        };
+        walk2 (ed.get());
+        if (tabs != nullptr) for (int t = 0; t < tabs->getNumTabs(); ++t) if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk2 (pg);
+        std::cout << "  sections with an (i): " << infos << std::endl;
+        CHECK (infos >= 20 && longTitles.isEmpty(), "short section titles" + (longTitles.isEmpty() ? juce::String() : ": " + longTitles.joinIntoString (" | ")));
+        // the open tab and sub-tabs come back with the project
+        e->showPage ("Dirt"); e->showPage ("Arp / Chord"); e->showPage ("Wavetables");
+        e->timerCallbackForTests();
+        ed.reset();
+        juce::MemoryBlock mb; p->getStateInformation (mb);
+        auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+        std::unique_ptr<juce::AudioProcessorEditor> ed2 (q->createEditor());
+        auto* e2 = dynamic_cast<MegaSynthEditor*> (ed2.get());
+        CHECK (e2 != nullptr && e2->currentPageName() == "Wavetables", "the project reopens on the tab it was on");
+        if (e2 != nullptr)
+        {
+            e2->showPage ("FX & Mutation");   // the tab, not a sub-tab: its last sub-tab
+            CHECK (e2->currentPageName() == "Dirt", "each tab keeps its last sub-tab");
+            e2->showPage ("Sequencers");
+            CHECK (e2->currentPageName() == "Arp / Chord", "each tab keeps its last sub-tab (Sequencers)");
+        }
+        auto o = make(); std::unique_ptr<juce::AudioProcessorEditor> ed3 (o->createEditor());
+        CHECK (dynamic_cast<MegaSynthEditor*> (ed3.get())->currentPageName() == "Perform", "a new project opens on Perform");
     };
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_UIONLY", {}).isNotEmpty())
     {

@@ -916,6 +916,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("msegs", msegs.toJson(), nullptr);
     state.setProperty ("midiMap", midiMapToString(), nullptr);        // MIDI learn belongs to the project, not the patch
     state.setProperty ("uiWidth", uiWidth.load(), nullptr);
+    if (getUiTabs().isNotEmpty()) state.setProperty ("uiTabs", getUiTabs(), nullptr);
     state.setProperty ("program", curProgram.load(), nullptr);
     state.setProperty ("scenes", juce::JSON::toString (scenes.toVar(), true), nullptr);
     state.setProperty ("sceneEdit", getEditScene(), nullptr);
@@ -963,6 +964,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     msegs.fromVar (juce::JSON::parse (tree.getProperty ("msegs").toString()));
     midiMapFromString (tree.getProperty ("midiMap").toString());
     if (tree.hasProperty ("uiWidth")) uiWidth.store ((int) tree.getProperty ("uiWidth"));
+    setUiTabs (tree.getProperty ("uiTabs").toString());
     pendingProgram.store (-1);   // a program change still waiting must not replace the restored state
     curProgram.store (juce::jlimit (0, (int) tg::factoryPresets().size() - 1, (int) tree.getProperty ("program", 0)));
 

@@ -147,6 +147,9 @@ public:
     juce::String midiMapToString() const;
     void midiMapFromString (const juce::String&);
     std::atomic<int> uiWidth { 0 };
+    // the open tab and each tab's last sub-tab ("tab;sub,sub,..."), saved with the project
+    juce::String getUiTabs() const { const juce::ScopedLock sl (nameLock); return uiTabs; }
+    void setUiTabs (const juce::String& t) { const juce::ScopedLock sl (nameLock); uiTabs = t; }
     std::atomic<float> scMeter { 0.0f };     // sidechain input level (peak, for the editor)
     juce::VST3ClientExtensions* getVST3ClientExtensions() override { return &vst3Ext; }
     std::atomic<int> curProgram { 0 }, pendingProgram { -1 };          // editor width the project was saved with (0 = default)
@@ -317,6 +320,7 @@ private:
     int lastEuclid[4] { -1, -1, -1, -1 };
     juce::Random rng;
     juce::String patchName { "Init" };
+    juce::String uiTabs;
     mutable juce::CriticalSection nameLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MegaSynthProcessor)

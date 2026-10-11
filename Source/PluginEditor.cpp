@@ -326,7 +326,50 @@ void Choice::resized()
 }
 
 //==============================================================================
-Section::Section (MegaSynthProcessor& p, const juce::String& t, juce::Colour c) : colour (c), proc (p), title (t) {}
+namespace
+{
+    // the (i) next to a section title: hover for the explanation
+    struct InfoBadge : public juce::Component, public juce::SettableTooltipClient
+    {
+        explicit InfoBadge (juce::Colour c) : colour (c) { setMouseCursor (juce::MouseCursor::PointingHandCursor); }
+        void paint (juce::Graphics& g) override
+        {
+            auto r = getLocalBounds().toFloat().reduced (1.0f);
+            g.setColour (colour.withAlpha (isMouseOver() ? 0.9f : 0.55f));
+            g.drawEllipse (r, 1.3f);
+            g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+            g.drawText ("i", r, juce::Justification::centred);
+        }
+        void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+        void mouseExit (const juce::MouseEvent&) override { repaint(); }
+        juce::Colour colour;
+    };
+}
+
+Section::Section (MegaSynthProcessor& p, const juce::String& t, juce::Colour c) : colour (c), proc (p), title (t)
+{
+    // "Name  (explanation)": the name stays in the title, the explanation moves behind the (i)
+    const int open = t.indexOf ("  (");
+    if (open > 0 && t.endsWithChar (')'))
+    {
+        title = t.substring (0, open);
+        addInfo (t.substring (open + 3, t.length() - 1).trim());
+    }
+}
+
+void Section::addInfo (const juce::String& text)
+{
+    info = info.isEmpty() ? text : info + "\n\n" + text;
+    if (infoBadge == nullptr)
+    {
+        infoBadge = std::make_unique<InfoBadge> (col::muted);
+        addAndMakeVisible (*infoBadge);
+    }
+    auto* b = static_cast<InfoBadge*> (infoBadge.get());
+    b->setTooltip (info);
+    b->setHelpText (info);
+    resized();
+}
 
 Knob* Section::knob (int idx, const juce::String& cap, int width)
 {
@@ -368,6 +411,13 @@ void Section::paint (juce::Graphics& g)
 
 void Section::resized()
 {
+    if (infoBadge != nullptr)
+    {
+        juce::GlyphArrangement ga;
+        ga.addLineOfText (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)), title, 0.0f, 0.0f);
+        const int tw = juce::roundToInt (ga.getBoundingBox (0, -1, true).getWidth());
+        infoBadge->setBounds (juce::jmin (getWidth() - 26, 23 + tw + 8), 9, 16, 16);
+    }
     const int pad = 10, gap = 6, top = 32;
     int x = pad, y = top, rowH = 0;
     for (auto& it : items)
@@ -1127,6 +1177,19 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
         if (auto* page = tabs.getTabContentComponent (i)) collect (*page);
     collect (content);
     for (auto* k : allKnobs) k->onShowRoute = [this] (int slot) { showRoute (slot); };
+    {
+        // back to the tab and sub-tabs this project had open
+        const auto saved = proc.getUiTabs();
+        if (saved.isNotEmpty())
+        {
+            juce::StringArray subs; subs.addTokens (saved.fromFirstOccurrenceOf (";", false, false), ",", {});
+            for (int t = 0; t < juce::jmin (subs.size(), tabs.getNumTabs()); ++t)
+                if (auto* g = dynamic_cast<GroupPage*> (tabs.getTabContentComponent (t))) g->show (subs[t].getIntValue());
+            const int tab = saved.upToFirstOccurrenceOf (";", false, false).getIntValue();
+            if (tab >= 0 && tab < tabs.getNumTabs()) tabs.setCurrentTabIndex (tab);
+        }
+        lastUiTabs = saved;
+    }
 
     keyboard.setAvailableRange (36, 96);
     keyboard.setOctaveForMiddleC (4);
@@ -1561,14 +1624,9 @@ void MegaSynthEditor::buildPages()
         w->knob (P_warmth, "Warmth");
         w->knob (P_bassKeep, "Bass Keep");
         w->knob (P_analogDrift, "Drift");
-        auto* wInfo = new juce::Label ({}, "Warmth: softer, rounder filter Drive saturation, plus a gentle low lift and smoother top.  "
+        w->addInfo ("Warmth: softer, rounder filter Drive saturation, plus a gentle low lift and smoother top.  "
                                            "Bass Keep: holds onto low end in the classic models with high-pass or band-pass stages.  "
                                            "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
-        wInfo->setColour (juce::Label::textColourId, col::muted);
-        wInfo->setFont (juce::Font (juce::FontOptions (12.0f)));
-        wInfo->setJustificationType (juce::Justification::topLeft);
-        wInfo->setMinimumHorizontalScale (1.0f);
-        w->add (wInfo, 520, 84);
         page->onResize = [page, lv, rt, w]
         {
             const int W = page->getWidth(), g = 10, w2 = (W - g * 3) / 2;
@@ -1686,7 +1744,7 @@ void MegaSynthEditor::buildPages()
         Knob* fbK[3] = { page->own (new Knob (proc, P_fbTime, "Time", col::complex)),
                          page->own (new Knob (proc, P_fbTone, "Tone", col::complex)),
                          page->own (new Knob (proc, P_fbSafety, "Safety", col::complex)) };
-        auto* help = page->own (new juce::Label ({}, "Granular records the last 4 seconds of the synth and plays it back as up to 64 overlapping grains. "
+        grS->addInfo ("Granular records the last 4 seconds of the synth and plays it back as up to 64 overlapping grains. "
             "Position = how far back the grains read (Jitter scatters it), Size and Density set the grain length and how many start each second, "
             "Pitch / Pitch Jitter transpose them, Reverse is the chance a grain plays backwards, Spread pans them. Feedback writes the grains back "
             "into the recording for washes that build up. Freeze holds the buffer: play a chord, freeze, and keep playing over the frozen cloud. "
@@ -1696,7 +1754,8 @@ void MegaSynthEditor::buildPages()
             "frequencies, Tilt brightens or darkens (6 dB per octave), Formant moves the tone colour without changing the pitch, Freeze holds "
             "the current spectrum, Morph blends towards the frozen one, Feedback feeds the output spectrum back in. Bigger FFT sizes sound "
             "smoother on sustained sounds; smaller ones keep attacks sharper and add less latency. Feedback Matrix: each path arrives "
-            "Time later; Safety lowers how hard loops can drive, and while any path is up the output never passes 0 dBFS."));
+            "Time later; Safety lowers how hard loops can drive, and while any path is up the output never passes 0 dBFS.");
+        auto* help = page->own (new juce::Label());   // (the explanation is behind the section's (i))
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.5f)));
         help->setJustificationType (juce::Justification::topLeft);
@@ -1784,10 +1843,11 @@ void MegaSynthEditor::buildPages()
                                     (juce::Component*) &capZero, (juce::Component*) &capFadeIn, (juce::Component*) &capFadeOut, (juce::Component*) &capInfo })
             page->addAndMakeVisible (c);
         for (auto* b : capSends) page->addAndMakeVisible (b);
-        auto* help = page->own (new juce::Label ({}, "Record from 'After effects' to capture exactly what you hear, or 'Before effects' for the synth and bus "
+        cs->addInfo ("Record from 'After effects' to capture exactly what you hear, or 'Before effects' for the synth and bus "
             "mutation without delay / reverb / chorus. Drag the white markers to trim. Pitch is detected automatically: sending to a wavetable sets its "
             "root note so the sample plays in tune on the keyboard. Resample loop: capture, send to a wavetable, mutate it, capture again. "
-            "The last capture is saved with your project and in patch files."));
+            "The last capture is saved with your project and in patch files.");
+        auto* help = page->own (new juce::Label());   // (the explanation is behind the section's (i))
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.5f)));
         help->setJustificationType (juce::Justification::topLeft);
@@ -2084,9 +2144,10 @@ void MegaSynthEditor::buildPages()
             ms[k]->add (pr, 80, 28);
             ed[k] = page->own (new MsegEditor (proc, k));
         }
-        auto* help = page->own (new juce::Label ({}, "Route MSEG 1 / 2 in the Mod Matrix (or right-click a knob). Sustain holds while the key is down; "
+        ms[0]->addInfo ("Route MSEG 1 / 2 in the Mod Matrix (or right-click a knob). Sustain holds while the key is down; "
                                                      "a loop repeats while the key is down; after the key is let go the stages after the sustain / loop play. "
-                                                     "Sync measures stage times in beats instead of seconds."));
+                                                     "Sync measures stage times in beats instead of seconds.");
+        auto* help = page->own (new juce::Label());   // (the explanation is behind the section's (i))
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.0f)));
         help->setJustificationType (juce::Justification::topLeft);
@@ -2128,9 +2189,10 @@ void MegaSynthEditor::buildPages()
         }
         auto* same = page->own (new ParamToggle (proc, P_uniSamePhase, "Same phase every note", col::osc));
         same->setTooltip ("Off: the extra voices start at random phases on every note (livelier). On: the same every time (punchier, repeatable).");
-        auto* help = page->own (new juce::Label ({}, "Each oscillator can stack up to 8 voices: the oscillator itself in the centre, plus detuned copies spread "
+        rows[0]->addInfo ("Each oscillator can stack up to 8 voices: the oscillator itself in the centre, plus detuned copies spread "
                                                      "across the stereo field. Blend sets the copies' level against the centre. FM, ring and DNA Splice use the "
-                                                     "centre voice. Each extra voice costs about as much CPU as the oscillator itself."));
+                                                     "centre voice. Each extra voice costs about as much CPU as the oscillator itself.");
+        auto* help = page->own (new juce::Label());   // (the explanation is behind the section's (i))
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.0f)));
         help->setJustificationType (juce::Justification::topLeft);
@@ -2191,9 +2253,10 @@ void MegaSynthEditor::buildPages()
         ar->knob (P_arpSteps, "Pattern Steps", 90);
         auto* pat = sec (page, "Pattern  (click: On / Accent / Rest; drag: probability)", col::seq);
         auto* grid = page->own (new ArpPatternGrid (proc));
-        auto* help = page->own (new juce::Label ({}, "Chord Memory feeds the arpeggiator. Both play through the voices, so the DNA Sequencer "
+        ch->addInfo ("Chord Memory feeds the arpeggiator. Both play through the voices, so the DNA Sequencer "
                                                      "(restart on each note), the Volume Shaper (each note) and Beat Repeat all follow the arpeggiated notes. "
-                                                     "Arp Position and Arp Step Gate are Mod Matrix sources. The step sequencer's notes aren't arpeggiated."));
+                                                     "Arp Position and Arp Step Gate are Mod Matrix sources. The step sequencer's notes aren't arpeggiated.");
+        auto* help = page->own (new juce::Label());   // (the explanation is behind the section's (i))
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.0f)));
         help->setJustificationType (juce::Justification::topLeft);
@@ -2213,14 +2276,13 @@ void MegaSynthEditor::buildPages()
     {
         auto* page = addPage ("Mod Matrix");
         auto* srcSec = sec (page, "More sources", col::mod);
-        srcSec->choice (P_lfo4Wave, "LFO 4 Wave", 110);
-        srcSec->knob (P_lfo4Rate, "LFO 4 Rate", 64);
-        srcSec->knob (P_lfo4Depth, "LFO 4 Depth", 64);
+        // (LFO 4's Wave, Rate and Depth are with the other LFOs: Modulation > LFOs)
         srcSec->knob (P_randRate, "Random Rate", 70);
         srcSec->knob (P_ccANum, "CC A", 56);
         srcSec->knob (P_ccBNum, "CC B", 56);
-        auto* help = page->own (new juce::Label ({}, "Any source to any knob. Right-click a knob to modulate it; a cyan ring shows the range and a dot shows the "
-                                                     "value the newest note hears. Depth is a share of the destination's travel. Envelope times are set at note-on."));
+        srcSec->addInfo ("Any source to any knob. Right-click a knob to modulate it; a cyan ring shows the range and a dot shows the "
+                                                     "value the newest note hears. Depth is a share of the destination's travel. Envelope times are set at note-on.");
+        auto* help = page->own (new juce::Label());   // (the explanation is behind the section's (i))
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.0f)));
         help->setJustificationType (juce::Justification::topLeft);
@@ -2261,7 +2323,7 @@ void MegaSynthEditor::buildPages()
         page->onResize = [page, srcSec, help, listSec, header, view, list, rows, this]
         {
             const int g = 10, W = page->getWidth();
-            srcSec->setBounds (g, g, 520, 128);
+            srcSec->setBounds (g, g, W - 2 * g, 128);
             help->setBounds (540, g + 6, W - 540 - g, 120);
             listSec->setBounds (g, 146, W - 2 * g, page->getHeight() - 146 - g);
             matrixSearch.setBounds (W - g - 330, 152, 316, 22);
@@ -2310,7 +2372,7 @@ void MegaSynthEditor::buildPages()
         page->addAndMakeVisible (clearScenesBtn);
         auto* sx = page->own (new Knob (proc, P_sceneX, "Scene X", col::mod));
         auto* sy = page->own (new Knob (proc, P_sceneY, "Scene Y", col::mod));
-        auto* help = page->own (new juce::Label ({}, "Each scene is a complete sound: every oscillator, filter, envelope, LFO and effect setting "
+        scSec->addInfo ("Each scene is a complete sound: every oscillator, filter, envelope, LFO and effect setting "
             "(not the matrix routes, macros, volume or sequencer).\n\n"
             "1. Make a sound and press Store A. Change it and Store B, and so on.\n"
             "2. Turn on Morph and drag the pad. Knobs blend smoothly; switches (waveforms, filter type) "
@@ -2318,7 +2380,8 @@ void MegaSynthEditor::buildPages()
             "3. With Morph on, the panel shows the selected scene (A-D buttons) and every knob you turn edits that scene.\n"
             "With Morph off, the A-D buttons recall a scene onto the panel.\n\n"
             "Scene X / Y are ordinary parameters: automate them, assign them to a macro, or route an LFO or the mod wheel to them in the Mod Matrix "
-            "(each note then morphs on its own)."));
+            "(each note then morphs on its own).");
+        auto* help = page->own (new juce::Label());   // (the explanation is behind the section's (i))
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.5f)));
         help->setJustificationType (juce::Justification::topLeft);
@@ -2387,11 +2450,12 @@ void MegaSynthEditor::buildPages()
         mutHistLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
         mutHistLabel.setJustificationType (juce::Justification::topLeft);
         page->addAndMakeVisible (mutHistLabel);
-        auto* help = page->own (new juce::Label ({}, "Mutate adds an offset to every unlocked parameter, computed from the seed, the amount and the parameter's own value. "
+        ms->addInfo ("Mutate adds an offset to every unlocked parameter, computed from the seed, the amount and the parameter's own value. "
             "0% is exactly your patch. Offsets move together within each group (a shared random 'gene'), and are shaped: short attacks stay short "
             "until extreme amounts, feedback tends to go down rather than up, FM and modulator ratios lean towards harmonic values, pitch moves in "
             "whole semitones, and anything switched off (a level, a mix, a depth at zero) stays off. Waveforms switch at higher amounts. "
-            "Mutate is a normal parameter: automate it, put it on a macro, or route velocity to it so each note is a different variation."));
+            "Mutate is a normal parameter: automate it, put it on a macro, or route velocity to it so each note is a different variation.");
+        auto* help = page->own (new juce::Label());   // (the explanation is behind the section's (i))
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.5f)));
         help->setJustificationType (juce::Justification::topLeft);
@@ -2833,6 +2897,15 @@ bool MegaSynthEditor::keyPressed (const juce::KeyPress& k)
 
 void MegaSynthEditor::timerCallback()
 {
+    // remember the open tab and sub-tabs in the project
+    {
+        juce::StringArray subsNow;
+        for (int t = 0; t < tabs.getNumTabs(); ++t)
+            subsNow.add (juce::String (dynamic_cast<GroupPage*> (tabs.getTabContentComponent (t)) != nullptr
+                                       ? static_cast<GroupPage*> (tabs.getTabContentComponent (t))->current() : 0));
+        const auto now = juce::String (tabs.getCurrentTabIndex()) + ";" + subsNow.joinIntoString (",");
+        if (now != lastUiTabs) { lastUiTabs = now; proc.setUiTabs (now); }
+    }
     abA.setToggleState (proc.abSlot() == 0, juce::dontSendNotification);
     abB.setToggleState (proc.abSlot() == 1, juce::dontSendNotification);
     // computer-keyboard octave (A = C4 at octave 0, like the browser version)

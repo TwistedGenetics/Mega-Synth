@@ -112,11 +112,16 @@ public:
     void newRow();
     void paint (juce::Graphics&) override;
     void resized() override;
+    // the explanation behind the (i) next to the title ("Name  (explanation)" titles are split automatically)
+    void addInfo (const juce::String& text);
+    juce::String getTitle() const { return title; }
+    juce::String getInfo() const { return info; }
     juce::Colour colour;
 
 private:
     MegaSynthProcessor& proc;
-    juce::String title;
+    juce::String title, info;
+    std::unique_ptr<juce::Component> infoBadge;
     struct Item { juce::Component* c; int w, h; bool rowBreak; };
     std::vector<Item> items;
     juce::OwnedArray<juce::Component> owned;
@@ -327,9 +332,11 @@ public:
     bool showPage (const juce::String& name);
     juce::StringArray allPageNames() const;
     juce::String currentPageName() const;
+    void timerCallbackForTests() { timerCallback(); }
 private:
     struct PageRef { int tab = -1, sub = -1; tgui::Page* page = nullptr; };
     std::map<juce::String, PageRef> pageIndex;
+    juce::String lastUiTabs;
     tgui::Page* pageFor (const juce::String& name) const { auto it = pageIndex.find (name); return it != pageIndex.end() ? it->second.page : nullptr; }
     void setStatus (const juce::String&);
     void shiftOctave (int delta);

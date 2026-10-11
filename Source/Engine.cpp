@@ -148,7 +148,8 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     for (int e = 0; e < 3; ++e)
         modEnv[e].init (envV[P_mEnv1A + 4 * e], envV[P_mEnv1D + 4 * e], envV[P_mEnv1S + 4 * e], envV[P_mEnv1R + 4 * e]);
 
-    filter.configure (s.i (P_filterMode), s.i (P_filterType), s.i (P_filterSlope), true);
+    filter.configure (s.i (P_filterMode), s.i (P_filterType), s.i (P_filterSlope), true, clampv (s.i (P_flt1Char), 0, CM_COUNT - 1));
+    filter.setCharacter (s.f (P_flt1CharAmt));
     for (auto& r : ringSlots) { r.hp.reset(); r.lp.reset(); }
     stereo = false;
 
@@ -645,7 +646,8 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     vGain.step (c20);
 
     // --- filter
-    filter.configure (s.i (P_filterMode), s.i (P_filterType), s.i (P_filterSlope), first);
+    filter.setCharacter (s.f (P_flt1CharAmt));
+    filter.configure (s.i (P_filterMode), s.i (P_filterType), s.i (P_filterSlope), first, clampv (s.i (P_flt1Char), 0, CM_COUNT - 1));
     filter.setAnalog (s.f (P_warmth), s.f (P_bassKeep));
     const float fe = (float) filtEnv.eval (t);
     // Cutoff: knob (with any matrix routes), accent, the filter envelope (Env Amt, 100% = +10 kHz
@@ -693,7 +695,8 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     balS.step (c10);
     if (routeMode != R_Off || routeFade > 0)
     {
-        filter2.configure (s.i (P_filter2Mode), s.i (P_filter2Type), s.i (P_filter2Slope), first || filter2Fresh);
+        filter2.setCharacter (s.f (P_flt2CharAmt));
+        filter2.configure (s.i (P_filter2Mode), s.i (P_filter2Type), s.i (P_filter2Slope), first || filter2Fresh, clampv (s.i (P_flt2Char), 0, CM_COUNT - 1));
         filter2Fresh = false;
         filter2.setAnalog (s.f (P_warmth), s.f (P_bassKeep));
         float c2 = clampv (s.f (P_filter2Cutoff) + filterAccent + s.f (P_filter2EnvAmt) * fe, 20.0f, 20000.0f);
@@ -1595,6 +1598,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         MasterFilter::Settings mf;
         mf.on = fs->f (P_mfOn) > 0.5f; mf.type = clampv (fs->i (P_mfType), 0, 3); mf.steep = fs->i (P_mfSlope) == 1;
         mf.cutoff = fs->f (P_mfCutoff); mf.res = fs->f (P_mfRes); mf.driveDb = fs->f (P_mfDrive); mf.mix = fs->f (P_mfMix);
+        mf.charModel = fs->i (P_mfChar); mf.charAmt = fs->f (P_mfCharAmt);
         masterFilter.process (L, R, numSamples, mf);
         outTrim.process (L, R, numSamples, fs->f (P_outGain));
     }

@@ -52,6 +52,7 @@ inline juce::String formatParam (int idx, float v)
         const int n = juce::roundToInt (v * 100.0f);
         return n == 0 ? juce::String ("C") : (n < 0 ? "L" + juce::String (-n) : "R" + juce::String (n));
     }
+    if (id.endsWith ("CharAmt")) return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     // ---- Master Filter and Output
     if (id == "mfCutoff") return formatHz (v);
     if (id == "mfRes" || id == "mfMix") return juce::String (juce::roundToInt (v * 100.0f)) + "%";

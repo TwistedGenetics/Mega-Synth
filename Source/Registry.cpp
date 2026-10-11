@@ -68,6 +68,8 @@ namespace
         if (id.startsWith ("uni")) return "Unison";
         if (id.startsWith ("mf")) return "Master Filter";
         if (id.startsWith ("mx")) return "Mixer";
+        if (id.startsWith ("flt1")) return "Filter";
+        if (id.startsWith ("flt2")) return "Filter 2";
         if (id == "outGain") return "Output";
         if (id.startsWith ("pEnv")) return "Pitch Envelope";
         if (id.startsWith ("mseg")) return "MSEG";
@@ -184,6 +186,7 @@ namespace
             if (id.startsWith ("mf")) { m.category = Category::Filter; m.group = MutGroup::None; }
             if (id == "outGain") { m.category = Category::Performance; m.group = MutGroup::None; }
             if (id.startsWith ("mx")) { m.category = Category::Mixer; m.group = MutGroup::None; }   // the mix stays put when mutating
+            if (id.startsWith ("flt") || id.startsWith ("mfChar")) { m.category = Category::Filter; m.group = MutGroup::None; }   // character models: chosen, not mutated
             m.unit = unitFor (id);
             if (id == "mfCutoff") m.unit = "Hz";
             if (id == "mfDrive" || id == "outGain") m.unit = "dB";

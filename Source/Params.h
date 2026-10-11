@@ -126,6 +126,8 @@ inline const char* const kUniCurveLabels[] = { "Linear","SuperSaw (outer voices 
 inline const char* const kPEnvTargetKeys[]   = { "all","osc1","osc2","osc3","sub","wt1","wt2","complex","supersaw" };
 inline const char* const kPEnvTargetLabels[] = { "All oscillators","Osc 1","Osc 2","Osc 3","Sub","Wavetable 1","Wavetable 2","Complex","SuperSaw" };
 inline const char* const kMfTypeKeys[]   = { "lp","hp","bp","notch" };
+inline const char* const kCharModelKeys[]   = { "off","formant","formant2","allpass","powerlp","powerbp","waveshaper","resonator","resampler","lpresample","shifter","analoguelp","dj","comb","vowelmorph","phaser","ring","decimatorlp","dualpeak" };
+inline const char* const kCharModelLabels[] = { "Off (Model)","Formant","Formant 2","All Pass","Power LP","Power BP","Wave Shaper","Resonator","Resampler","LP + Resample","Shifter","Analogue LP","DJ Filter","Comb +/-","Vowel Morph","Phaser Filter","Ring Filter","Decimator LP","Dual Peak" };
 inline const char* const kMfTypeLabels[] = { "Low Pass","High Pass","Band Pass","Notch" };
 inline const char* const kMfSlopeKeys[]   = { "12","24" };
 inline const char* const kMfSlopeLabels[] = { "12 dB/oct","24 dB/oct" };
@@ -276,6 +278,7 @@ inline const ChoiceList kListArpRestart  = TG_LIST(kArpRestart);
 inline const ChoiceList kListUniCurve    = TG_LIST(kUniCurve);
 inline const ChoiceList kListPEnvTarget  = TG_LIST(kPEnvTarget);
 inline const ChoiceList kListMfType  = TG_LIST(kMfType);
+inline const ChoiceList kListCharModel = TG_LIST(kCharModel);
 inline const ChoiceList kListMfSlope = TG_LIST(kMfSlope);
 
 // LFO extras (state version 7): 8 parameters per LFO, LFO k at P_lfo1Sync + kLfoXStride * k
@@ -895,7 +898,13 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(mxSupersawSolo, "SuperSaw Solo", false) \
     F(mxRingPan,  "Ring Pan", -1, 1, 0, 0.01, 0) \
     B(mxRingMute, "Ring Mute", false) \
-    B(mxRingSolo, "Ring Solo", false)
+    B(mxRingSolo, "Ring Solo", false) \
+    C(flt1Char,    "Filter Character", kListCharModel, 0) \
+    F(flt1CharAmt, "Filter Character Amount", 0, 1, 0.5, 0.01, 0) \
+    C(flt2Char,    "Filter 2 Character", kListCharModel, 0) \
+    F(flt2CharAmt, "Filter 2 Character Amount", 0, 1, 0.5, 0.01, 0) \
+    C(mfChar,      "Master Filter Character", kListCharModel, 0) \
+    F(mfCharAmt,   "Master Filter Character Amount", 0, 1, 0.5, 0.01, 0)
 
 enum ParamIndex
 {

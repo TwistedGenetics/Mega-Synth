@@ -7,6 +7,7 @@
 #include <JuceHeader.h>
 #include <cmath>
 #include <complex>
+#include "../Filter/Filter.h"
 
 namespace tg
 {
@@ -16,14 +17,15 @@ class MasterFilter
 public:
     enum Type { LP, HP, BP, Notch };
 
-    void prepare (double sampleRate) { sr = sampleRate; reset(); }
-    void reset() { for (auto& st : s) st = {}; primed = false; }
+    void prepare (double sampleRate) { sr = sampleRate; scratchL.assign (8192, 0.0f); scratchR.assign (8192, 0.0f); reset(); }
+    void reset() { for (auto& st : s) st = {}; primed = false; charUnit.reset(); charMix = 0.0f; charOn = 0; }
 
-    struct Settings { bool on = false; int type = LP; bool steep = false; float cutoff = 1000.0f, res = 0.1f, driveDb = 0.0f, mix = 1.0f; };
+    struct Settings { bool on = false; int type = LP; bool steep = false; float cutoff = 1000.0f, res = 0.1f, driveDb = 0.0f, mix = 1.0f; int charModel = 0; float charAmt = 0.5f; };
 
     void process (float* L, float* R, int n, const Settings& p)
     {
-        if (! p.on) { primed = false; return; }   // off: untouched (and it starts clean next time)
+        if (! p.on) { primed = false; charMix = 0.0f; charOn = 0; return; }   // off: untouched (and it starts clean next time)
+        if (p.charModel > 0 || charMix > 0.0f) { processWithCharacter (L, R, n, p); return; }
         const float cutT = std::log (juce::jlimit (20.0f, (float) (sr * 0.45), p.cutoff));
         const float resT = juce::jlimit (0.0f, 1.0f, p.res), mixT = juce::jlimit (0.0f, 1.0f, p.mix);
         const float drvT = std::pow (10.0f, juce::jlimit (0.0f, 24.0f, p.driveDb) / 20.0f);
@@ -46,6 +48,51 @@ public:
         }
         if (! std::isfinite (s[0].ic1) || ! std::isfinite (s[2].ic1)) reset();
     }
+
+    // A character model (Formant, Comb, DJ...): run through a FilterUnit, crossfading from / to the
+    // plain filter over 10 ms when it's switched on or off
+    void processWithCharacter (float* L, float* R, int n, const Settings& p)
+    {
+        const int cm = clampv (p.charModel, 0, (int) CM_COUNT - 1);
+        if (cm > 0 && cm != charOn)
+        {
+            if (charOn == 0)
+            {
+                charCut = juce::jlimit (20.0f, (float) (sr * 0.45), p.cutoff);
+                charDrv = std::pow (10.0f, juce::jlimit (0.0f, 24.0f, p.driveDb) / 20.0f); charMixW = juce::jlimit (0.0f, 1.0f, p.mix);
+            }
+            charUnit.configure (0, FT_LP, 1, charOn == 0, cm); charOn = cm;
+        }
+        const float target = cm > 0 ? 1.0f : 0.0f;
+        const float step = 1.0f / (0.01f * (float) sr);
+        charUnit.setCharacter (p.charAmt);
+        charUnit.setDrive (1.0f);
+        charUnit.setMix (1.0f);
+        std::vector<float>& a = scratchL; std::vector<float>& b = scratchR;
+        if ((int) a.size() < n) { a.resize ((size_t) n); b.resize ((size_t) n); }
+        std::copy (L, L + n, a.begin()); std::copy (R, R + n, b.begin());
+        // the plain filter (as when no character is chosen) while crossfading
+        if (charMix < 1.0f || target < 1.0f) { Settings plain = p; plain.charModel = 0; processPlain (a.data(), b.data(), n, plain); }
+        const float cutT = juce::jlimit (20.0f, (float) (sr * 0.45), p.cutoff);
+        const float drvT = std::pow (10.0f, juce::jlimit (0.0f, 24.0f, p.driveDb) / 20.0f), mixT = juce::jlimit (0.0f, 1.0f, p.mix);
+        const float c = 1.0f - std::exp (-1.0f / (0.02f * (float) sr));
+        for (int i = 0; i < n; ++i)
+        {
+            if ((i & 15) == 0) { charCut += (cutT - charCut) * (1.0f - std::pow (1.0f - c, 16.0f)); charUnit.update (charCut, 0.1f + 24.9f * p.res, sr); }
+            charDrv += (drvT - charDrv) * c; charMixW += (mixT - charMixW) * c;
+            const float dl = L[i], dr = R[i];
+            float xl = dl, xr = dr;
+            if (charDrv > 1.0001f) { xl = std::tanh (charDrv * xl) / std::tanh (charDrv); xr = std::tanh (charDrv * xr) / std::tanh (charDrv); }
+            float yl, yr;
+            charUnit.processFrame (xl, xr, true, yl, yr);
+            yl = dl + (yl - dl) * charMixW; yr = dr + (yr - dr) * charMixW;
+            charMix = target > charMix ? std::min (target, charMix + step) : std::max (target, charMix - step);
+            L[i] = a[(size_t) i] + (yl - a[(size_t) i]) * charMix;
+            R[i] = b[(size_t) i] + (yr - b[(size_t) i]) * charMix;
+        }
+        if (charMix <= 0.0f && cm == 0) { charOn = 0; charUnit.reset(); }
+    }
+    void processPlain (float* L, float* R, int n, const Settings& p) { Settings q = p; q.charModel = 0; const float keep = charMix; charMix = 0.0f; process (L, R, n, q); charMix = keep; }
 
     // magnitude response at f (for drawing the curve), from the same design
     static float magnitudeDb (float f, const Settings& p, double sampleRate)
@@ -105,6 +152,11 @@ private:
     State s[4];   // L stage 1, L stage 2, R stage 1, R stage 2
     float logCut = 0.0f, resS = 0.0f, mixS = 1.0f, drvS = 1.0f, g1 = 0.1f, k1 = 1.4f, k2 = 0.8f;
     bool primed = false;
+    // character models
+    FilterUnit charUnit;
+    int charOn = 0;
+    float charMix = 0.0f, charCut = 1000.0f, charDrv = 1.0f, charMixW = 1.0f;
+    std::vector<float> scratchL, scratchR;
 };
 
 // The Output trim: the last thing before the plug-in's output

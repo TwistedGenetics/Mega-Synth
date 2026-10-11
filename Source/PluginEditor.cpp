@@ -1965,11 +1965,13 @@ void MegaSynthEditor::buildPages()
         mfs->add (new ParamToggle (proc, P_mfOn, "On", col::filter), 60, 40);
         mfs->choice (P_mfType, "Type", 120);
         mfs->choice (P_mfSlope, "Slope", 110);
+        mfs->choice (P_mfChar, "Character", 140)->box.setTooltip ("A character model (Formant, DJ Filter, Comb...) instead of the plain filter above");
         mfs->newRow();
         mfs->knob (P_mfCutoff, "Cutoff");
         mfs->knob (P_mfRes, "Resonance");
         mfs->knob (P_mfDrive, "Drive");
         mfs->knob (P_mfMix, "Mix");
+        mfs->knob (P_mfCharAmt, "Character");
         mfs->knob (P_outGain, "Output");
         auto* mfv = page->own (new MasterFilterView (proc));
         page->onResize = [page, f, mfs, mfv]
@@ -1977,7 +1979,7 @@ void MegaSynthEditor::buildPages()
             const int g = 10, W = page->getWidth();
             f->setBounds (g, g, W - 2 * g, 262);
             mfs->setBounds (g, 282, W - 2 * g, 170);
-            mfv->setBounds (g + 420, 282 + 34, W - 2 * g - 432, 126);
+            mfv->setBounds (g + 470, 282 + 34, W - 2 * g - 482, 126);
             mfv->toFront (false);
         };
         pageEnv->onResize = [pageEnv, a, fe]

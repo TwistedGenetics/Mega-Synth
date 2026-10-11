@@ -38,7 +38,7 @@ namespace
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
             || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni") || id.startsWith ("pEnv") || id.startsWith ("mseg")
-            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx");
+            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx") || id.startsWith ("flt");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -966,6 +966,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 10) setUnisonDefaultsForOldPatch();
     if (version < 11) setEnvDefaultsForOldPatch();
     if (version < 12) { setMasterDefaultsForOldPatch(); setMixerDefaultsForOldPatch(); }
+    if (version < 13) setCharDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1184,6 +1185,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("wheelLfo1")) setMidiDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("mfOn")) setMasterDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("mxOsc1Pan")) setMixerDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("flt1Char")) setCharDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -1388,6 +1390,18 @@ void MegaSynthProcessor::setMasterDefaultsForOldPatch()
     {
         const juce::String id (kParamIds[i]);
         if (! (id.startsWith ("mf") || id == "outGain")) continue;
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setCharDefaultsForOldPatch()
+{
+    // Before the character models: every filter on its classic model
+    for (int i : { P_flt1Char, P_flt1CharAmt, P_flt2Char, P_flt2CharAmt, P_mfChar, P_mfCharAmt })
+    {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture();
         prm->setValueNotifyingHost (prm->getDefaultValue());

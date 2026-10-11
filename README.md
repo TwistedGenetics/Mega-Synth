@@ -111,6 +111,36 @@ Moved from earlier versions:
 - Patches and projects from before this version load as they were: the classic model at its own slope, Low Pass, fully wet, no key tracking or filter LFO.
 - **Filter 2**: a second, identical filter. **Filter 1 | Filter 2** in the panel header picks which one the controls show; **Filter 2 On** switches it in (off, it costs nothing and the sound is Filter 1 alone). **Serial** runs Filter 1 then Filter 2; **Parallel** feeds both the same sound and adds them, with **Balance** going from Filter 1 only, through both at full level in the middle, to Filter 2 only. **Stereo Split** (parallel only) puts Filter 1 on the left and Filter 2 on the right. **Copy 1 > 2** gives Filter 2 all of Filter 1's settings. Both filters share the Filter Envelope but each has its own Env Amt, LFO Amt and Key Track. Routing changes crossfade, the response curve shows both filters and the combined result, all of Filter 2's knobs and Balance are Mod Matrix destinations (cutoff and resonance at audio rate too), and the DNA Sequencer's Filter step, Cell Instability, Mutate and scenes cover both. Patches and projects from before Filter 2 load with it off.
 
+## Filter character models (Filters tab: Filter 1, Filter 2 and the Master Filter)
+
+Each filter has a **Character** menu next to its Model. *Off* uses the classic Model, Type and Slope exactly as before; choosing a character model replaces them (Type and Slope lock), and the **Character** knob does what the model needs. Ideas from Beep Street's Sunrizer, plus extras:
+
+| Model | What it is | Character knob |
+|---|---|---|
+| Formant | three vowel resonances (male voice); Cutoff shifts them, 1 kHz = natural | vowel A E I O U |
+| Formant 2 | a brighter, narrower set (female voice) | vowel |
+| All Pass | two all-pass stages with the dry sound: moving notches | spread of the second stage |
+| Power LP / Power BP | driven 24 dB filters that stay loud at high resonance | saturation |
+| Wave Shaper | a wavefolder into a resonant low pass | fold amount |
+| Resonator | a tuned comb / struck body at the cutoff (Key Track 100% plays it in tune); Resonance = brightness | decay |
+| Resampler | sample-rate reduction as a filter, Cutoff = rate (no anti-aliasing) | bit depth |
+| LP + Resample | resonant low pass, then sample-rate reduction | resample rate |
+| Shifter | frequency shifter (up to +-2 kHz) into a resonant low pass | shift (centre = none) |
+| Analogue LP | warm 4-pole ladder with drift and saturation in every stage | drift / heat |
+| DJ Filter | one knob: low pass left, high pass right, flat in the middle (exactly the dry sound) | the DJ knob |
+| Comb +/- | comb at the cutoff: left hollow (negative), right metallic (positive) | polarity and feedback |
+| Vowel Morph | vowels that loop (A E I O U A), so an LFO cycles through them without a jump | vowel |
+| Phaser Filter | 2-12 all-pass stages with feedback around the cutoff | stages |
+| Ring Filter | a band pass ring-modulated at its own cutoff | ring amount |
+| Decimator LP | a low pass whose resonance is bit-crushed inside the loop | crush |
+| Dual Peak | two peaks, the second up to 3 octaves above the cutoff | second peak |
+
+- Cutoff, Resonance, Drive, Mix, the envelope, LFO and Key Track work on every model (except where the table says a control isn't used). Switching models crossfades over 10 ms.
+- The Character knob is a Mod Matrix destination (the voice reads it at control rate, every 16 samples). The models are chosen, not mutated: Mutate leaves them alone.
+- The curve shows each model, measured from the real filter code. Resampler, LP + Resample, Shifter, Ring Filter and Decimator LP change the sound over time, so they show a note instead of a curve.
+- CPU: 0.3-0.9% of one core per stereo voice per filter (Analogue LP is the heaviest), measured on our build machine.
+- Older patches load with every Character set to Off.
+
 ## Mixer
 
 A console, in the order the sound flows:

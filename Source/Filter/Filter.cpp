@@ -344,9 +344,11 @@ float MultiCore::process (float x, int ch, float drive)
 }
 
 //==============================================================================
-void FilterUnit::setup (Core& c, int model, int type, int slope)
+void FilterUnit::setup (Core& c, int model, int type, int slope, int charModel)
 {
     c.model = model; c.type = type; c.slope = slope;
+    if (c.charModel != charModel || charModel > 0) c.cf.configure (charModel);
+    c.charModel = charModel;
     const int eff = effectiveFilterSlope (type, slope);
     c.classic = type == FT_LP && eff == nativeFilterSlope (model);
     if (c.classic) c.chain.configure (model);
@@ -357,14 +359,23 @@ void FilterUnit::setup (Core& c, int model, int type, int slope)
     if (preview) { c.chain.preK = c.chain.postK = 0.0f; c.multi.mv.preK = c.multi.mv.postK = 0.0f; }
 }
 
-void FilterUnit::configure (int model, int type, int slope, bool immediate)
+void FilterUnit::configure (int model, int type, int slope, bool immediate, int charModel)
 {
     if (immediate)
     {
-        setup (cur, model, type, slope);
+        setup (cur, model, type, slope, charModel);
         fade = 0;
         return;
     }
+    if (charModel != cur.charModel)
+    {
+        old = cur;
+        setup (cur, model, type, slope, charModel);
+        fade = kFadeLen;
+        primePending = true;
+        return;
+    }
+    if (charModel > 0) { cur.model = model; cur.type = type; cur.slope = slope; return; }   // the character model ignores those
     if (model == cur.model && type == cur.type && slope == cur.slope) return;
     // Slopes the type doesn't use (Peak) or that map to the same engine change nothing audible
     const int eff = effectiveFilterSlope (type, slope);
@@ -374,7 +385,7 @@ void FilterUnit::configure (int model, int type, int slope, bool immediate)
         return;
     }
     old = cur;
-    setup (cur, model, type, slope);
+    setup (cur, model, type, slope, 0);
     fade = kFadeLen;
     primePending = true;   // done in update(), once the new filter has its coefficients
 }
@@ -382,7 +393,7 @@ void FilterUnit::configure (int model, int type, int slope, bool immediate)
 void FilterUnit::update (float c, float res, double sr)
 {
     c = clampv (c, 20.0f, (float) std::min (20000.0, sr * 0.45));
-    if (cur.classic) cur.chain.update (c, res, sr); else cur.multi.update (c, res, sr);
+    updateCore (cur, c, res, sr);
     if (primePending)
     {
         primePending = false;
@@ -393,7 +404,14 @@ void FilterUnit::update (float c, float res, double sr)
             if (lastStereo) run (cur, hist[1][k], 1);
         }
     }
-    if (fade > 0) { if (old.classic) old.chain.update (c, res, sr); else old.multi.update (c, res, sr); }
+    if (fade > 0) updateCore (old, c, res, sr);
+}
+
+void FilterUnit::updateCore (Core& k, float c, float res, double sr)
+{
+    if (k.charModel > 0) k.cf.update (c, res, charAmt, sr);
+    else if (k.classic) k.chain.update (c, res, sr);
+    else k.multi.update (c, res, sr);
 }
 
 void FilterUnit::setAnalog (float warmth, float bassKeep)
@@ -408,8 +426,8 @@ void FilterUnit::reset()
 {
     for (auto& h : hist) std::fill (std::begin (h), std::end (h), 0.0f);
     primePending = false;
-    cur.chain.reset(); cur.multi.reset();
-    old.chain.reset(); old.multi.reset();
+    cur.chain.reset(); cur.multi.reset(); cur.cf.reset();
+    old.chain.reset(); old.multi.reset(); old.cf.reset();
     fade = 0;
 }
 
@@ -419,6 +437,7 @@ void FilterUnit::copyChannel (int from, int to)
     {
         c->chain.copyChannel (from, to);
         c->multi.copyChannel (from, to);
+        c->cf.copyChannel (from, to);
     }
 }
 

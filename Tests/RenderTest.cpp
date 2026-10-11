@@ -1492,7 +1492,7 @@ int main()
             r->importBrowserPatch (juce::JSON::toString (obj));
             CHECK (r->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f && r->param (P_lfo1Custom + 2 * X)->getValue() < 0.5f, "old patches load with the original LFOs");
             // an old project: state version 6
-            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"6\"");
+            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"6\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (xml), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (o->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f, "old projects load with the original LFOs");
@@ -1713,7 +1713,7 @@ int main()
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->arpStore.toJson() == p->arpStore.toJson() && r->param (P_chdPreset)->getValue() == p->param (P_chdPreset)->getValue(), "arp and chord saved in patches");
             setP (*p, P_arpOn, 1.0f); juce::MemoryBlock mb2; p->getStateInformation (mb2);
-            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"12\"", "stateVersion=\"7\"");
+            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"13\"", "stateVersion=\"7\"");
             {   // a version 7 project has no arpeggiator data at all
                 const int a0 = x2.indexOf (" arp=\"");
                 if (a0 >= 0) { const int a1 = x2.indexOfChar (a0 + 6, '"'); x2 = x2.substring (0, a0) + x2.substring (a1 + 1); }
@@ -1836,7 +1836,7 @@ int main()
             CHECK (p->getEngine().liveSrc[MS_Sidechain].load() > 0.3f, "Sidechain Envelope mod source");
             setP (*p, P_vshSidechain, 1.0f); setP (*p, P_schThresh, -10.0f);
             juce::MemoryBlock mb; p->getStateInformation (mb);
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"8\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"8\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (q->param (P_vshSidechain)->getValue() < 0.5f && std::abs (q->param (P_schThresh)->convertFrom0to1 (q->param (P_schThresh)->getValue()) + 24.0f) < 0.1f, "old projects: sidechain off");
@@ -1956,7 +1956,7 @@ int main()
         {
             auto p = make(); setP (*p, P_uni2Voices, 6.0f);
             juce::MemoryBlock mb; p->getStateInformation (mb);
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"9\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"9\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (juce::roundToInt (q->param (P_uni2Voices)->convertFrom0to1 (q->param (P_uni2Voices)->getValue())) == 1, "old projects: no unison");
@@ -2091,7 +2091,7 @@ int main()
             CHECK (q->msegs.toJson() == p->msegs.toJson() && std::abs (q->param (P_pEnvAmt)->convertFrom0to1 (q->param (P_pEnvAmt)->getValue()) - 7.0f) < 0.01f, "pitch env and MSEGs saved in the project");
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->msegs.toJson() == p->msegs.toJson(), "MSEGs saved in patches");
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"10\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"10\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (std::abs (o->param (P_pEnvAmt)->convertFrom0to1 (o->param (P_pEnvAmt)->getValue())) < 1e-4f, "old projects: no pitch envelope");
@@ -2271,6 +2271,8 @@ int main()
         auto p = make();
         setP (*p, P_arpOn, 1.0f); setP (*p, P_pEnvAmt, 12.0f);
         setP (*p, P_mfOn, 1.0f); setP (*p, P_mfCutoff, 2500.0f); setP (*p, P_mfRes, 0.6f); setP (*p, P_mfSlope, 1.0f);
+        if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ALLSHOTS", {}) == "char")
+        { setP (*p, P_flt1Char, (float) CM_Formant); setP (*p, P_flt1CharAmt, 0.3f); setP (*p, P_filterRes, 10.0f); setP (*p, P_mfChar, (float) CM_Comb); setP (*p, P_mfCharAmt, 0.85f); setP (*p, P_mfCutoff, 300.0f); }
         p->msegs.setPreset (1, 2);
         render (*p, 0.3, chord (0.0, 1.0, { 48 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
@@ -3066,7 +3068,7 @@ int main()
             juce::MemoryBlock mb; p->getStateInformation (mb);
             auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
             CHECK (plain (*q, P_mfOn) > 0.5f && std::abs (plain (*q, P_mfCutoff) - 640.0f) < 1.0f, "saved in projects");
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"11\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"11\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (plain (*o, P_mfOn) < 0.5f && std::abs (plain (*o, P_outGain)) < 1e-4f, "old projects: no Master Filter, Output 0 dB");
@@ -3210,6 +3212,161 @@ int main()
     {
         mixerTests();
         std::cout << (failures == 0 ? "MIXER TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
+    // ---- filter character models (Formant, Power LP, Resonator, DJ...)
+    auto charTests = [&]
+    {
+        std::cout << "Filter character models" << std::endl;
+        // the model on its own (through FilterUnit, as the voice runs it): steady-state gain of a sine
+        auto gainDb = [&] (int cm, float cutoff, float res, float amt, double f, float level = 0.1f)
+        {
+            FilterUnit u; u.setCharacter (amt); u.configure (0, FT_LP, 1, true, cm); u.setDrive (1.0f); u.setMix (1.0f);
+            const int n = (int) (0.4 * sr);
+            double ei = 0, eo = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                if ((i & 15) == 0) u.update (cutoff, res, sr);
+                const float x = (float) (level * std::sin (2.0 * kPi * f * i / sr));
+                float yl, yr; u.processFrame (x, x, false, yl, yr);
+                if (i > n / 2) { ei += (double) x * x; eo += (double) yl * yl; }
+            }
+            return 10.0 * std::log10 ((eo + 1e-20) / (ei + 1e-20));
+        };
+        auto spectrumPeak = [&] (int cm, float cutoff, float res, float amt, double f)
+        {
+            FilterUnit u; u.setCharacter (amt); u.configure (0, FT_LP, 1, true, cm); u.setDrive (1.0f); u.setMix (1.0f);
+            const int n = 32768;
+            std::vector<float> y ((size_t) n * 2, 0.0f);
+            for (int i = 0; i < n + 8192; ++i)
+            {
+                if ((i & 15) == 0) u.update (cutoff, res, sr);
+                const float x = (float) (0.2 * std::sin (2.0 * kPi * f * i / sr));
+                float yl, yr; u.processFrame (x, x, false, yl, yr);
+                if (i >= 8192) y[(size_t) (i - 8192)] = yl * (0.5f - 0.5f * (float) std::cos (2.0 * kPi * (i - 8192) / (n - 1)));
+            }
+            juce::dsp::FFT fft (15); fft.performFrequencyOnlyForwardTransform (y.data());
+            int best = 1; for (int k = 1; k < n / 2; ++k) if (y[(size_t) k] > y[(size_t) best]) best = k;
+            return best * sr / n;
+        };
+        // 1. stability: noise, full resonance, the cutoff swept 20 Hz <-> 20 kHz every 10 ms, every model, both extremes of Character
+        for (int cm = 1; cm < CM_COUNT; ++cm)
+            for (float amt : { 0.0f, 1.0f })
+            {
+                FilterUnit u; u.setCharacter (amt); u.configure (0, FT_LP, 1, true, cm); u.setDrive (4.0f); u.setMix (1.0f);
+                uint32_t z = 17; bool finite = true; float peak = 0;
+                for (int i = 0; i < (int) (0.5 * sr); ++i)
+                {
+                    if ((i & 15) == 0) { const double ph = std::fmod (i / (0.01 * sr), 2.0); u.update ((float) (20.0 * std::pow (1000.0, ph < 1.0 ? ph : 2.0 - ph)), 25.0f, sr); }
+                    z = z * 1664525u + 1013904223u; const float x = ((z >> 8) / 16777216.0f - 0.5f) * 1.6f;
+                    float yl, yr; u.processFrame (x, -x, true, yl, yr);
+                    finite &= std::isfinite (yl) && std::isfinite (yr); peak = std::max ({ peak, std::abs (yl), std::abs (yr) });
+                }
+                CHECK (finite && peak < 16.0f, juce::String ("stable under abuse: ") + charModelInfo (cm).name + " (character " + juce::String (amt) + ", peak " + juce::String (peak, 2) + ")");
+            }
+        // 2. behaviour
+        CHECK (gainDb (CM_Formant, 1000.0f, 8.0f, 0.0f, 730.0) > gainDb (CM_Formant, 1000.0f, 8.0f, 0.0f, 1500.0) + 6.0, "Formant: vowel A peaks at its first formant (730 Hz)");
+        CHECK (gainDb (CM_Formant, 2000.0f, 8.0f, 0.0f, 1460.0) > gainDb (CM_Formant, 2000.0f, 8.0f, 0.0f, 730.0) + 6.0, "Formant: Cutoff shifts the formants (x2)");
+        CHECK (gainDb (CM_Formant2, 1000.0f, 8.0f, 0.0f, 850.0) > gainDb (CM_Formant2, 1000.0f, 8.0f, 0.0f, 1600.0) + 6.0, "Formant 2: its own vowel set (850 Hz)");
+        CHECK (std::abs (gainDb (CM_VowelMorph, 1000.0f, 8.0f, 0.0f, 790.0) - gainDb (CM_VowelMorph, 1000.0f, 8.0f, 1.0f, 790.0)) < 0.01, "Vowel Morph loops: Character 0 and 1 are the same vowel");
+        CHECK (gainDb (CM_PowerLP, 1000.0f, 1.0f, 0.0f, 100.0, 0.05f) > gainDb (CM_PowerLP, 1000.0f, 1.0f, 0.0f, 10000.0, 0.05f) + 50.0, "Power LP: 24 dB low pass");
+        CHECK (gainDb (CM_PowerLP, 1000.0f, 20.0f, 0.0f, 1000.0, 0.05f) > -3.0, "Power LP: stays loud at high resonance");
+        CHECK (gainDb (CM_PowerBP, 1000.0f, 4.0f, 0.0f, 1000.0, 0.05f) > gainDb (CM_PowerBP, 1000.0f, 4.0f, 0.0f, 100.0, 0.05f) + 20.0, "Power BP: band pass");
+        {
+            // All Pass: notches (somewhere near the cutoff the sound dips deep), and the level elsewhere stays put
+            double lowest = 0; for (double f = 300; f < 3000; f *= 1.03) lowest = std::min (lowest, gainDb (CM_AllPass, 1000.0f, 2.0f, 0.0f, f));
+            CHECK (lowest < -15.0 && std::abs (gainDb (CM_AllPass, 1000.0f, 2.0f, 0.0f, 60.0)) < 1.0, "All Pass: a deep notch, flat elsewhere");
+            double lowestP = 0; for (double f = 200; f < 5000; f *= 1.03) lowestP = std::min (lowestP, gainDb (CM_Phaser, 1000.0f, 2.0f, 0.5f, f));
+            CHECK (lowestP < -15.0, "Phaser Filter: notches");
+        }
+        {
+            // Resonator / Comb: peaks at the cutoff frequency's harmonics
+            const double on = gainDb (CM_Resonator, 200.0f, 12.0f, 0.9f, 400.0), off = gainDb (CM_Resonator, 200.0f, 12.0f, 0.9f, 300.0);
+            CHECK (on > off + 10.0, "Resonator: rings at the cutoff's harmonics (400 Hz vs 300 Hz: " + juce::String (on - off, 1) + " dB)");
+            CHECK (gainDb (CM_Comb, 200.0f, 12.0f, 0.95f, 400.0) > gainDb (CM_Comb, 200.0f, 12.0f, 0.95f, 300.0) + 6.0, "Comb +: peaks at multiples");
+            CHECK (gainDb (CM_Comb, 200.0f, 12.0f, 0.05f, 300.0) > gainDb (CM_Comb, 200.0f, 12.0f, 0.05f, 400.0) + 6.0, "Comb -: peaks between them");
+            CHECK (std::abs (gainDb (CM_Comb, 200.0f, 12.0f, 0.5f, 400.0)) < 0.1, "Comb centred: off");
+        }
+        {
+            // DJ: centre = the dry sound exactly; left = low pass; right = high pass
+            FilterUnit u; u.setCharacter (0.5f); u.configure (0, FT_LP, 1, true, CM_DJ); u.setDrive (1.0f); u.setMix (1.0f);
+            bool same = true;
+            for (int i = 0; i < 4800; ++i) { if ((i & 15) == 0) u.update (1000.0f, 1.5f, sr); const float x = (float) std::sin (0.01 * i * i) * 0.3f; float yl, yr; u.processFrame (x, x, false, yl, yr); same &= yl == x; }
+            CHECK (same, "DJ Filter centred: bit for bit the dry sound");
+            CHECK (gainDb (CM_DJ, 1000.0f, 1.5f, 0.1f, 8000.0) < -20.0 && gainDb (CM_DJ, 1000.0f, 1.5f, 0.1f, 80.0) > -1.0, "DJ Filter left: low pass");
+            CHECK (gainDb (CM_DJ, 1000.0f, 1.5f, 0.9f, 80.0) < -20.0 && gainDb (CM_DJ, 1000.0f, 1.5f, 0.9f, 8000.0) > -1.0, "DJ Filter right: high pass");
+        }
+        {
+            const double shifted = spectrumPeak (CM_Shifter, 20000.0f, 1.0f, 0.75f, 1000.0);
+            std::cout << "  Shifter +1 kHz: a 1 kHz sine comes out at " << juce::String (shifted, 1) << " Hz" << std::endl;
+            CHECK (std::abs (shifted - 2000.0) < 30.0, "Shifter: shifts by the Character amount");
+            const double ring = spectrumPeak (CM_Ring, 1000.0f, 6.0f, 1.0f, 1000.0);
+            CHECK (std::abs (ring - 2000.0) < 30.0 || ring < 30.0, "Ring Filter: ring modulates at the cutoff (sum / difference)");
+            CHECK (gainDb (CM_AnalogueLP, 1000.0f, 1.0f, 0.5f, 100.0, 0.05f) > gainDb (CM_AnalogueLP, 1000.0f, 1.0f, 0.5f, 10000.0, 0.05f) + 40.0, "Analogue LP: a 4-pole low pass");
+            CHECK (gainDb (CM_LPResample, 1000.0f, 1.0f, 1.0f, 100.0) > gainDb (CM_LPResample, 1000.0f, 1.0f, 1.0f, 8000.0) + 15.0, "LP + Resample: low pass");
+            CHECK (gainDb (CM_DecimatorLP, 1000.0f, 1.0f, 0.2f, 100.0) > gainDb (CM_DecimatorLP, 1000.0f, 1.0f, 0.2f, 8000.0) + 15.0, "Decimator LP: low pass");
+            const double dpA = gainDb (CM_DualPeak, 500.0f, 10.0f, 0.5f, 500.0), dpB = gainDb (CM_DualPeak, 500.0f, 10.0f, 0.5f, 500.0 * std::pow (2.0, 1.625)), dpMid = gainDb (CM_DualPeak, 500.0f, 10.0f, 0.5f, 900.0);
+            CHECK (dpA > dpMid + 6.0 && dpB > dpMid + 6.0, "Dual Peak: two peaks");
+            // Wave Shaper: more harmonics with more Character
+            auto thd = [&] (float amt)
+            {
+                FilterUnit u; u.setCharacter (amt); u.configure (0, FT_LP, 1, true, CM_WaveShaper); u.setDrive (1.0f); u.setMix (1.0f);
+                double e = 0, eh = 0; float prev = 0;
+                for (int i = 0; i < 24000; ++i) { if ((i & 15) == 0) u.update (20000.0f, 0.1f, sr); const float x = 0.5f * (float) std::sin (2.0 * kPi * 100.0 * i / sr); float yl, yr; u.processFrame (x, x, false, yl, yr); if (i > 4800) { e += yl * yl; eh += (yl - prev) * (yl - prev); } prev = yl; }
+                return eh / std::max (1e-12, e);
+            };
+            CHECK (thd (1.0f) > thd (0.0f) * 4.0, "Wave Shaper: Character adds harmonics");
+            // Resampler: Cutoff sets the rate (a 3 kHz sine through a 2 kHz rate aliases down)
+            CHECK (std::abs (spectrumPeak (CM_Resampler, 2000.0f, 1.0f, 0.0f, 3000.0) - 1000.0) < 30.0, "Resampler: aliases at the rate Cutoff sets");
+        }
+        // 3. in the synth: Off is exactly as before; switching models while a note plays doesn't blow up
+        {
+            auto p = make(); setP (*p, P_flt1Char, (float) CM_Formant); setP (*p, P_flt2Char, (float) CM_Comb); setP (*p, P_flt1CharAmt, 0.3f);
+            juce::AudioBuffer<float> c; render (*p, 0.3, chord (0.0, 1.5, { 48, 55 }), &c);
+            bool ok = true; float peak = 0;
+            for (int k = 1; k < CM_COUNT; ++k)
+            {
+                setP (*p, P_flt1Char, (float) k); setP (*p, P_filter2On, k % 2 == 0 ? 1.0f : 0.0f); setP (*p, P_flt2Char, (float) (CM_COUNT - k));
+                auto st = render (*p, 0.06, {}); ok &= st.finite; peak = std::max (peak, st.peak);
+            }
+            CHECK (ok && peak < 4.0f, "every model while a note plays: finite, bounded (peak " + juce::String (peak, 2) + ")");
+            auto m = make(); setP (*m, P_mfOn, 1.0f); setP (*m, P_mfChar, (float) CM_Formant);
+            auto st = render (*m, 0.5, chord (0.0, 0.4, { 48 }));
+            setP (*m, P_mfChar, (float) CM_Off); auto st2 = render (*m, 0.3, chord (0.0, 0.2, { 50 }));
+            CHECK (st.finite && st2.finite && st.peak < 4.0f, "Master Filter character models, on and off");
+            CHECK (tg::meta (P_flt1CharAmt).modulatable && tg::meta (P_flt1Char).group == MutGroup::None, "Character is a Mod Matrix destination; models aren't mutated");
+            // saved; old patches on their classic models
+            auto plain = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+            auto a = make(); setP (*a, P_flt2Char, (float) CM_DualPeak); setP (*a, P_mfChar, (float) CM_DJ);
+            auto r = make(); r->importBrowserPatch (a->exportBrowserPatch());
+            CHECK (juce::roundToInt (plain (*r, P_flt2Char)) == CM_DualPeak && juce::roundToInt (plain (*r, P_mfChar)) == CM_DJ, "character models saved in patches");
+            auto json = juce::JSON::parse (a->exportBrowserPatch());
+            if (auto* extra = json["plugin"].getDynamicObject()) for (auto id : { "flt1Char", "flt1CharAmt", "flt2Char", "flt2CharAmt", "mfChar", "mfCharAmt" }) extra->removeProperty (id);
+            auto o = make(); setP (*o, P_flt1Char, (float) CM_Ring); o->importBrowserPatch (juce::JSON::toString (json));
+            CHECK (juce::roundToInt (plain (*o, P_flt1Char)) == CM_Off && juce::roundToInt (plain (*o, P_flt2Char)) == CM_Off, "older patches: classic models");
+        }
+        // 4. CPU per voice, per model
+        {
+            juce::String line;
+            for (int cm = 0; cm < CM_COUNT; ++cm)
+            {
+                FilterUnit u; u.setCharacter (0.6f); u.configure (0, FT_LP, 1, true, cm); u.setDrive (2.0f); u.setMix (1.0f);
+                const int n = (int) sr;
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                float acc = 0;
+                for (int i = 0; i < n; ++i) { if ((i & 15) == 0) u.update (800.0f + 400.0f * (i & 255) / 255.0f, 8.0f, sr); float yl, yr; u.processFrame ((float) std::sin (0.05 * i), (float) std::cos (0.05 * i), true, yl, yr); acc += yl; }
+                const double secs = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+                line << charModelInfo (cm).name << " " << juce::String (secs * 100.0, 3) << "%  ";
+                if (acc == 12345.0f) std::cout << "";
+            }
+            std::cout << "  CPU per stereo voice (% of a core): " << line << std::endl;
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_CHARONLY", {}).isNotEmpty())
+    {
+        charTests();
+        std::cout << (failures == 0 ? "CHAR TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
 
@@ -3552,9 +3709,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 12"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 13"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"12\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"13\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -4650,6 +4807,7 @@ int main()
     layoutTests();
     masterTests();
     mixerTests();
+    charTests();
     hardTests();
     lfoTests();
     arpTests();

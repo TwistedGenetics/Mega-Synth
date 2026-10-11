@@ -33,6 +33,31 @@ public:
             g.setColour (grid); g.drawHorizontalLine ((int) yFor (db), r.getX(), r.getRight());
             g.setColour (text); g.drawText (juce::String ((int) db) + " dB", (int) r.getX() + 4, (int) yFor (db) - 12, 40, 11, juce::Justification::left);
         }
+        if (st.on && st.charModel > 0)
+        {
+            const auto& info = tg::charModelInfo (st.charModel);
+            if (charMag.empty() && ! info.curveApprox) computeCharCurve();
+            if (info.curveApprox || charMag.empty())
+            {
+                g.setColour (text);
+                g.setFont (juce::Font (juce::FontOptions (12.0f)));
+                g.drawText (juce::String (info.name) + ": changes the sound over time, no fixed curve", r, juce::Justification::centred);
+                return;
+            }
+            juce::Path path;
+            const int N = juce::jmax (2, (int) r.getWidth());
+            for (int i = 0; i < N; ++i)
+            {
+                const float f = std::exp (lo + (hi - lo) * (float) i / (float) (N - 1));
+                const int bin = juce::jlimit (1, (int) charMag.size() - 1, (int) std::lround (f / 48000.0f * (float) kFftN));
+                const float x = xFor (f), y = yFor (charMag[(size_t) bin]);
+                if (i == 0) path.startNewSubPath (x, y); else path.lineTo (x, y);
+            }
+            g.setColour (curve); g.strokePath (path, juce::PathStrokeType (2.0f));
+            g.setColour (text); g.setFont (juce::Font (juce::FontOptions (10.5f)));
+            g.drawText (info.name, r.reduced (6, 2), juce::Justification::topRight);
+            return;
+        }
         if (! st.on)
         {
             g.setColour (text);
@@ -65,17 +90,46 @@ private:
         tg::MasterFilter::Settings st;
         st.on = plain (tg::P_mfOn) > 0.5f; st.type = juce::roundToInt (plain (tg::P_mfType)); st.steep = juce::roundToInt (plain (tg::P_mfSlope)) == 1;
         st.cutoff = plain (tg::P_mfCutoff); st.res = plain (tg::P_mfRes); st.driveDb = plain (tg::P_mfDrive); st.mix = plain (tg::P_mfMix);
+        st.charModel = juce::roundToInt (plain (tg::P_mfChar)); st.charAmt = plain (tg::P_mfCharAmt);
         return st;
     }
     void timerCallback() override
     {
         juce::String key;
-        for (int i : { (int) tg::P_mfOn, (int) tg::P_mfType, (int) tg::P_mfSlope, (int) tg::P_mfCutoff, (int) tg::P_mfRes, (int) tg::P_mfMix })
+        for (int i : { (int) tg::P_mfOn, (int) tg::P_mfType, (int) tg::P_mfSlope, (int) tg::P_mfCutoff, (int) tg::P_mfRes, (int) tg::P_mfMix,
+                       (int) tg::P_mfChar, (int) tg::P_mfCharAmt })
             key << proc.param (i)->getValue() << ",";
-        if (key != lastKey) { lastKey = key; repaint(); }
+        if (key != lastKey) { lastKey = key; computeCharCurve(); repaint(); }
+    }
+    // a character model's curve: the impulse response of the real filter code, at a tiny level
+    static constexpr int kFftOrder = 13, kFftN = 1 << kFftOrder;
+    void computeCharCurve()
+    {
+        const auto st = settings();
+        charMag.clear();
+        if (! st.on || st.charModel <= 0 || tg::charModelInfo (st.charModel).curveApprox) return;
+        tg::FilterUnit u;
+        u.setCharacter (st.charAmt);
+        u.configure (0, tg::FT_LP, 1, true, st.charModel);
+        u.setDrive (1.0f); u.setMix (st.mix);
+        u.update (st.cutoff, 0.1f + 24.9f * st.res, 48000.0);
+        std::vector<float> ir ((size_t) kFftN * 2, 0.0f);
+        const float amp = 1.0e-3f;
+        for (int i = 0; i < kFftN; ++i)
+        {
+            if ((i & 15) == 0) u.update (st.cutoff, 0.1f + 24.9f * st.res, 48000.0);
+            float yl, yr;
+            u.processFrame (i == 0 ? amp : 0.0f, 0.0f, false, yl, yr);
+            ir[(size_t) i] = yl / amp;
+        }
+        juce::dsp::FFT fft (kFftOrder);
+        fft.performFrequencyOnlyForwardTransform (ir.data());
+        charMag.resize ((size_t) kFftN / 2);
+        for (size_t k = 0; k < charMag.size(); ++k) charMag[k] = 20.0f * std::log10 (std::max (1.0e-6f, ir[k]));
     }
     MegaSynthProcessor& proc;
     juce::String lastKey;
+    std::vector<float> charMag;
 };
 
 } // namespace tgui

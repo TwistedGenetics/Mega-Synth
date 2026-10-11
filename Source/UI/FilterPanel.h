@@ -12,7 +12,7 @@ namespace tgui
 class Knob;
 
 // The parameters of one filter
-struct FilterParams { int mode, type, slope, cutoff, res, drive, mix, env, lfoAmt, lfoSrc, keyTrack; };
+struct FilterParams { int mode, type, slope, cutoff, res, drive, mix, env, lfoAmt, lfoSrc, keyTrack, charModel, charAmt; };
 const FilterParams& filterParams (int which);   // 0 = Filter 1, 1 = Filter 2
 
 // A row of buttons attached to a choice parameter (or, with paramIndex -1, a local selection).
@@ -53,6 +53,7 @@ private:
     std::vector<float> mag[3];     // dB per FFT bin: Filter 1, Filter 2, combined
     float cutoff[2] { 1000.0f, 1000.0f };
     int routing = 0, sel = 0;      // routing: 0 off, 1 serial, 2 parallel, 3 stereo split
+    bool noCurve[2] { false, false };   // a character model that changes over time: no fixed curve to draw
     juce::String caption;
 };
 
@@ -74,14 +75,14 @@ private:
     Segmented which, routing;
     juce::OwnedArray<Segmented> type, slope;            // [filter]
     juce::OwnedArray<Knob> knobs[2];
-    juce::OwnedArray<juce::ComboBox> lfoSrc;
-    juce::OwnedArray<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoAtt;
+    juce::OwnedArray<juce::ComboBox> lfoSrc, charBox;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoAtt, charAtt;
     juce::ComboBox model;
     juce::ToggleButton f2On { "Filter 2 On" }, split { "Stereo Split" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> f2OnAtt, splitAtt;
     juce::TextButton copyBtn { "Copy 1 > 2" };
     std::unique_ptr<Knob> balance;
-    juce::Label modelCap, lfoCap, typeCap, slopeCap, info;
+    juce::Label modelCap, lfoCap, typeCap, slopeCap, charCap, info;
     FilterResponse response;
 };
 

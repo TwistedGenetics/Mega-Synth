@@ -245,12 +245,19 @@ struct MultiCore
     float process (float x, int ch, float drive);
 };
 
+} // namespace tg
+#include "CharFilter.h"   // the character models (uses Svf and OnePole above)
+namespace tg
+{
+
 //==============================================================================
 class FilterUnit
 {
 public:
     // model: classic model (filterMode); type: FilterType; slope: 0..3 (6/12/18/24 dB)
-    void configure (int model, int type, int slope, bool immediate);
+    // charModel: a character model (CharModel; CM_Off = the classic model / type / slope as before)
+    void configure (int model, int type, int slope, bool immediate, int charModel = 0);
+    void setCharacter (float amount) { charAmt = clampv (amount, 0.0f, 1.0f); }
     void update (float cutoff, float res, double sr);     // clamps cutoff to 20 Hz .. min (20 kHz, 0.45 fs)
     void setAnalog (float warmth, float bassKeep);
     void setDrive (float k)
@@ -296,10 +303,16 @@ private:
         FilterChain chain;
         MultiCore multi;
         bool classic = true;
-        int model = -1, type = -1, slope = -1;
+        int model = -1, type = -1, slope = -1, charModel = 0;
+        CharFilter cf;
     };
-    inline float run (Core& c, float x, int ch) { return c.classic ? c.chain.process (x, ch, drive) : c.multi.process (x, ch, drive); }
-    void setup (Core& c, int model, int type, int slope);
+    inline float run (Core& c, float x, int ch)
+    {
+        if (c.charModel > 0) return c.cf.process (filterInputShape (x, drive, warm), ch);
+        return c.classic ? c.chain.process (x, ch, drive) : c.multi.process (x, ch, drive);
+    }
+    void setup (Core& c, int model, int type, int slope, int charModel);
+    void updateCore (Core& c, float cutoff, float res, double sr);
 
     Core cur, old;
     // the last few milliseconds of input: a newly chosen filter is run over them first, so it
@@ -310,7 +323,7 @@ private:
     bool lastStereo = false, primePending = false;
     int fade = 0;
     float drive = 1.0f, comp = 1.0f, mix = 1.0f;
-    float warm = 0.0f, keep = 0.0f;
+    float warm = 0.0f, keep = 0.0f, charAmt = 0.5f;
     bool preview = false;
 };
 

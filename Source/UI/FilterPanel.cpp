@@ -10,8 +10,8 @@ namespace tgui
 const FilterParams& filterParams (int w)
 {
     static const FilterParams f[2] = {
-        { P_filterMode, P_filterType, P_filterSlope, P_filterCutoff, P_filterRes, P_filterDrive, P_filterMix, P_fEnvAmt, P_filterLfoAmt, P_filterLfoSrc, P_filterKeyTrack },
-        { P_filter2Mode, P_filter2Type, P_filter2Slope, P_filter2Cutoff, P_filter2Res, P_filter2Drive, P_filter2Mix, P_filter2EnvAmt, P_filter2LfoAmt, P_filter2LfoSrc, P_filter2KeyTrack } };
+        { P_filterMode, P_filterType, P_filterSlope, P_filterCutoff, P_filterRes, P_filterDrive, P_filterMix, P_fEnvAmt, P_filterLfoAmt, P_filterLfoSrc, P_filterKeyTrack, P_flt1Char, P_flt1CharAmt },
+        { P_filter2Mode, P_filter2Type, P_filter2Slope, P_filter2Cutoff, P_filter2Res, P_filter2Drive, P_filter2Mix, P_filter2EnvAmt, P_filter2LfoAmt, P_filter2LfoSrc, P_filter2KeyTrack, P_flt2Char, P_flt2CharAmt } };
     return f[w & 1];
 }
 
@@ -91,7 +91,7 @@ void FilterResponse::update (int selected)
     for (int w = 0; w < 2; ++w)
     {
         const auto& f = filterParams (w);
-        for (int i : { f.mode, f.type, f.slope, f.cutoff, f.res, f.mix }) key << juce::String (pv (i), 2) << "|";
+        for (int i : { f.mode, f.type, f.slope, f.cutoff, f.res, f.mix, f.charModel, f.charAmt }) key << juce::String (pv (i), 2) << "|";
     }
     for (int i : { P_filter2On, P_filterRouting, P_filterStereoSplit, P_filterBalance, P_warmth, P_bassKeep }) key << juce::String (pv (i), 2) << "|";
     key << selected;
@@ -113,7 +113,10 @@ void FilterResponse::update (int selected)
         const auto& f = filterParams (w);
         u[w].setPreview (true);
         u[w].setAnalog (pv (P_warmth), pv (P_bassKeep));
-        u[w].configure (juce::roundToInt (pv (f.mode)), juce::roundToInt (pv (f.type)), juce::roundToInt (pv (f.slope)), true);
+        const int cm = juce::roundToInt (pv (f.charModel));
+        u[w].setCharacter (pv (f.charAmt));
+        u[w].configure (juce::roundToInt (pv (f.mode)), juce::roundToInt (pv (f.type)), juce::roundToInt (pv (f.slope)), true, cm);
+        noCurve[w] = cm > 0 && charModelInfo (cm).curveApprox;
         u[w].setDrive (1.0f);   // the curve shows the filter; Drive adds saturation on top
         u[w].setMix (pv (f.mix));
         u[w].update (pv (f.cutoff), pv (f.res), fs);
@@ -148,6 +151,8 @@ void FilterResponse::update (int selected)
         const auto& f = filterParams (w);
         const int m = juce::roundToInt (pv (f.mode)), t = juce::roundToInt (pv (f.type)), s = juce::roundToInt (pv (f.slope));
         const int eff = effectiveFilterSlope (t, s);
+        if (const int cm = juce::roundToInt (pv (f.charModel)); cm > 0)
+            return juce::String (charModelInfo (cm).name) + (charModelInfo (cm).curveApprox ? " (no fixed curve)" : "");
         juce::String d = kFilterTypeKeys[juce::jlimit (0, 5, t)];
         d = d.toUpperCase();
         if (filterSlopeMask (t) != 0) d << " " << kFilterSlopeKeys[eff];
@@ -218,7 +223,15 @@ void FilterResponse::paint (juce::Graphics& g)
         g.fillPath (f);
     };
     const juce::Colour cols[2] = { kF1, kF2 };
-    if (routing == 0)
+    if (noCurve[0] || (routing != 0 && noCurve[1]))
+    {
+        // a model that changes over time (resampling, shifting, ring modulation): there's no fixed curve to draw
+        g.setColour (col::muted);
+        g.setFont (juce::Font (juce::FontOptions (12.0f)));
+        g.drawFittedText ("This character model changes the sound over time\n(sample rate, frequency shift or ring modulation),\nso it has no fixed curve. Listen instead!",
+                          plot.toNearestInt().reduced (10), juce::Justification::centred, 3);
+    }
+    else if (routing == 0)
     {
         auto p = curve (mag[0]);
         fillUnder (p, kF1);
@@ -275,7 +288,11 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
     }
     typeCap.setText ("Type", juce::dontSendNotification);
     slopeCap.setText ("Slope (dB / octave)", juce::dontSendNotification);
-    modelCap.setText ("Model (character)", juce::dontSendNotification);
+    modelCap.setText ("Model", juce::dontSendNotification);
+    charCap.setColour (juce::Label::textColourId, col::muted);
+    charCap.setFont (juce::Font (juce::FontOptions (11.5f)));
+    charCap.setText ("Character", juce::dontSendNotification);
+    addAndMakeVisible (charCap);
     lfoCap.setText ("LFO", juce::dontSendNotification);
     info.setColour (juce::Label::textColourId, col::muted);
     info.setFont (juce::Font (juce::FontOptions (11.5f)));
@@ -331,8 +348,15 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
         box->setTooltip ("Which LFO LFO Amt uses (rate, shape and depth are on Modulation > LFOs)");
         addChildComponent (box);
 
+        auto* cb = charBox.add (new juce::ComboBox());
+        for (int i = 0; i < kListCharModel.size; ++i) cb->addItem (kListCharModel.labels[i], i + 1);
+        cb->addSeparator();
+        charAtt.add (new juce::AudioProcessorValueTreeState::ComboBoxAttachment (proc.apvts, kParamIds[f.charModel], tagParam (*cb, f.charModel)));
+        cb->setTooltip ("Character models (Formant, Power LP, Resonator, DJ Filter...): Off uses the Model, Type and Slope. "
+                        "A character model replaces them; the Character knob does what the model says below.");
+        addChildComponent (cb);
         const std::pair<int, const char*> ks[] = { { f.cutoff, "Cutoff" }, { f.res, "Resonance" }, { f.drive, "Drive" }, { f.mix, "Mix" },
-                                                   { f.env, "Env Amt" }, { f.lfoAmt, "LFO Amt" }, { f.keyTrack, "Key Track" } };
+                                                   { f.env, "Env Amt" }, { f.lfoAmt, "LFO Amt" }, { f.keyTrack, "Key Track" }, { f.charAmt, "Character" } };
         for (auto& [idx, cap] : ks)
         {
             auto* k = knobs[w].add (new Knob (proc, idx, cap, c));
@@ -370,7 +394,7 @@ void FilterPanel::show (int w)
     for (int i = 0; i < 2; ++i)
     {
         const bool v = i == sel;
-        type[i]->setVisible (v); slope[i]->setVisible (v); lfoSrc[i]->setVisible (v);
+        type[i]->setVisible (v); slope[i]->setVisible (v); lfoSrc[i]->setVisible (v); charBox[i]->setVisible (v);
         for (auto* k : knobs[i]) k->setVisible (v);
     }
     sync();
@@ -401,8 +425,25 @@ void FilterPanel::sync()
     type[sel]->setAlpha (a); slope[sel]->setAlpha (a); model.setAlpha (a);
 
     const bool classic = t == FT_LP && effectiveFilterSlope (t, s) == nativeFilterSlope (m);
+    const int cm = juce::roundToInt (plain (f.charModel));
+    // a character model replaces the Model / Type / Slope: lock those, explain the model and its Character knob
+    type[sel]->setMask (cm > 0 ? 0 : -1);
+    slope[sel]->setMask (cm > 0 ? 0 : filterSlopeMask (t));
+    if (cm > 0) slope[sel]->setShown (-2);
+    type[sel]->setAlpha (cm > 0 ? 0.35f : a); slope[sel]->setAlpha (cm > 0 ? 0.35f : a); model.setAlpha (cm > 0 ? 0.4f : a);
+    auto* ck = knobs[sel][7];
+    ck->setAlpha (cm > 0 ? a : 0.4f);
+    ck->slider.setTooltip (cm > 0 ? juce::String ("Character: ") + charModelInfo (cm).character : juce::String ("Character: used by the character models (choose one above)"));
     juce::String txt;
     if (sel == 1 && ! on2) txt = "Filter 2 is off: switch it on above.\n";
+    if (cm > 0)
+    {
+        txt << charModelInfo (cm).about << "  Character: " << charModelInfo (cm).character << ".";
+        if (charModelInfo (cm).curveApprox) txt << " (Changes over time: no fixed curve.)";
+        info.setText (txt, juce::dontSendNotification);
+        response.update (sel);
+        return;
+    }
     if (t == FT_PEAK) txt << "Peak / Bell: Resonance sets the boost (+2 to +18 dB) and its width.";
     else if (classic) txt << "Classic circuit: the original model, exactly.";
     else txt << "Multimode filter with the model's character.";
@@ -424,7 +465,7 @@ void FilterPanel::paint (juce::Graphics& g)
     g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
     g.drawText ("Filter", juce::Rectangle<float> (r.getX() + 22, r.getY() + 6, 60, 22), juce::Justification::centredLeft);
     g.setColour (col::border);
-    g.drawVerticalLine (330, 168.0f, 246.0f);
+    g.drawVerticalLine (334, 168.0f, 246.0f);
     g.drawVerticalLine (676, 168.0f, 246.0f);
     g.setColour (col::muted);
     g.setFont (juce::Font (juce::FontOptions (10.5f, juce::Font::bold)));
@@ -444,15 +485,17 @@ void FilterPanel::resized()
 
     typeCap.setBounds (14, 40, 200, 16);
     slopeCap.setBounds (418, 40, 200, 16);
-    modelCap.setBounds (14, 98, 200, 16);
-    model.setBounds (14, 115, 240, 26);
-    info.setBounds (266, 104, 404, 40);
+    modelCap.setBounds (14, 98, 160, 16);
+    model.setBounds (14, 115, 170, 26);
+    charCap.setBounds (194, 98, 160, 16);
+    info.setBounds (376, 98, 384, 52);
     for (int w = 0; w < 2; ++w)
     {
         type[w]->setBounds (14, 57, 390, 30);
         slope[w]->setBounds (418, 57, 252, 30);
-        int x = 14;
-        for (int i = 0; i < 4; ++i) { knobs[w][i]->setBounds (x, 168, 72, 84); x += 76; }
+        charBox[w]->setBounds (194, 115, 170, 26);
+        int x = 10;
+        for (int i : { 0, 1, 2, 3, 7 }) { knobs[w][i]->setBounds (x, 168, 62, 84); x += 64; }
         x = 340;
         knobs[w][4]->setBounds (x, 168, 72, 84); x += 76;
         knobs[w][5]->setBounds (x, 168, 72, 84); x += 76;

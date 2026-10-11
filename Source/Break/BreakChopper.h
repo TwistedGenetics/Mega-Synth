@@ -65,7 +65,10 @@ public:
     int numSlices (int k = 0) const { return wav[k] != nullptr ? d.brk[k].nSlices : 0; }
 
     // ---- control (audio thread, between renders)
-    struct Trigger { int slice = 0; float vel = 1.0f, pitch = 0.0f; bool reverse = false; bool fromKey = false; int brk = 0, key = -1; float level = 1.0f; bool noChoke = false; };
+    // stretch: -1 = no override (then the slice's, then the break's), else Repitch / Cyclic / Clean;
+    // cycleMs: 0 = no override (then the slice's, then Cycle Length)
+    struct Trigger { int slice = 0; float vel = 1.0f, pitch = 0.0f; bool reverse = false; bool fromKey = false; int brk = 0, key = -1; float level = 1.0f; bool noChoke = false;
+                     int stretch = -1; float cycleMs = 0.0f; };
     void trigger (const Trigger& t, const Settings& s)
     {
         const int bi = std::clamp (t.brk, 0, kBreaks - 1);
@@ -91,6 +94,9 @@ public:
         v.pl = std::min (1.0f, 1.0f - pan); v.pr = std::min (1.0f, 1.0f + pan);
         v.attack = std::max (0.0015f, sl.attack); v.decay = sl.decay;
         v.semis = s.pitch + sl.pitch + t.pitch;
+        // per-hit stretch: the step's setting wins, then the slice's, then the break's
+        v.stretch = t.stretch >= 0 ? std::clamp (t.stretch, 0, 2) : (sl.stretch > 0 ? std::clamp (sl.stretch - 1, 0, 2) : -1);
+        v.cycleMs = t.cycleMs > 0.0f ? t.cycleMs : sl.cycleMs;
         v.startHead();
     }
     // a key let go: looping slices stop, one-shots play on (the slice that key started, whichever
@@ -224,7 +230,8 @@ private:
     struct Voice
     {
         bool on = false, held = false, loop = false, whole = false;
-        int slice = 0, choke = 1, dir = 1, brk = 0, key = -1;
+        int slice = 0, choke = 1, dir = 1, brk = 0, key = -1, stretch = -1;
+        float cycleMs = 0.0f;
         double s0 = 0, s1 = 0;            // the (trimmed) slice in sample frames
         float gain = 1.0f, pl = 1.0f, pr = 1.0f, attack = 0.002f, decay = 0.0f, semis = 0.0f;
         int64_t age = 0;                  // output samples since the start
@@ -257,11 +264,11 @@ private:
     void renderVoice (Voice& v, float* bl, float* br, int n, const Settings& s, double tempoRatio, double fileRate)
     {
         const WaveSample& w = *wav[v.brk];
-        const int stretch = v.whole ? (int) Repitch : s.b[v.brk].stretch;
+        const int stretch = v.whole ? (int) Repitch : (v.stretch >= 0 ? v.stretch : s.b[v.brk].stretch);
         const double pitchRate = std::pow (2.0, v.semis / 12.0) * fileRate;   // how fast the heads read (pitch only)
         const double adv = tempoRatio * fileRate;                            // how fast the slice is gone through
         const double repRate = pitchRate * tempoRatio;                       // repitch: both together
-        const int C = std::max (16, (int) (s.cycleMs * 0.001 * sr));
+        const int C = std::max (16, (int) ((v.cycleMs > 0.0f ? juce::jlimit (10.0f, 200.0f, v.cycleMs) : s.cycleMs) * 0.001 * sr));
         const int X = std::max (8, (int) (juce::jlimit (0.0f, 1.0f, s.xfade) * 0.5f * (float) C));   // crossfade (up to half a cycle)
         const int W = std::max (64, (int) (s.cycleMs * 0.001 * sr * 1.5)) & ~1;   // the clean window, its hop is half
         const int Ha = W / 2;

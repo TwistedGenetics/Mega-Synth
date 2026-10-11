@@ -168,6 +168,8 @@ inline const char* const kBsAltKeys[]   = { "off","1bar","2bar","4bar" };
 inline const char* const kBsAltLabels[] = { "Off","Every other bar","Every other 2 bars","Every other 4 bars" };
 inline const char* const kBsAltBreakKeys[]   = { "1","2","3" };
 inline const char* const kBsAltBreakLabels[] = { "Break 1","Break 2","Break 3" };
+inline const char* const kBsToolSrcKeys[]   = { "active","all" };
+inline const char* const kBsToolSrcLabels[] = { "From the Active Break","From all three breaks" };
 inline const char* const kBcSnapKeys[]   = { "none","zero","transient","g8","g16","g32" };
 inline const char* const kBcSnapLabels[] = { "Snap: none","Snap: zero crossing","Snap: transient","Snap: grid 1/8","Snap: grid 1/16","Snap: grid 1/32" };
 inline const char* const kPfKeysKeys[]    = { "off","36","48","60","72","84","96" };
@@ -340,6 +342,7 @@ inline const ChoiceList kListBsKeys    = TG_LIST(kBsKeys);
 inline const ChoiceList kListBsAlt     = TG_LIST(kBsAlt);
 inline const ChoiceList kListBcSnap    = TG_LIST(kBcSnap);
 inline const ChoiceList kListBsAltBreak = TG_LIST(kBsAltBreak);
+inline const ChoiceList kListBsToolSrc  = TG_LIST(kBsToolSrc);
 // Performance FX pads, in the order they're processed: P_pfRoll + k
 constexpr int kPfPads = 13;
 
@@ -1081,7 +1084,9 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(bcChopSnapTr,"Break Chop Snap to Transients", true) \
     B(bcChopSnapZero,"Break Chop Snap to Zero Crossings", true) \
     F(bcChopLatency,"Break Chop Tap Latency", 0, 100, 10, 0.1, 0) \
-    C(bcMarkerSnap,"Break Marker Snap", kListBcSnap, 1)
+    C(bcMarkerSnap,"Break Marker Snap", kListBcSnap, 1) \
+    C(bsToolSource,"Break Tool Source", kListBsToolSrc, 0) \
+    F(bsVarAmount, "Break Variation Amount", 0, 1, 0.3, 0.01, 0)
 
 enum ParamIndex
 {

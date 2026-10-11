@@ -76,7 +76,7 @@ public:
         const auto d = proc.breakStore.get();
         const int pat = editedPattern(), steps = numSteps();
         juce::String key; key << pat << "|" << steps << "|" << selected << "|" << proc.bsStepShown.load() << "|" << proc.bsPatternShown.load();
-        for (int i = 0; i < steps; ++i) { const auto& s = d.step[pat][i]; key << (s.on ? "1" : "0") << s.slice << s.roll << (s.accent ? "a" : "") << (s.reverse ? "r" : "") << (s.tie ? "t" : "") << juce::roundToInt (s.vel * 20.0f) << "b" << s.brk << (s.layer ? "L" : "") << juce::roundToInt (s.pitch); }
+        for (int i = 0; i < steps; ++i) { const auto& s = d.step[pat][i]; key << (s.on ? "1" : "0") << s.slice << s.roll << (s.accent ? "a" : "") << (s.reverse ? "r" : "") << (s.tie ? "t" : "") << juce::roundToInt (s.vel * 20.0f) << "b" << s.brk << (s.layer ? "L" : "") << juce::roundToInt (s.pitch) << "s" << s.stretch << juce::roundToInt (s.cycleMs) << "n" << juce::roundToInt (s.nudge * 100); }
         if (key != lastKey) { lastKey = key; data = d; repaint(); }
     }
     void paint (juce::Graphics& g) override
@@ -104,6 +104,9 @@ public:
                 if (s.pitch != 0.0f) marks << " " << (s.pitch > 0 ? "+" : "") << juce::roundToInt (s.pitch);
                 if (s.brk > 0) marks << " B" << s.brk;
                 if (s.layer) marks << " +" << s.layerBrk;
+                if (s.stretch > 0) marks << " " << (s.stretch == 1 ? "R" : (s.stretch == 2 ? "A" : "C")) << (s.cycleMs > 0.0f ? "*" : "");
+                else if (s.cycleMs > 0.0f) marks << " *";
+                if (s.nudge > 0.0f) marks << " >";
                 g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
                 g.drawText (marks, r.withTrimmedTop (16.0f).withHeight (13.0f), juce::Justification::centred);
             }

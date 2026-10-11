@@ -18,7 +18,9 @@ struct BreakSlice
     float pitch = 0.0f, gain = 1.0f, pan = 0.0f, trimStart = 0.0f, trimEnd = 1.0f, attack = 0.0f, decay = 0.0f;
     int choke = 1;          // 0: none; slices in the same group cut each other off (across all three breaks)
     bool reverse = false, loop = false;
-    bool isDefault() const { return pitch == 0.0f && gain == 1.0f && pan == 0.0f && trimStart == 0.0f && trimEnd == 1.0f && attack == 0.0f && decay == 0.0f && choke == 1 && ! reverse && ! loop; }
+    int stretch = 0;        // 0: the break's own; 1 Repitch, 2 Akai Cyclic, 3 Clean (a step's own setting wins over this)
+    float cycleMs = 0.0f;   // 0: the break's Cycle Length; else this one (Akai Cyclic only)
+    bool isDefault() const { return pitch == 0.0f && gain == 1.0f && pan == 0.0f && trimStart == 0.0f && trimEnd == 1.0f && attack == 0.0f && decay == 0.0f && choke == 1 && ! reverse && ! loop && stretch == 0 && cycleMs == 0.0f; }
 };
 
 struct BreakStep
@@ -30,6 +32,10 @@ struct BreakStep
     bool layer = false;        // a second hit stacked on this one ...
     int layerBrk = 2, layerSlice = 0;   // ... from this break (1-3) and slice
     float layerLevel = 0.7f;
+    int stretch = 0;           // 0: Default (the slice's, then the break's); 1 Repitch, 2 Akai Cyclic, 3 Clean
+    float cycleMs = 0.0f;      // 0: no override; else the Akai Cyclic cycle length for this hit
+    float nudge = 0.0f;        // played this much of a step late (Humanise), 0 .. 0.5
+    bool hasExtras() const { return stretch != 0 || cycleMs != 0.0f || nudge != 0.0f; }
 };
 
 // one break's own settings and its analysis
@@ -114,6 +120,8 @@ public:
             x->setProperty ("i", k); x->setProperty ("pitch", s.pitch); x->setProperty ("gain", s.gain); x->setProperty ("pan", s.pan);
             x->setProperty ("ts", s.trimStart); x->setProperty ("te", s.trimEnd); x->setProperty ("a", s.attack); x->setProperty ("d", s.decay);
             x->setProperty ("choke", s.choke); x->setProperty ("rev", s.reverse); x->setProperty ("loop", s.loop);
+            if (s.stretch != 0) x->setProperty ("st", s.stretch);
+            if (s.cycleMs != 0.0f) x->setProperty ("cyc", s.cycleMs);
             sl.add (juce::var (x));
         }
         o.setProperty ("slices", sl);
@@ -139,6 +147,8 @@ public:
                 s.choke = juce::jlimit (0, 8, (int) x.getProperty ("choke", 1));
                 s.reverse = (bool) x.getProperty ("rev", false);
                 s.loop = (bool) x.getProperty ("loop", false);
+                s.stretch = juce::jlimit (0, 3, (int) x.getProperty ("st", 0));
+                s.cycleMs = juce::jlimit (0.0f, 200.0f, (float) x.getProperty ("cyc", 0.0));
             }
         if (auto* mk = v["markers"].getArray())
         {
@@ -167,7 +177,7 @@ public:
             for (int i = 0; i < BreakData::kSteps; ++i)
             {
                 const auto& s = d.step[p][i];
-                if (! s.on && ! s.tie && s.slice == 0 && s.brk == 0 && ! s.layer) continue;
+                if (! s.on && ! s.tie && s.slice == 0 && s.brk == 0 && ! s.layer && ! s.hasExtras()) continue;
                 auto* x = new juce::DynamicObject();
                 x->setProperty ("i", i); x->setProperty ("on", s.on); x->setProperty ("slice", s.slice); x->setProperty ("vel", s.vel);
                 if (s.accent) x->setProperty ("acc", true);
@@ -178,6 +188,9 @@ public:
                 if (s.prob < 1.0f) x->setProperty ("prob", s.prob);
                 if (s.brk != 0) x->setProperty ("brk", s.brk);
                 if (s.layer) { x->setProperty ("layer", true); x->setProperty ("lb", s.layerBrk); x->setProperty ("ls", s.layerSlice); x->setProperty ("ll", s.layerLevel); }
+                if (s.stretch != 0) x->setProperty ("st", s.stretch);
+                if (s.cycleMs != 0.0f) x->setProperty ("cyc", s.cycleMs);
+                if (s.nudge != 0.0f) x->setProperty ("nudge", s.nudge);
                 steps.add (juce::var (x));
             }
             pats.add (steps);
@@ -228,6 +241,9 @@ public:
                             s.layerBrk = juce::jlimit (1, 3, (int) x.getProperty ("lb", 2));
                             s.layerSlice = juce::jlimit (0, BreakData::kSlices - 1, (int) x.getProperty ("ls", 0));
                             s.layerLevel = juce::jlimit (0.0f, 1.5f, (float) x.getProperty ("ll", 0.7));
+                            s.stretch = juce::jlimit (0, 3, (int) x.getProperty ("st", 0));
+                            s.cycleMs = juce::jlimit (0.0f, 200.0f, (float) x.getProperty ("cyc", 0.0));
+                            s.nudge = juce::jlimit (0.0f, 0.5f, (float) x.getProperty ("nudge", 0.0));
                         }
             setChain (d, v["chain"].toString());
             d.seed = juce::jmax (1, (int) v.getProperty ("seed", 1));

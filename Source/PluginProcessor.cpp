@@ -409,16 +409,21 @@ void MegaSynthProcessor::bsTick (double beat)
                     if (ab > 0 && ((k / 16) / ab) % 2 == 1) brk = juce::jlimit (0, 2, snap.i (P_bsAltBreak));
                 }
                 t.brk = brk;
-                ch.trigger (t, st);
+                t.stretch = s.stretch > 0 ? s.stretch - 1 : -1; t.cycleMs = s.cycleMs;   // per-hit stretch (none: the slice's, then the break's)
+                // Humanise: the hit can be played a little late (a fraction of a step), from the rolls queue
+                const double late = s.nudge > 0.0f ? 0.25 * juce::jlimit (0.0, 0.5, (double) s.nudge) : 0.0;
+                const double sb = bsStepBeat (k, swing) + late;
+                if (late > 0.0 && bsNumRolls < 15) bsRolls[bsNumRolls++] = { sb, t };
+                else ch.trigger (t, st);
                 fired = true; firedBrk = brk;
-                const double sb = bsStepBeat (k, swing);
                 for (int rr = 1; rr < s.roll && bsNumRolls < 15; ++rr) bsRolls[bsNumRolls++] = { sb + 0.25 * rr / s.roll, t };
                 if (s.layer)
                 {
                     // a second hit stacked on it, from another break (it doesn't choke the first)
                     tg::BreakChopper::Trigger l = t;
                     l.brk = juce::jlimit (0, 2, s.layerBrk - 1); l.slice = s.layerSlice; l.level = s.layerLevel; l.noChoke = true;
-                    ch.trigger (l, st);
+                    if (late > 0.0 && bsNumRolls < 15) bsRolls[bsNumRolls++] = { sb, l };
+                    else ch.trigger (l, st);
                 }
             }
         }
@@ -1491,6 +1496,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 16) setBreakDefaultsForOldPatch();
     if (version < 17) setBreak3DefaultsForOldPatch();
     if (version < 18) setChopDefaultsForOldPatch();
+    if (version < 19) setToolDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1719,6 +1725,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("bcOn")) setBreakDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bcActive")) setBreak3DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bcChopMode")) setChopDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("bsToolSource")) setToolDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -1983,6 +1990,15 @@ void MegaSynthProcessor::setBreak3DefaultsForOldPatch()
 void MegaSynthProcessor::setChopDefaultsForOldPatch()
 {
     for (int i = P_bcChopMode; i <= P_bcMarkerSnap; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setToolDefaultsForOldPatch()
+{
+    for (int i = P_bsToolSource; i <= P_bsVarAmount; ++i)
     {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();

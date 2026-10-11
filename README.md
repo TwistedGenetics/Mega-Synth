@@ -205,13 +205,14 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
 - **Slicing:**
   - **Transients** finds hits by how fast the level rises. **Sensitivity** sets how small a rise counts and how close together hits can be.
   - **Equal** 4, 8, 16 or 32 divides the break evenly.
-  - **Manual markers:** Shift-click the wave to add a marker, and right-click to remove the nearest one. **Slices to markers** turns the current slices into markers you can then edit.
+  - **Manual markers:** click the wave to add a marker, and right-click to remove the nearest one (more under *Chopping by hand*). **Slices to markers** turns the current slices into markers you can then edit.
   - Up to 32 slices.
 - **Keys:**
   - Slices play from **First Key** up. The default is C1 (MIDI 36), and the key names are drawn on the wave.
   - Those keys play slices only while the chopper is on. Performance FX keys, if set to the same range, take priority.
   - Clicking a slice plays it and selects it.
-- **Per slice:** Pitch, Gain, Pan, Trim Start and Trim End, Attack, Decay (off means it plays to its end), Choke group, Reverse and Loop.
+- **Per slice:** Pitch, Gain, Pan, Trim Start and Trim End, Attack, Decay (off means it plays to its end), Choke group, Stretch, Cycle, Reverse and Loop.
+  - **Stretch** and **Cycle** override the break's stretch mode and Cycle Length for that slice. "Break's" means no override. A sequencer step's own Stretch and Cycle win over these.
   - **Choke group:** slices in the same group cut each other off with a 3 ms fade. The default is group 1, so a new hit stops the last one, like a mono sampler. Set it to none to let hits ring over each other.
   - **Loop:** the slice loops while its key is held.
 - **Stretch:**
@@ -321,8 +322,34 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
   - **Jungle:** an edit of the original, with snare ghosts and swaps late in each bar, a kick double, a reversed hit, a cut-up of two 1/8s, and a rising snare roll into the end.
   - **Copy / Paste** and **Clear**.
   - Shuffle and Jungle use a seed that moves on with each press. Pressing again gives a new one, and undo goes back.
+- **More tools (the third row):**
+  - Each applies straight away when pressed, with a new seed each press. It doesn't preview first; **Undo** takes it back.
+  - **Amount** (0-100%) sets how much each tool changes. **Variation** has its own knob.
+  - **Tools draw from:** the Active Break, or all three loaded breaks (each new hit from a break picked at random, pinned to that break).
+  - Kicks, snares and hats are chosen from the kick/snare/hat analysis. A break with no analysis falls back to where hits usually are: the kick on beat 1, the snare on beat 2, the hats on the off-beat 8ths.
+  - An empty pattern is first filled with Original (Halftime builds its own).
+  - **Rollers:** quiet 16th ghost snares around the backbeat.
+  - **Two-Step:** kicks on 1 and the "and" of 2, snares on 2 and 4. The rest of the pattern stays, and Amount sets how many of its other kicks go.
+  - **Halftime:** the snare on 3 only, kicks on 1 and the "and" of 3, and hats from the break.
+  - **Double (double-time):** each half bar squeezed into a quarter and played twice.
+  - **Snare Build:** a snare roll into the end of the pattern, x2, then x3, then x4, rising in pitch by up to an octave.
+  - **Stutter:** a hit repeated 2-4 times as 1/16s or 1/32s, at random places.
+  - **Rev Swell:** a reversed snare on the step before each backbeat.
+  - **Cut-up:** 1/8s swapped at random, keeping the kick on 1 and the snares on 2 and 4.
+  - **Ghosts:** quiet hits on empty steps.
+  - **Hat Shuffle:** only the hat-like hits change places, and the velocities stay where they were.
+  - **Thin Out:** for breakdowns, hits are removed or made less likely. The kick on 1 and the backbeats stay.
+  - **Humanise:** small velocity changes, and off-beat hits played a little late (up to 16% of a step at full Amount). The beats stay on the grid.
+  - **Pitch Dive:** the pitch falls over the last beat, down to an octave.
+  - **Variation:** small random changes to the pattern as it is: another slice of the same kind, a velocity change, a roll switched, or a hit moved a 16th later.
+- **Per-hit stretch:**
+  - Each step has a **Stretch** setting: Default, Repitch, Akai (Cyclic) or Clean.
+  - Each step also has an optional **Cycle** (the Akai Cyclic cycle length for that one hit). A long cycle crunches a single hit.
+  - The order is: the step's setting, then the slice's (Break Chopper page), then the break's.
+  - The grid tags these steps **R**, **A** or **C**. A **\*** means a cycle override.
+- **Late:** how late a step plays, as a share of a step (0-50%). Humanise sets it, and you can set it by hand. The grid tags a late step with **>**.
 - **Mod Matrix sources:** **Break Seq Step** (where in the pattern), **Break Seq Pattern** (which one) and **Break Slice** (the last slice played), all 0..1.
-- **What's saved:** patterns, chain and per-slice settings are saved in patches, projects, undo and A/B.
+- **What's saved:** patterns, chain and per-slice settings are saved in patches, projects, undo and A/B. That includes each step's Stretch, Cycle and Late, and each slice's Stretch and Cycle.
 
 ## Performance FX (Perform > Performance FX)
 

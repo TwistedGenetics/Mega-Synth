@@ -2300,7 +2300,9 @@ int main()
                                    k == 1 ? "Mega Break 2-Step 174 (synthesised).wav" : "Mega Break Rollers 165 (synthesised).wav", MegaSynthProcessor::breakSlot (k));
             }
             setP (*p, P_bcActive, 2.0f); setP (*p, P_bcColour2, 2.0f); setP (*p, P_bcStretch2, 2.0f);
-            p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::jungle (d, 0, 32, 4); tg::breaktools::frankenbreak (d, 0, 32, 3, 0.7f, 0); tg::BreakStore::setChain (d, "AABA"); d.patBreak[0] = 2; });
+            p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::jungle (d, 0, 32, 4); tg::breaktools::frankenbreak (d, 0, 32, 3, 0.7f, 0); tg::BreakStore::setChain (d, "AABA"); d.patBreak[0] = 2;
+                                                        d.step[0][0].stretch = 1; d.step[0][9].stretch = 2; d.step[0][9].cycleMs = 120.0f; d.step[0][23].stretch = 3; d.step[0][12].nudge = 0.1f;
+                                                        d.brk[1].slice[0].stretch = 2; d.brk[1].slice[0].cycleMs = 90.0f; });
         }
         render (*p, 0.3, chord (0.0, 1.0, { 48 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
@@ -4548,6 +4550,146 @@ int main()
                 }
             }
         }
+        // 14. the Stage 4 pattern tools, and per-hit / per-slice stretch
+        {
+            auto stepsEqual = [] (const tg::BreakData& x, const tg::BreakData& y, int pat)
+            {
+                for (int i = 0; i < 32; ++i)
+                {
+                    const auto &a = x.step[pat][i], &b = y.step[pat][i];
+                    if (a.on != b.on || a.slice != b.slice || a.brk != b.brk || a.roll != b.roll || a.vel != b.vel || a.pitch != b.pitch || a.reverse != b.reverse || a.prob != b.prob || a.nudge != b.nudge) return false;
+                }
+                return true;
+            };
+            // three analysed breaks: kicks on slices 0 and 8, snares on 4 and 12, the rest hats
+            tg::BreakData base;
+            for (int b = 0; b < 3; ++b)
+            {
+                auto& x = base.brk[b]; x.nSlices = 16; x.bars = 1; x.origBpm = 170.0;
+                for (int k = 0; k <= 16; ++k) x.start[k] = k * 1000;
+                for (int k = 0; k < 16; ++k) { x.kick[k] = (k % 8 == 0) ? 1.0f : 0.05f; x.snare[k] = (k % 8 == 4) ? 1.0f : 0.05f; x.hat[k] = (k % 2 == 1) ? 0.6f : 0.1f; }
+            }
+            tg::breaktools::original (base, 0, 32);
+            auto kindAt = [] (const tg::BreakData& d, int i) { return tg::breaktools::stepKind (d, d.step[0][i], 0); };
+            juce::StringArray notRepeatable, noKick;
+            for (int t = 0; t < tg::breaktools::kNumTools; ++t)
+            {
+                for (bool all : { false, true })
+                {
+                    auto a = base, b = base, c = base;
+                    tg::breaktools::applyTool (t, a, 0, 32, 7, 0.7f, 0, all);
+                    tg::breaktools::applyTool (t, b, 0, 32, 7, 0.7f, 0, all);
+                    if (! stepsEqual (a, b, 0)) notRepeatable.add (tg::breaktools::toolName (t));
+                    tg::breaktools::applyTool (t, c, 0, 32, 7, 0.0f, 0, all);   // (Amount 0 runs too)
+                    if (t == tg::breaktools::ToolTwoStep || t == tg::breaktools::ToolCutUp || t == tg::breaktools::ToolHalftime)
+                        for (int bar : { 0, 16 })
+                            if (! a.step[0][bar].on || kindAt (a, bar) != tg::breaktools::Kick) noKick.add (juce::String (tg::breaktools::toolName (t)) + (all ? " (all)" : ""));
+                }
+            }
+            CHECK (notRepeatable.isEmpty(), "every new tool is repeatable from its seed" + (notRepeatable.isEmpty() ? juce::String() : ": " + notRepeatable.joinIntoString (", ")));
+            CHECK (noKick.isEmpty(), "Two-Step, Cut-up and Halftime keep a kick on 1" + (noKick.isEmpty() ? juce::String() : ": " + noKick.joinIntoString (", ")));
+            {
+                auto a = base; tg::breaktools::applyTool (tg::breaktools::ToolTwoStep, a, 0, 32, 3, 1.0f, 0, false);
+                bool ok = true;
+                for (int b0 : { 0, 16 })
+                {
+                    ok = ok && kindAt (a, b0 + 6) == tg::breaktools::Kick && kindAt (a, b0 + 4) == tg::breaktools::Snare && kindAt (a, b0 + 12) == tg::breaktools::Snare;
+                    for (int o = 1; o < 16; ++o) if (o != 6 && a.step[0][b0 + o].on && kindAt (a, b0 + o) == tg::breaktools::Kick) ok = false;
+                }
+                CHECK (ok, "Two-Step: kicks on 1 and the 'and' of 2 only, snares on 2 and 4");
+                auto h = base; tg::breaktools::applyTool (tg::breaktools::ToolHalftime, h, 0, 32, 3, 1.0f, 0, false);
+                bool ht = true;
+                for (int b0 : { 0, 16 }) for (int o = 0; o < 16; ++o) if (h.step[0][b0 + o].on && kindAt (h, b0 + o) == tg::breaktools::Snare) ht = ht && o == 8;
+                CHECK (ht && h.step[0][8].on && h.step[0][24].on, "Halftime: the snare on 3 only");
+                auto cu = base; tg::breaktools::applyTool (tg::breaktools::ToolCutUp, cu, 0, 32, 11, 1.0f, 0, false);
+                CHECK (kindAt (cu, 4) == tg::breaktools::Snare && kindAt (cu, 12) == tg::breaktools::Snare && kindAt (cu, 20) == tg::breaktools::Snare && ! stepsEqual (cu, base, 0),
+                       "Cut-up: 1/8s move, the snares on 2 and 4 stay");
+                auto sb = base; tg::breaktools::applyTool (tg::breaktools::ToolSnareBuild, sb, 0, 32, 4, 1.0f, 0, false);
+                const auto& l = sb.step[0];
+                CHECK (l[16].roll == 2 && l[31].roll == 4 && l[24].roll == 3 && l[31].pitch > l[16].pitch && kindAt (sb, 31) == tg::breaktools::Snare, "Snare Build: x2, x3, x4, rising");
+                auto th = base; tg::breaktools::applyTool (tg::breaktools::ToolThinOut, th, 0, 32, 4, 1.0f, 0, false);
+                int before = 0, after = 0; for (int i = 0; i < 32; ++i) { before += base.step[0][i].on ? 1 : 0; after += (th.step[0][i].on && th.step[0][i].prob >= 1.0f) ? 1 : 0; }
+                CHECK (after < before && th.step[0][0].on && th.step[0][4].on, "Thin Out: fewer sure hits, the kick on 1 and the backbeat stay");
+                auto hs = base; tg::breaktools::applyTool (tg::breaktools::ToolHatShuffle, hs, 0, 32, 4, 1.0f, 0, false);
+                bool onlyHats = true; for (int i = 0; i < 32; ++i) if (hs.step[0][i].slice != base.step[0][i].slice) onlyHats = onlyHats && kindAt (base, i) == tg::breaktools::Hat && kindAt (hs, i) == tg::breaktools::Hat;
+                CHECK (onlyHats, "Hat Shuffle moves only hats");
+                auto fr = base; tg::breaktools::applyTool (tg::breaktools::ToolRollers, fr, 0, 32, 4, 1.0f, 0, true);
+                int other = 0; for (int i = 0; i < 32; ++i) other += fr.step[0][i].brk > 1 ? 1 : 0;
+                CHECK (other > 0, "with \"all three breaks\", tools draw hits from the other breaks");
+                auto hu = base; tg::breaktools::applyTool (tg::breaktools::ToolHumanise, hu, 0, 32, 4, 1.0f, 0, false);
+                bool beatsOn = true; int late = 0; for (int i = 0; i < 32; ++i) { if (i % 4 == 0) beatsOn = beatsOn && hu.step[0][i].nudge == 0.0f; late += hu.step[0][i].nudge > 0.0f ? 1 : 0; }
+                CHECK (beatsOn && late > 0, "Humanise: off-beat hits a little late, the beats on the grid");
+                // no analysis: kicks and snares from where they fall in the bar
+                auto na = base; for (auto& x : na.brk) { std::fill (std::begin (x.kick), std::end (x.kick), 0.0f); std::fill (std::begin (x.snare), std::end (x.snare), 0.0f); std::fill (std::begin (x.hat), std::end (x.hat), 0.0f); }
+                tg::breaktools::applyTool (tg::breaktools::ToolTwoStep, na, 0, 32, 3, 1.0f, 0, false);
+                CHECK (na.step[0][0].slice == 0 && na.step[0][4].slice == 4 && na.step[0][12].slice == 4, "with no analysis: the kick from beat 1, the snare from beat 2");
+            }
+            {
+                // saved: per-step stretch, cycle and lateness; per-slice stretch and cycle
+                tg::BreakStore st;
+                st.edit ([] (tg::BreakData& d) { d.step[2][5].on = true; d.step[2][5].stretch = 3; d.step[2][5].cycleMs = 120.0f; d.step[2][5].nudge = 0.2f;
+                                                  d.step[2][9].stretch = 1; d.brk[1].slice[3].stretch = 2; d.brk[1].slice[3].cycleMs = 80.0f; });
+                tg::BreakStore st2; st2.fromVar (juce::JSON::parse (st.toJson()));
+                const auto d = st2.get();
+                CHECK (d.step[2][5].stretch == 3 && d.step[2][5].cycleMs == 120.0f && std::abs (d.step[2][5].nudge - 0.2f) < 1e-6f && d.step[2][9].stretch == 1
+                       && d.brk[1].slice[3].stretch == 2 && d.brk[1].slice[3].cycleMs == 80.0f, "per-hit and per-slice stretch are saved");
+            }
+            // per-hit stretch: a steady 440 Hz "break" at 120 BPM played by the sequencer at 90 BPM
+            auto peakHz = [&] (const std::vector<float>& out, int s0)
+            {
+                const int order = 14, N = 1 << order;
+                std::vector<float> x ((size_t) N * 2, 0.0f);
+                for (int i = 0; i < N && s0 + i < (int) out.size(); ++i) x[(size_t) i] = out[(size_t) (s0 + i)] * (0.5f - 0.5f * (float) std::cos (2.0 * kPi * i / (N - 1)));
+                juce::dsp::FFT fft (order); fft.performFrequencyOnlyForwardTransform (x.data());
+                int k = 2; for (int i = 2; i < N / 2 - 1; ++i) if (x[(size_t) i] > x[(size_t) k]) k = i;
+                const double a = x[(size_t) k - 1], c = x[(size_t) k], dd = x[(size_t) k + 1];
+                return (k + 0.5 * (a - dd) / (a - 2.0 * c + dd)) * sr / N;
+            };
+            auto hit = [&] (int breakMode, int stepStretch, int sliceStretch, float stepCycle, float nudge = 0.0f, int at = 0)
+            {
+                auto p = make(); quiet (*p);
+                setP (*p, P_bcOn, 1.0f); setP (*p, P_bsOn, 1.0f); setP (*p, P_bcTempo, 120.0f); setP (*p, P_bcSliceMode, 1.0f); setP (*p, P_bcStretch, (float) breakMode);
+                setP (*p, P_bcLevel, 1.0f); setP (*p, P_bcVelSens, 0.0f);
+                p->loadSampleData (sineBreak (440.0, 2.0), "sine.wav", slot);
+                p->breakStore.edit ([&] (tg::BreakData& d) { auto& s = d.step[0][at]; s.on = true; s.slice = 0; s.stretch = stepStretch; s.cycleMs = stepCycle; s.nudge = nudge;
+                                                              d.brk[0].slice[0].stretch = sliceStretch; });
+                return runHost (*p, 90.0, 0.0, 1.3);
+            };
+            auto measure = [&] (const std::vector<float>& out, double& secs, double& hz, int& first)
+            {
+                first = -1; int last = 0;
+                for (int i = 0; i < (int) out.size(); ++i) if (std::abs (out[(size_t) i]) > 1e-3f) { if (first < 0) first = i; last = i; }
+                secs = (last - first) / sr; hz = peakHz (out, first + (int) (0.05 * sr));
+            };
+            struct Case { const char* name; int brkMode, stepSt, sliceSt; float cyc; double hz; };
+            const Case cases[] = { { "break Akai, no overrides", 1, 0, 0, 0.0f, 440.0 },
+                                   { "step Repitch over a Akai break", 1, 1, 0, 0.0f, 330.0 },
+                                   { "slice Repitch (step Default)", 1, 0, 1, 0.0f, 330.0 },
+                                   { "step Clean wins over slice Repitch", 1, 3, 1, 0.0f, 440.0 },
+                                   { "step Akai over a Repitch break", 0, 2, 0, 0.0f, 440.0 },
+                                   { "step Akai with a 120 ms cycle", 0, 2, 0, 120.0f, 440.0 } };
+            juce::StringArray bad; std::vector<std::vector<float>> outs;
+            for (auto& c : cases)
+            {
+                const auto out = hit (c.brkMode, c.stepSt, c.sliceSt, c.cyc);
+                double secs, hz; int first; measure (out, secs, hz, first);
+                const double tol = c.hz == 440.0 && (c.brkMode == 1 && c.stepSt == 0 && c.sliceSt == 0 || c.stepSt == 2) ? 1000.0 / (c.cyc > 0 ? c.cyc : 40.0) : c.hz * 0.01;
+                std::cout << "  " << c.name << ": " << juce::String (secs, 3) << " s, " << juce::String (hz, 1) << " Hz" << std::endl;
+                if (std::abs (secs - 0.5 * 120.0 / 90.0) > 0.012 || std::abs (hz - c.hz) > tol) bad.add (c.name);
+                outs.push_back (out);
+            }
+            CHECK (bad.isEmpty(), "per-hit stretch: the step's setting, then the slice's, then the break's (length and pitch)" + (bad.isEmpty() ? juce::String() : ": " + bad.joinIntoString (", ")));
+            double diff = 0.0; for (size_t i = 0; i < outs[4].size(); ++i) diff = std::max (diff, (double) std::abs (outs[4][i] - outs[5][i]));
+            CHECK (diff > 0.05, "a hit's own Cycle Length changes how it's crunched");
+            // Humanise's lateness: a hit 0.4 of a step late
+            {
+                double s1, h1; int f0, f1;
+                measure (hit (1, 0, 0, 0.0f, 0.0f, 2), s1, h1, f0);
+                measure (hit (1, 0, 0, 0.0f, 0.4f, 2), s1, h1, f1);
+                const double want = 0.4 * 0.25 * 60.0 / 90.0 * sr;
+                CHECK (std::abs ((f1 - f0) - want) < 2.0, "a late hit plays that much of a step late (" + juce::String (f1 - f0) + " samples, want " + juce::String (want, 1) + ")");
+            }
+        }
         // 10. CPU: 8 slices at once in each stretch mode, Eco / Normal / High (the chopper alone)
         {
             WaveSample w; w.numChannels = 2; w.sampleRate = 44100.0; const auto b = tg::breaks::makeDemoBreak (44100.0, 170.0, 0);
@@ -4728,11 +4870,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.54.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.55.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.54 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode and Marker Snap added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.55 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap and the pattern tools added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",

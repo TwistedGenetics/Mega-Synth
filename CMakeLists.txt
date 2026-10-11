@@ -91,6 +91,11 @@ target_link_libraries(MegaSynth
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
 
+# PluginEditor.cpp holds every page (many small lambdas): MSVC needs the larger object format for it
+if(MSVC)
+    target_compile_options(MegaSynth PRIVATE /bigobj)
+endif()
+
 if(MEGASYNTH_TESTS)
     juce_add_console_app(MegaSynthTest PRODUCT_NAME "MegaSynthTest")
     juce_generate_juce_header(MegaSynthTest)
@@ -101,4 +106,7 @@ if(MEGASYNTH_TESTS)
     target_link_libraries(MegaSynthTest PRIVATE
         juce::juce_audio_utils juce::juce_audio_formats juce::juce_dsp
         juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+    if(MSVC)
+        target_compile_options(MegaSynthTest PRIVATE /bigobj)
+    endif()
 endif()

@@ -283,6 +283,29 @@ public:
     template <typename T> T* own (T* c) { children.add (c); addAndMakeVisible (c); return c; }
 };
 
+// A top-level tab with sub-tabs: a strip of segments at the top, one sub-page shown below it
+class Segmented;
+class GroupPage : public juce::Component
+{
+public:
+    GroupPage (MegaSynthProcessor&, const juce::StringArray& subNames, juce::Colour);
+    ~GroupPage() override;
+    void paint (juce::Graphics& g) override { g.fillAll (col::bg); }
+    void resized() override;
+    Page* sub (int i) const { return subs[i]; }
+    int numSubs() const { return subs.size(); }
+    const juce::StringArray& names() const { return labels; }
+    void show (int i);
+    int current() const { return shown; }
+    std::function<void (int)> onShow;
+    static constexpr int kStripH = 34;
+private:
+    juce::StringArray labels;
+    juce::OwnedArray<Page> subs;
+    std::unique_ptr<Segmented> strip;
+    int shown = 0;
+};
+
 } // namespace tgui
 
 //==============================================================================
@@ -299,6 +322,15 @@ public:
 private:
     void timerCallback() override;
     void buildPages();
+public:
+    // pages by name (a top-level tab, or a sub-tab such as "Mod Matrix"); old tab names still work
+    bool showPage (const juce::String& name);
+    juce::StringArray allPageNames() const;
+    juce::String currentPageName() const;
+private:
+    struct PageRef { int tab = -1, sub = -1; tgui::Page* page = nullptr; };
+    std::map<juce::String, PageRef> pageIndex;
+    tgui::Page* pageFor (const juce::String& name) const { auto it = pageIndex.find (name); return it != pageIndex.end() ? it->second.page : nullptr; }
     void setStatus (const juce::String&);
     void shiftOctave (int delta);
     void refreshPatchList();
@@ -346,7 +378,6 @@ private:
     juce::Array<tgui::RouteRow*> routeRows;
     std::unique_ptr<juce::Viewport> matrixView;
     juce::TextEditor matrixSearch;
-    int matrixTab = -1;
     uint32_t lastRouteVersion = 0;
     tgui::XYPad* xyPad = nullptr;
     juce::Component* perfXY = nullptr;   // Perform page
@@ -391,7 +422,9 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> morphAtt, freezeAtt, spOnAtt, spFreezeAtt;
     juce::TextButton clearScenesBtn { "Clear scenes" };
     void updateSceneButtons();
-    void showRoute (int slot);
+public:
+    void showRoute (int slot);   // opens Modulation > Mod Matrix at that route (public for tests)
+private:
     juce::Array<tgui::StepCell*> stepCells;
     juce::TextButton seqRandomBtn { "Random Phrase" };
     juce::ToggleButton seqRunBtn { "Run Sequencer" };

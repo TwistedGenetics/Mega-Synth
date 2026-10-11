@@ -43,6 +43,30 @@ void SignalFlowView::update()
     if (key != lastKey) { lastKey = key; repaint(); }
 }
 
+juce::String SignalFlowView::pageForBox (int box)
+{
+    static const char* pages[] = { "Osc 1-3 & Sub", "Note Mutation", "Note Mutation", "Note Mutation", "Filters", "Amp & Filter",
+                                   "Note Mutation", "Bus Mutation", "Bus Mutation", "Rack", "Mixer" };
+    return box >= 0 && box < (int) (sizeof (pages) / sizeof (pages[0])) ? juce::String (pages[box]) : juce::String();
+}
+
+int SignalFlowView::boxAt (juce::Point<float> p) const
+{
+    for (int b = 0; b < numBoxRects; ++b) if (boxRects[b].contains (p)) return b;
+    return -1;
+}
+
+void SignalFlowView::mouseDown (const juce::MouseEvent& e)
+{
+    const int b = boxAt (e.position);
+    if (b >= 0 && onOpen) onOpen (pageForBox (b));
+}
+
+void SignalFlowView::mouseMove (const juce::MouseEvent& e)
+{
+    setMouseCursor (boxAt (e.position) >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
 void SignalFlowView::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
@@ -80,6 +104,8 @@ void SignalFlowView::paint (juce::Graphics& g)
     const float bw = (r.getWidth() - 20.0f - gap * (kNumBoxes - 1)) / kNumBoxes;
     juce::Rectangle<float> rects[kNumBoxes];
     for (int k = 0; k < kNumBoxes; ++k) rects[order[k]] = { 10.0f + k * (bw + gap), top, bw, h };
+    for (int k = 0; k < kNumBoxes; ++k) boxRects[k] = rects[k];
+    numBoxRects = kNumBoxes;
 
     g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
     g.setColour (col::muted);
@@ -168,7 +194,7 @@ void NetworkView::paint (juce::Graphics& g)
     {
         g.setColour (col::muted);
         g.setFont (juce::Font (juce::FontOptions (12.5f)));
-        g.drawFittedText ("No routes yet. Right-click any knob to modulate it, or use the Mod Matrix tab.", r.reduced (20).toNearestInt(), juce::Justification::centred, 3);
+        g.drawFittedText ("No routes yet. Right-click any knob to modulate it, or use Modulation > Mod Matrix.", r.reduced (20).toNearestInt(), juce::Justification::centred, 3);
         return;
     }
     const int maxRows = std::max (1, (int) ((r.getHeight() - 58) / 17) + 1);

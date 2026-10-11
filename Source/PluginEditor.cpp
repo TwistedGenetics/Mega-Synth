@@ -12,7 +12,7 @@ using namespace tg;
 using namespace tgui;
 
 static constexpr int kDesignW = 1200;
-static constexpr int kDesignH = 860;
+static constexpr int kDesignH = 890;
 
 //==============================================================================
 Look::Look()
@@ -1112,7 +1112,7 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     octDown.onClick = [this] { shiftOctave (-1); };
     octUp.onClick = [this] { shiftOctave (1); };
 
-    tabs.setTabBarDepth (36);
+    tabs.setTabBarDepth (32);
     tabs.setOutline (0);
     content.addAndMakeVisible (tabs);
     buildPages();
@@ -1161,7 +1161,7 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     setMouseClickGrabsKeyboardFocus (standalone);
     midiMonitor = std::make_unique<tgui::MidiMonitor> (proc);
     content.addAndMakeVisible (*midiMonitor);
-    midiMonitor->setBounds (kDesignW - 240, 734, 230, 120);
+    midiMonitor->setBounds (kDesignW - 240, 764, 230, 120);
     content.addMouseListener (&learnClicks, true);
     startTimerHz (30);
 }
@@ -1214,12 +1214,113 @@ MegaSynthEditor::~MegaSynthEditor()
     setLookAndFeel (nullptr);
 }
 
+//==============================================================================
+GroupPage::GroupPage (MegaSynthProcessor& p, const juce::StringArray& subNames, juce::Colour c) : labels (subNames)
+{
+    juce::StringArray upper;
+    for (auto& n : labels) upper.add (n.toUpperCase());
+    strip = std::make_unique<Segmented> (p, -1, upper, c);
+    strip->onSelect = [this] (int k) { show (k); };
+    addAndMakeVisible (*strip);
+    for (int i = 0; i < labels.size(); ++i)
+    {
+        auto* pg = subs.add (new Page());
+        addChildComponent (pg);
+    }
+    show (0);
+}
+
+GroupPage::~GroupPage() = default;
+
+void GroupPage::show (int i)
+{
+    i = juce::jlimit (0, subs.size() - 1, i);
+    shown = i;
+    for (int k = 0; k < subs.size(); ++k) subs[k]->setVisible (k == i);
+    strip->setLocal (i);
+    if (onShow) onShow (i);
+}
+
+void GroupPage::resized()
+{
+    const int W = getWidth(), H = getHeight();
+    int longest = 0;
+    for (auto& n : labels) longest = juce::jmax (longest, n.length());
+    const int stripW = juce::jmin (W - 20, labels.size() * juce::jmax (110, longest * 9 + 30));
+    strip->setBounds (10, 4, stripW, kStripH - 8);
+    for (auto* pg : subs) pg->setBounds (0, kStripH, W, H - kStripH);
+}
+
+bool MegaSynthEditor::showPage (const juce::String& nameIn)
+{
+    // names from before the tabs were regrouped still work
+    static const std::map<juce::String, juce::String> oldNames {
+        { "Effects", "Space" }, { "Filter & Env", "Filters" }, { "Env+", "Pitch Envelope" }, { "Mutation", "Note Mutation" },
+        { "Macros/Scenes", "Macros & Scenes" }, { "DNA Seq", "DNA Sequencer" }, { "Sequencer", "Step Sequencer" } };
+    juce::String name = nameIn;
+    if (auto o = oldNames.find (name); o != oldNames.end() && pageIndex.find (name) == pageIndex.end()) name = o->second;
+    auto it = pageIndex.find (name);
+    if (it == pageIndex.end())
+        for (auto e = pageIndex.begin(); e != pageIndex.end(); ++e) if (e->first.equalsIgnoreCase (name)) { it = e; break; }
+    if (it == pageIndex.end()) return false;
+    tabs.setCurrentTabIndex (it->second.tab);
+    if (it->second.sub >= 0)
+        if (auto* g = dynamic_cast<GroupPage*> (tabs.getTabContentComponent (it->second.tab))) g->show (it->second.sub);
+    return true;
+}
+
+juce::StringArray MegaSynthEditor::allPageNames() const
+{
+    juce::StringArray a;
+    for (int t = 0; t < tabs.getNumTabs(); ++t)
+    {
+        if (auto* g = dynamic_cast<GroupPage*> (tabs.getTabContentComponent (t))) for (auto& n : g->names()) a.add (n);
+        else a.add (tabs.getTabNames()[t]);
+    }
+    return a;
+}
+
+juce::String MegaSynthEditor::currentPageName() const
+{
+    const int t = tabs.getCurrentTabIndex();
+    if (auto* g = dynamic_cast<GroupPage*> (tabs.getTabContentComponent (t))) return g->names()[g->current()];
+    return tabs.getTabNames()[t];
+}
+
 void MegaSynthEditor::buildPages()
 {
+    // The tabs, in signal-flow order. A tab with sub-tabs is a GroupPage; every page is found by its name.
+    struct TabDef { const char* name; juce::StringArray subs; juce::Colour colour; };
+    const TabDef layout[] = {
+        { "Perform", {}, col::accent }, { "Overview", {}, col::accent },
+        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring" }, col::osc },
+        { "Mixer", {}, col::mixer }, { "Filters", {}, col::filter },
+        { "Envelopes", { "Amp & Filter", "Mod Envelopes", "Pitch Envelope", "MSEG 1 & 2" }, col::env },
+        { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Space", "Dirt", "Motion", "Rack" }, col::fx },
+        { "Modulation", { "LFOs", "Mod Matrix", "Assignments", "Macros & Scenes", "Cell Instability" }, col::mod },
+        { "Sequencers", { "Step Sequencer", "Arp / Chord", "DNA Sequencer" }, col::seq },
+        { "Lab", { "Mutate / Lab", "Capture" }, col::wavetable } };
+    for (auto& t : layout)
+    {
+        const int tabIndex = tabs.getNumTabs();
+        if (t.subs.isEmpty())
+        {
+            auto* page = new Page();
+            tabs.addTab (t.name, col::bg, page, true);
+            pageIndex[t.name] = { tabIndex, -1, page };
+        }
+        else
+        {
+            auto* group = new GroupPage (proc, t.subs, t.colour);
+            tabs.addTab (t.name, col::bg, group, true);
+            for (int i = 0; i < group->numSubs(); ++i) pageIndex[t.subs[i]] = { tabIndex, i, group->sub (i) };
+            pageIndex[t.name] = { tabIndex, -1, group->sub (0) };
+        }
+    }
     auto addPage = [this] (const juce::String& name) -> Page*
     {
-        auto* page = new Page();
-        tabs.addTab (name, col::bg, page, true);
+        auto* page = pageFor (name);
+        jassert (page != nullptr);
         return page;
     };
     auto sec = [this] (Page* page, const juce::String& t, juce::Colour c) { return page->own (new Section (proc, t, c)); };
@@ -1290,7 +1391,7 @@ void MegaSynthEditor::buildPages()
         arpS->knob (P_uni1Voices, "Osc 1 Unison", 72);
         arpS->knob (P_uni1Detune, "Detune", 64);
         auto* help = page->own (new juce::Label ({}, "Right-click any knob for MIDI Learn, modulation and macros. "
-                                                     "Pump, OTT and Crunch need the Volume Shaper, Multiband and Vintage Sampler switched on (Effects > Rack); "
+                                                     "Pump, OTT and Crunch need the Volume Shaper, Multiband and Vintage Sampler switched on (FX & Mutation > Rack); "
                                                      "the repeat pad needs Beat Repeat."));
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (11.5f)));
@@ -1319,6 +1420,7 @@ void MegaSynthEditor::buildPages()
         auto* spec = page->own (new SpectrumView (proc));
         auto* dna = page->own (new DnaStrandView (proc));
         flowView = flow; netView = net; specView = spec; dnaView = dna;
+        flow->onOpen = [this] (const juce::String& name) { showPage (name); };
         page->onResize = [page, flow, net, spec, dna]
         {
             const int g = 10, W = page->getWidth();
@@ -1331,7 +1433,9 @@ void MegaSynthEditor::buildPages()
 
     // ---------------------------------------------------------------- Oscillators
     {
-        auto* page = addPage ("Oscillators");
+        auto* page = addPage ("Osc 1-3 & Sub");
+        auto* pageWt = addPage ("Wavetables");
+        auto* pageCx = addPage ("Complex & SuperSaw");
         Section* o[3];
         for (int i = 0; i < 3; ++i)
         {
@@ -1358,7 +1462,7 @@ void MegaSynthEditor::buildPages()
         Section* wtS[2];
         for (int k = 0; k < 2; ++k)
         {
-            wtS[k] = sec (page, k == 0 ? "Wavetable 1  (Osc 4)" : "Wavetable 2", col::wavetable);
+            wtS[k] = sec (pageWt, k == 0 ? "Wavetable 1  (Osc 4)" : "Wavetable 2", col::wavetable);
             auto* bar = new SampleBar();
             sampleBars[k] = bar;
             wtS[k]->add (bar, 545, 28);
@@ -1388,7 +1492,7 @@ void MegaSynthEditor::buildPages()
                 wtS[k]->knob (idx, n, 56);
         }
 
-        auto* cx = sec (page, "Oscillator 5 / Complex", col::complex);
+        auto* cx = sec (pageCx, "Oscillator 5 / Complex", col::complex);
         cx->choice (P_complexWaveA, "Primary Wave A", 170);
         cx->choice (P_complexWaveB, "Mod Wave B", 170);
         cx->newRow();
@@ -1397,22 +1501,30 @@ void MegaSynthEditor::buildPages()
                                { P_complexMix, "A/B Blend" }, { P_complexGain, "Level" } })
             cx->knob (idx, n, 64);
 
-        auto* ss = sec (page, "Oscillator 6 / Unison SuperSaw", col::supersaw);
+        auto* ss = sec (pageCx, "Oscillator 6 / Unison SuperSaw", col::supersaw);
         for (auto [idx, n] : { std::pair<int, const char*> { P_supersawOct, "Octave" }, { P_supersawSemi, "Semi" }, { P_supersawDetune, "Detune" },
                                { P_supersawVoices, "Voices" }, { P_supersawSpread, "Spread" }, { P_supersawStereo, "Stereo" },
                                { P_supersawDrift, "Drift" }, { P_supersawGain, "Level" } })
             ss->knob (idx, n, 64);
 
-        page->onResize = [page, o, sub, wtS, cx, ss]
+        page->onResize = [page, o, sub]
         {
             const int W = page->getWidth(), g = 10;
-            const int w4 = (W - g * 5) / 4, w2 = (W - g * 3) / 2;
+            const int w4 = (W - g * 5) / 4;
             for (int i = 0; i < 3; ++i) o[i]->setBounds (g + i * (w4 + g), g, w4, 170);
             sub->setBounds (g + 3 * (w4 + g), g, w4, 170);
-            wtS[0]->setBounds (g, 190, w2, 208);
-            wtS[1]->setBounds (g * 2 + w2, 190, w2, 208);
-            cx->setBounds (g, 408, w2, 180);
-            ss->setBounds (g * 2 + w2, 408, w2, 180);
+        };
+        pageWt->onResize = [pageWt, wtS]
+        {
+            const int W = pageWt->getWidth(), g = 10, w2 = (W - g * 3) / 2;
+            wtS[0]->setBounds (g, g, w2, 208);
+            wtS[1]->setBounds (g * 2 + w2, g, w2, 208);
+        };
+        pageCx->onResize = [pageCx, cx, ss]
+        {
+            const int W = pageCx->getWidth(), g = 10;
+            cx->setBounds (g, g, W - 2 * g, 150);
+            ss->setBounds (g, g + 160, W - 2 * g, 150);
         };
     }
 
@@ -1427,7 +1539,8 @@ void MegaSynthEditor::buildPages()
         for (auto [idx, n] : { std::pair<int, const char*> { P_fmAmount, "FM 2>1" }, { P_ringMix, "Ring Mix" }, { P_ringGain, "Ring Out" },
                                { P_delayMix, "Delay" }, { P_reverbMix, "Reverb" }, { P_shimmerMix, "Shimmer" }, { P_chorusMix, "Chorus" }, { P_reverseMix, "Reverse" } })
             rt->knob (idx, n, 62);
-        auto* fmS = sec (page, "FM Matrix  (source -> destination, Hz of deviation)", col::fm);
+        auto* pageFm = addPage ("FM & Ring");
+        auto* fmS = sec (pageFm, "FM Matrix  (source -> destination, Hz of deviation)", col::fm);
         for (int i = 0; i < 4; ++i)
         {
             fmS->choice (P_fmSlot1Source + 3 * i, "Slot " + juce::String (i + 1) + " Source", 120);
@@ -1435,7 +1548,7 @@ void MegaSynthEditor::buildPages()
             fmS->knob (P_fmSlot1Amt + 3 * i, "Amount");
             if (i % 2 == 1) fmS->newRow();
         }
-        auto* rg = sec (page, "Ring Mod Matrix", col::fm);
+        auto* rg = sec (pageFm, "Ring Mod Matrix", col::fm);
         for (int i = 0; i < 2; ++i)
         {
             rg->choice (P_ringSlot1Source + 3 * i, "Slot " + juce::String (i + 1) + " Source", 120);
@@ -1443,19 +1556,37 @@ void MegaSynthEditor::buildPages()
             rg->knob (P_ringSlot1Amt + 3 * i, "Amount");
             rg->newRow();
         }
-        page->onResize = [page, lv, rt, fmS, rg]
+        // Analog Warmth (was on Filter & Env): the colour of the whole output
+        auto* w = sec (page, "Analog Warmth", col::supersaw);
+        w->knob (P_warmth, "Warmth");
+        w->knob (P_bassKeep, "Bass Keep");
+        w->knob (P_analogDrift, "Drift");
+        auto* wInfo = new juce::Label ({}, "Warmth: softer, rounder filter Drive saturation, plus a gentle low lift and smoother top.  "
+                                           "Bass Keep: holds onto low end in the classic models with high-pass or band-pass stages.  "
+                                           "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
+        wInfo->setColour (juce::Label::textColourId, col::muted);
+        wInfo->setFont (juce::Font (juce::FontOptions (12.0f)));
+        wInfo->setJustificationType (juce::Justification::topLeft);
+        wInfo->setMinimumHorizontalScale (1.0f);
+        w->add (wInfo, 520, 84);
+        page->onResize = [page, lv, rt, w]
         {
             const int W = page->getWidth(), g = 10, w2 = (W - g * 3) / 2;
             lv->setBounds (g, g, w2, 136);
             rt->setBounds (g * 2 + w2, g, w2, 136);
-            fmS->setBounds (g, 156, 720, 220);
-            rg->setBounds (g * 2 + 720, 156, W - 3 * g - 720, 220);
+            w->setBounds (g, 156, 840, 130);
+        };
+        pageFm->onResize = [pageFm, fmS, rg]
+        {
+            const int W = pageFm->getWidth(), g = 10;
+            fmS->setBounds (g, g, 720, 220);
+            rg->setBounds (g * 2 + 720, g, W - 3 * g - 720, 220);
         };
     }
 
     // ---------------------------------------------------------------- Mutation
     {
-        auto* page = addPage ("Mutation");
+        auto* page = addPage ("Note Mutation");
         auto* dnS = sec (page, "DNA Splice  (builds a new wave from two of the note's own sources)", col::wavetable);
         dnS->choice (P_dnaMode, "Splice Mode", 170);
         dnS->choice (P_dnaA, "Source A", 110);
@@ -1687,47 +1818,35 @@ void MegaSynthEditor::buildPages()
 
     // ---------------------------------------------------------------- Filter & Envelopes
     {
-        auto* page = addPage ("Filter & Env");
+        auto* page = addPage ("Filters");
         auto* f = page->own (new FilterPanel (proc));
-        auto* a = sec (page, "Amp Envelope", col::env);
+        auto* pageEnv = addPage ("Amp & Filter");
+        auto* a = sec (pageEnv, "Amp Envelope", col::env);
         for (auto [idx, n] : { std::pair<int, const char*> { P_ampA, "Attack" }, { P_ampD, "Decay" }, { P_ampS, "Sustain" }, { P_ampR, "Release" } })
             a->knob (idx, n);
-        auto* fe = sec (page, "Filter Envelope", col::env);
+        auto* fe = sec (pageEnv, "Filter Envelope", col::env);
         for (auto [idx, n] : { std::pair<int, const char*> { P_fEnvA, "Attack" }, { P_fEnvD, "Decay" }, { P_fEnvS, "Sustain" }, { P_fEnvR, "Release" } })
             fe->knob (idx, n);
-        auto* w = sec (page, "Analog Warmth", col::supersaw);
-        w->knob (P_warmth, "Warmth");
-        w->knob (P_bassKeep, "Bass Keep");
-        w->knob (P_analogDrift, "Drift");
-        auto* wInfo = new juce::Label ({}, "Warmth: softer, rounder filter Drive saturation, plus a gentle low lift and smoother top.  "
-                                           "Bass Keep: holds onto low end in the classic models with high-pass or band-pass stages.  "
-                                           "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
-        wInfo->setColour (juce::Label::textColourId, col::muted);
-        wInfo->setFont (juce::Font (juce::FontOptions (12.0f)));
-        wInfo->setJustificationType (juce::Justification::topLeft);
-        wInfo->setMinimumHorizontalScale (1.0f);
-        w->add (wInfo, 520, 84);
-        page->onResize = [page, f, a, fe, w]
+        page->onResize = [page, f]
         {
             const int g = 10, W = page->getWidth();
             f->setBounds (g, g, W - 2 * g, 262);
-            a->setBounds (g, 282, 330, 140);
-            fe->setBounds (350, 282, 330, 140);
-            w->setBounds (g, 432, 840, 130);
+        };
+        pageEnv->onResize = [pageEnv, a, fe]
+        {
+            const int g = 10;
+            a->setBounds (g, g, 330, 140);
+            fe->setBounds (350, g, 330, 140);
         };
     }
 
     // ---------------------------------------------------------------- Effects
     {
-        auto* page = addPage ("Effects");
-        // four pages: Space (delay, reverbs, chorus, stereo), Dirt (sampler, multiband),
+        // four sub-tabs of FX & Mutation: Space (delay, reverbs, chorus, stereo), Dirt (sampler, multiband),
         // Motion (beat repeat, flanger / phaser, volume shaper) and the Rack (order, On, Mix)
-        auto* pick = page->own (new Segmented (proc, -1, { "SPACE", "DIRT", "MOTION", "RACK" }, col::fx));
-        juce::Component* sub[4];
-        for (auto*& c : sub) c = page->own (new juce::Component());
-        // components on the sub-pages are owned by the page (and shown inside their sub-page)
-        auto keep = [page] (juce::Component* holder, auto* comp) { page->children.add (comp); holder->addAndMakeVisible (comp); return comp; };
-        auto own = [keep] (juce::Component* holder, Section* s) { return keep (holder, s); };
+        Page* sub[4] = { addPage ("Space"), addPage ("Dirt"), addPage ("Motion"), addPage ("Rack") };
+        auto keep = [] (Page* holder, auto* comp) { holder->children.add (comp); holder->addAndMakeVisible (comp); return comp; };
+        auto own = [keep] (Page* holder, Section* s) { return keep (holder, s); };
         auto mk = [this] (const juce::String& t) { return new Section (proc, t, col::fx); };
         auto toggle = [this] (Section* s, int param, const juce::String& text, int w = 110)
         {
@@ -1843,88 +1962,105 @@ void MegaSynthEditor::buildPages()
         // ---- RACK
         auto* rack = keep (sub[3], new RackList (proc));
 
-        pick->setTooltip ("Effects pages; the Rack sets the order");
-        pick->onSelect = [sub] (int k) { for (int i = 0; i < 4; ++i) sub[i]->setVisible (i == k); };
-        for (int i = 1; i < 4; ++i) sub[i]->setVisible (false);
-        page->onResize = [page, pick, sub, d, r, c, v, st, sm, mb, metersC, br, fl, vs, curve, rack]
+        auto* sp = sub[0]; auto* dp = sub[1]; auto* mp = sub[2]; auto* rp = sub[3];
+        sp->onResize = [sp, d, r, c, v, st]
         {
-            const int g = 10, W = page->getWidth(), H = page->getHeight(), w2 = (W - g * 3) / 2;
-            pick->setBounds (g, 6, 420, 28);
-            for (auto* s : sub) s->setBounds (0, 40, W, H - 40);
-            d->setBounds (g, 0, w2, 176);
-            r->setBounds (g * 2 + w2, 0, w2, 176);
-            c->setBounds (g, 184, w2, 176);
-            v->setBounds (g * 2 + w2, 184, w2, 176);
-            st->setBounds (g, 368, W - 2 * g, 136);
-            sm->setBounds (g, 0, W - 2 * g, 136);
-            mb->setBounds (g, 146, W - 2 * g - 230, 236);
-            metersC->setBounds (W - g - 220, 146, 220, 236);
-            br->setBounds (g, 0, w2, 290);
-            fl->setBounds (g * 2 + w2, 0, w2, 290);
-            vs->setBounds (g, 296, 600, 258);
-            curve->setBounds (g + 610, 296, W - 2 * g - 610, 258);
-            rack->setBounds (g, 4, W - 2 * g, H - 50);
+            const int g = 10, W = sp->getWidth(), w2 = (W - g * 3) / 2, y = 6;
+            d->setBounds (g, y, w2, 176);
+            r->setBounds (g * 2 + w2, y, w2, 176);
+            c->setBounds (g, y + 184, w2, 176);
+            v->setBounds (g * 2 + w2, y + 184, w2, 176);
+            st->setBounds (g, y + 368, W - 2 * g, 136);
+        };
+        dp->onResize = [dp, sm, mb, metersC]
+        {
+            const int g = 10, W = dp->getWidth(), y = 6;
+            sm->setBounds (g, y, W - 2 * g, 136);
+            mb->setBounds (g, y + 146, W - 2 * g - 230, 236);
+            metersC->setBounds (W - g - 220, y + 146, 220, 236);
+        };
+        mp->onResize = [mp, br, fl, vs, curve]
+        {
+            const int g = 10, W = mp->getWidth(), w2 = (W - g * 3) / 2, y = 6;
+            br->setBounds (g, y, w2, 290);
+            fl->setBounds (g * 2 + w2, y, w2, 290);
+            vs->setBounds (g, y + 296, 600, 258);
+            curve->setBounds (g + 610, y + 296, W - 2 * g - 610, 258);
+        };
+        rp->onResize = [rp, rack]
+        {
+            const int g = 10;
+            rack->setBounds (g, 10, rp->getWidth() - 2 * g, rp->getHeight() - 20);
         };
     }
 
     // ---------------------------------------------------------------- Modulation
     {
-        auto* page = addPage ("Modulation");
-        Section* lfo[3]; Section* env[3];
+        // LFO 1-4 (wave, rate, depth and the rest) live on Modulation > LFOs
+        auto* pageMe = addPage ("Mod Envelopes");
+        Section* env[3];
         for (int i = 0; i < 3; ++i)
         {
-            lfo[i] = sec (page, "LFO " + juce::String (i + 1), col::mod);
-            lfo[i]->choice (P_lfo1Wave + 3 * i, "Wave", 110);
-            lfo[i]->knob (P_lfo1Rate + 3 * i, "Rate");
-            lfo[i]->knob (P_lfo1Depth + 3 * i, "Depth");
-            env[i] = sec (page, "Mod Envelope " + juce::String (i + 1), col::env);
+            env[i] = sec (pageMe, "Mod Envelope " + juce::String (i + 1), col::env);
             env[i]->knob (P_mEnv1A + 4 * i, "Attack");
             env[i]->knob (P_mEnv1D + 4 * i, "Decay");
             env[i]->knob (P_mEnv1S + 4 * i, "Sustain");
             env[i]->knob (P_mEnv1R + 4 * i, "Release");
         }
+        pageMe->onResize = [pageMe, env]
+        {
+            const int g = 10, W = pageMe->getWidth(), w3 = (W - g * 4) / 3;
+            for (int i = 0; i < 3; ++i) env[i]->setBounds (g + i * (w3 + g), g, w3, 120);
+        };
+
+        auto* page = addPage ("Assignments");
         auto* asg = sec (page, "Assignments  (pick a target, then set the depth; double-click a knob to zero it)", col::mod);
         for (int i = 0; i < 3; ++i)
             assignSlots.add (page->own (new AssignSlot (proc, P_lfoAssignSource0 + 3 * i, "LFO SLOT " + juce::String (i + 1), col::mod)));
         for (int i = 0; i < 3; ++i)
             assignSlots.add (page->own (new AssignSlot (proc, P_envAssignSource0 + 3 * i, "ENV SLOT " + juce::String (i + 1), col::env)));
-        auto* mw = page->own (new juce::Label ({}, "Mod wheel (CC1) sets LFO 1 depth. CC7 sets master volume."));
+        juce::Array<AssignSlot*> sl (assignSlots);
+        auto* midi = sec (page, "MIDI Controllers", col::mod);
+        midi->add (new ParamToggle (proc, P_wheelLfo1, "Mod wheel sets LFO 1 Depth", col::mod), 230, 30);
+        midi->add (new ParamToggle (proc, P_sustainPedal, "Sustain pedal (CC64)", col::mod), 190, 30);
+        auto* mw = new juce::Label ({}, "The mod wheel is also a Mod Matrix source. CC7 sets master volume. The MIDI IN panel shows what arrives.");
         mw->setColour (juce::Label::textColourId, col::muted);
         mw->setFont (juce::Font (juce::FontOptions (12.0f)));
-        juce::Array<AssignSlot*> sl (assignSlots);
-        auto* ci = sec (page, "Cell Instability  (each note wanders on its own: smooth per-note noise on the targets below)", col::env);
+        midi->add (mw, 640, 30);
+        page->onResize = [page, asg, sl, midi]
+        {
+            const int g = 10, W = page->getWidth();
+            asg->setBounds (g, g, W - 2 * g, 186);
+            const int sw = (W - 2 * g - 20 - 2 * 8) / 3;
+            for (int i = 0; i < 6; ++i)
+            {
+                const int row = i / 3, c = i % 3;
+                sl[i]->setBounds (g + 10 + c * (sw + 8), g + 30 + row * 78, sw, 74);
+                sl[i]->toFront (false);
+            }
+            midi->setBounds (g, g + 196, W - 2 * g, 76);
+        };
+
+        auto* pageCi = addPage ("Cell Instability");
+        auto* ci = sec (pageCi, "Cell Instability  (each note wanders on its own: smooth per-note noise on the targets below)", col::env);
         ci->knob (P_ciAmount, "Amount", 70);
         ci->knob (P_ciRate, "Rate", 70);
         for (auto [idx, n] : { std::pair<int, const char*> { P_ciPitch, "Pitch" }, { P_ciCutoff, "Cutoff" }, { P_ciRes, "Resonance" },
                                { P_ciLevel, "Osc Levels" }, { P_ciFold, "Wave Fold" }, { P_ciScan, "WT Scan" }, { P_ciFm, "FM" },
                                { P_ciDna, "DNA Splice" }, { P_ciEnv, "Envelopes" }, { P_ciReso, "Resonator" } })
             ci->knob (idx, n, 70);
-        page->onResize = [page, lfo, env, asg, sl, mw, ci]
+        pageCi->onResize = [pageCi, ci]
         {
-            const int g = 10, W = page->getWidth();
-            const int w3 = (W - g * 4) / 3;
-            for (int i = 0; i < 3; ++i)
-            {
-                lfo[i]->setBounds (g + i * (w3 + g), g, w3, 120);
-                env[i]->setBounds (g + i * (w3 + g), 136, w3, 120);
-            }
-            asg->setBounds (g, 262, W - 2 * g, 186);
-            const int sw = (W - 2 * g - 20 - 2 * 8) / 3;
-            for (int i = 0; i < 6; ++i)
-            {
-                const int row = i / 3, c = i % 3;
-                sl[i]->setBounds (g + 10 + c * (sw + 8), 262 + 30 + row * 78, sw, 74);
-                sl[i]->toFront (false);
-            }
-            mw->setBounds (g + 4, 450, W - 2 * g, 16);
-            ci->setBounds (g, 470, W - 2 * g, 126);
+            const int g = 10, W = pageCi->getWidth();
+            ci->setBounds (g, g, W - 2 * g, 126);
         };
     }
 
     // ---------------------------------------------------------------- Pitch envelope and MSEGs
     {
-        auto* page = addPage ("Env+");
-        auto* pe = sec (page, "Pitch Envelope  (808 drops, hoover scoops)", col::env);
+        auto* pagePe = addPage ("Pitch Envelope");
+        auto* page = addPage ("MSEG 1 & 2");
+        auto* pe = sec (pagePe, "Pitch Envelope  (808 drops, hoover scoops)", col::env);
         pe->knob (P_pEnvAmt, "Amount");
         pe->knob (P_pEnvA, "Attack");
         pe->knob (P_pEnvD, "Decay");
@@ -1954,18 +2090,22 @@ void MegaSynthEditor::buildPages()
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.0f)));
         help->setJustificationType (juce::Justification::topLeft);
-        page->onResize = [page, pe, ms, ed, help]
+        pagePe->onResize = [pagePe, pe]
+        {
+            const int g = 10, W = pagePe->getWidth();
+            pe->setBounds (g, g, W - 2 * g, 120);
+        };
+        page->onResize = [page, ms, ed, help]
         {
             const int g = 10, W = page->getWidth();
-            pe->setBounds (g, g, W - 2 * g, 120);
             for (int k = 0; k < 2; ++k)
             {
-                const int y = 140 + k * 220;
+                const int y = g + k * 220;
                 ms[k]->setBounds (g, y, W - 2 * g, 210);
                 ed[k]->setBounds (g + 230, y + 34, W - 2 * g - 242, 166);
                 ed[k]->toFront (false);
             }
-            help->setBounds (g, 580, W - 2 * g, 40);
+            help->setBounds (g, g + 440, W - 2 * g, 40);
         };
     }
 
@@ -2072,7 +2212,6 @@ void MegaSynthEditor::buildPages()
     // ---------------------------------------------------------------- Mod Matrix
     {
         auto* page = addPage ("Mod Matrix");
-        matrixTab = tabs.getNumTabs() - 1;
         auto* srcSec = sec (page, "More sources", col::mod);
         srcSec->choice (P_lfo4Wave, "LFO 4 Wave", 110);
         srcSec->knob (P_lfo4Rate, "LFO 4 Rate", 64);
@@ -2136,9 +2275,10 @@ void MegaSynthEditor::buildPages()
 
     // ---------------------------------------------------------------- Macros & Scenes
     {
-        auto* page = addPage ("Macros/Scenes");
+        auto* page = addPage ("Macros & Scenes");
         auto* macSec = sec (page, "Macros  (right-click any knob > Assign to macro; double-click a name to rename)", col::accent);
-        for (int i = 0; i < 8; ++i) macroCells.add (page->own (new MacroCell (proc, i)));
+        juce::Array<MacroCell*> myCells;
+        for (int i = 0; i < 8; ++i) { auto* m = page->own (new MacroCell (proc, i)); macroCells.add (m); myCells.add (m); }
         auto* scSec = sec (page, "Scenes", col::mod);
         xyPad = page->own (new XYPad (proc));
         for (int k = 0; k < 4; ++k)
@@ -2182,7 +2322,7 @@ void MegaSynthEditor::buildPages()
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (12.5f)));
         help->setJustificationType (juce::Justification::topLeft);
-        juce::Array<MacroCell*> cells (macroCells);
+        juce::Array<MacroCell*> cells (myCells);   // this page's own eight (the Perform page has its own)
         auto* pad = xyPad;
         updateSceneButtons();
         page->onResize = [this, page, macSec, cells, scSec, pad, sx, sy, help]
@@ -2370,7 +2510,7 @@ void MegaSynthEditor::buildPages()
 
     // ---------------------------------------------------------------- Sonic DNA Sequencer
     {
-        auto* page = addPage ("DNA Seq");
+        auto* page = addPage ("DNA Sequencer");
         auto* c = sec (page, "Sonic DNA Sequencer  (each step transforms the sound; also a Mod Matrix source)", col::wavetable);
         auto* on = new juce::ToggleButton ("On");
         on->setColour (juce::ToggleButton::tickColourId, col::wavetable);
@@ -2397,7 +2537,7 @@ void MegaSynthEditor::buildPages()
 
     // ---------------------------------------------------------------- Sequencer
     {
-        auto* page = addPage ("Sequencer");
+        auto* page = addPage ("Step Sequencer");
         auto* c = sec (page, "Sequencer", col::seq);
         seqRunAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParamIds[P_seqRun], tagParam (seqRunBtn, P_seqRun));
         seqRunBtn.setColour (juce::ToggleButton::tickColourId, col::seq);
@@ -2463,12 +2603,12 @@ void MegaSynthEditor::resized()
     redoBtn.setBounds (1010, 44, 58, 28);
     originalBtn.setBounds (1076, 44, 110, 28);
     status.setBounds (812, 74, 374, 14);
-    tabs.setBounds (0, 88, kDesignW, 640);
-    octDown.setBounds (10, 738, 70, 28);
-    octUp.setBounds (10, 772, 70, 28);
-    octLabel.setBounds (6, 806, 80, 40);
-    keyboard.setBounds (90, 734, kDesignW - 100 - 236, 120);
-    if (midiMonitor != nullptr) midiMonitor->setBounds (kDesignW - 240, 734, 230, 120);
+    tabs.setBounds (0, 88, kDesignW, 670);
+    octDown.setBounds (10, 768, 70, 28);
+    octUp.setBounds (10, 802, 70, 28);
+    octLabel.setBounds (6, 836, 80, 40);
+    keyboard.setBounds (90, 764, kDesignW - 100 - 236, 120);
+    if (midiMonitor != nullptr) midiMonitor->setBounds (kDesignW - 240, 764, 230, 120);
     keyboard.setKeyWidth ((float) keyboard.getWidth() / 36.0f);
 }
 
@@ -2677,8 +2817,8 @@ void MegaSynthEditor::showRoute (int slot)
                        + " at +25% (drag the knob's depth in Mod Matrix)");
         return;
     }
-    if (matrixTab < 0 || slot >= routeRows.size()) return;
-    tabs.setCurrentTabIndex (matrixTab);
+    if (slot >= routeRows.size()) return;
+    showPage ("Mod Matrix");
     matrixView->setViewPosition (0, juce::jmax (0, slot * 30 - 60));
     routeRows[slot]->flash();
 }
@@ -2734,7 +2874,7 @@ void MegaSynthEditor::timerCallback()
     // modulation matrix: rows follow the store; knobs show their rings
     const auto rv = proc.routes.getVersion();
     if (rv != lastRouteVersion) { lastRouteVersion = rv; for (auto* r : routeRows) r->refresh(); }
-    if (matrixTab >= 0 && tabs.getCurrentTabIndex() == matrixTab)
+    if (auto* mp = pageFor ("Mod Matrix"); mp != nullptr && mp->isShowing())
         for (auto* r : routeRows) r->updateLive();
     for (auto* k : allKnobs) if (k->isShowing()) k->updateMod();
     if (dnaInfo != nullptr && dnaInfo->isShowing())

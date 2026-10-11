@@ -29,6 +29,8 @@ public:
     void setShown (int s) { if (s != shown) { shown = s; repaint(); } }   // the segment actually in use
     void setColour (juce::Colour c) { colour = c; repaint(); }
     int getLocal() const { return local; }
+    int getParam() const { return param; }
+    void setLocal (int k) { if (k != local) { local = k; repaint(); } }
     std::function<void (int)> onSelect;   // local mode
 private:
     int segmentAt (juce::Point<int>) const;

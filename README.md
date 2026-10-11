@@ -23,7 +23,7 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 
 ## Using it
 
-- **Tabs**: Oscillators (Osc 1-3, Sub, Wavetable 1 and 2, Complex, SuperSaw), Mixer (levels, FX returns, FM and ring matrices), Filter & Env, Effects, Modulation (LFOs, mod envelopes, assignments) and Sequencer.
+- **Tabs**, in the order the sound flows (see *Where things are* below): **Perform**, **Overview**, **Oscillators**, **Mixer**, **Filters**, **Envelopes**, **FX & Mutation**, **Modulation**, **Sequencers** and **Lab**. Most tabs have sub-tabs along the top.
 - **Wavetable 1 and 2** each play a WAV (or AIFF/FLAC) loaded with their own *Load Sample* button. Wavetable 1 is the browser's Osc 4 and can be used in the FM and ring matrices; Wavetable 2 is new, plays alongside it, and can be modulated (level, detune, scan, loop points). Samples are saved inside your DAW project and in patch files.
 - **Keyboard**: click the on-screen keys. Inside a DAW the plugin never takes the computer keyboard, so clicking its controls doesn't interrupt your DAW's QWERTY keyboard (in Ableton press **M** for Computer MIDI Keyboard). The standalone app plays from A W S E D F T G Y H U J K with Z / X for octave, like the browser version.
 - **MIDI**: notes, pitch bend (range on the header; changing it also bends notes that are already bent), mod wheel, sustain pedal (CC64; switch off with *Sustain Pedal* if your pedal is meant for something else), CC7 → master volume. Aftertouch, poly aftertouch, MPE and any two CCs are available as modulation sources.
@@ -42,7 +42,47 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 - Every control is automatable. Double-click a knob to reset it.
 - **Undo / Redo / Original** (header): every knob move, step edit, route change, patch load and sample load can be undone. *Original* goes back to the patch as it was loaded.
 
-## Effects (Effects tab: Space / Dirt / Motion / Rack)
+## Where things are
+
+The tabs follow the signal: the oscillators, the mix, the filters, the envelopes, the mutation stages and effects, then what moves it all (modulation and sequencers) and the sound-design tools (Lab). Clicking a block in the Overview's signal flow opens its page.
+
+| Tab | Sub-tabs |
+|---|---|
+| Perform | (one page) |
+| Overview | (one page) |
+| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring |
+| Mixer | (one page) |
+| Filters | (one page) |
+| Envelopes | Amp & Filter, Mod Envelopes, Pitch Envelope, MSEG 1 & 2 |
+| FX & Mutation | Note Mutation, Bus Mutation, Space, Dirt, Motion, Rack |
+| Modulation | LFOs, Mod Matrix, Assignments, Macros & Scenes, Cell Instability |
+| Sequencers | Step Sequencer, Arp / Chord, DNA Sequencer |
+| Lab | Mutate / Lab, Capture |
+
+Moved from earlier versions:
+
+| Was | Now |
+|---|---|
+| Oscillators (one page) | Oscillators > Osc 1-3 & Sub / Wavetables / Complex & SuperSaw |
+| Unison | Oscillators > Unison |
+| Mixer: FM and Ring matrices | Oscillators > FM & Ring |
+| Filter & Env: filters | Filters |
+| Filter & Env: Amp and Filter Envelopes | Envelopes > Amp & Filter |
+| Filter & Env: Analog Warmth | Mixer |
+| Modulation: LFO 1-3 Wave / Rate / Depth | Modulation > LFOs (they were also there already) |
+| Modulation: Mod Envelopes 1-3 | Envelopes > Mod Envelopes |
+| Modulation: Assignments | Modulation > Assignments (with the MIDI controller switches) |
+| Modulation: Cell Instability | Modulation > Cell Instability |
+| Env+ | Envelopes > Pitch Envelope and Envelopes > MSEG 1 & 2 |
+| LFOs, Mod Matrix | Modulation > LFOs, Modulation > Mod Matrix |
+| Macros/Scenes | Modulation > Macros & Scenes |
+| Mutation | FX & Mutation > Note Mutation |
+| Bus Mutation | FX & Mutation > Bus Mutation |
+| Effects: Space / Dirt / Motion / Rack | FX & Mutation > Space / Dirt / Motion / Rack |
+| Sequencer, Arp / Chord, DNA Seq | Sequencers > Step Sequencer / Arp / Chord / DNA Sequencer |
+| Mutate / Lab, Capture | Lab > Mutate / Lab, Lab > Capture |
+
+## Effects (FX & Mutation > Space / Dirt / Motion / Rack)
 
 - **Space**: Tape / BBD Delay, 90s Reverb + Shimmer, Juno Chorus and the Reverse Reverb (as before), plus **Stereo Tools**: Bass Mono below 50-300 Hz, Width 0-200% and a Haas delay (0-30 ms) on the top end. It works in mid/side and never touches the mid, so the mono sum is exactly unchanged.
 - **Dirt**:
@@ -56,7 +96,7 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 - All the new knobs can be automated and are Mod Matrix destinations. Synced settings follow the DAW's tempo and position (the synth's tempo when it's stopped). The effects add no latency.
 - Patches and projects from before the rack load with every new effect off, the original effects on, and the original order.
 
-## Filter (Filter & Env tab)
+## Filter (Filters tab)
 
 - **Type**: Low Pass, High Pass, Band Pass, Notch, Peak / Bell, All Pass.
 - **Slope**: 6, 12, 18 or 24 dB per octave for Low Pass, High Pass and All Pass; 12 or 24 for Band Pass and Notch; Peak / Bell has none (unavailable slopes are greyed out).
@@ -71,7 +111,7 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
 - Patches and projects from before this version load as they were: the classic model at its own slope, Low Pass, fully wet, no key tracking or filter LFO.
 - **Filter 2**: a second, identical filter. **Filter 1 | Filter 2** in the panel header picks which one the controls show; **Filter 2 On** switches it in (off, it costs nothing and the sound is Filter 1 alone). **Serial** runs Filter 1 then Filter 2; **Parallel** feeds both the same sound and adds them, with **Balance** going from Filter 1 only, through both at full level in the middle, to Filter 2 only. **Stereo Split** (parallel only) puts Filter 1 on the left and Filter 2 on the right. **Copy 1 > 2** gives Filter 2 all of Filter 1's settings. Both filters share the Filter Envelope but each has its own Env Amt, LFO Amt and Key Track. Routing changes crossfade, the response curve shows both filters and the combined result, all of Filter 2's knobs and Balance are Mod Matrix destinations (cutoff and resonance at audio rate too), and the DNA Sequencer's Filter step, Cell Instability, Mutate and scenes cover both. Patches and projects from before Filter 2 load with it off.
 
-## Mutation tab
+## Note Mutation (FX & Mutation > Note Mutation)
 
 Three per-note modules sit between the oscillator mix and the filter, in this order. Each has its own mix, and at 0 it's switched out completely.
 
@@ -81,7 +121,7 @@ Three per-note modules sit between the oscillator mix and the filter, in this or
 
 - **Resonator** (after the filter and amp envelope): up to 16 tuned modes following each note, with six tunings (Harmonic, Odd, Bar, Membrane, Plate, Bell), Pitch offset, Decay, Damping (higher modes die faster), Stiffness (stretches the upper modes like a stiff string), stereo Spread and Feedback. Short notes strike it and it rings on after the note ends; sustained sounds are levelled so they don't overload it. With Feedback it can sustain on its own, so after a note ends it gets three times its decay time, then fades out.
 
-## Bus Mutation tab
+## Bus Mutation (FX & Mutation > Bus Mutation)
 
 These run once on all notes together, before the effects (per-note versions would cost about 16 times the CPU). Their knobs still take Mod Matrix routes, using the newest note's sources.
 
@@ -90,23 +130,23 @@ These run once on all notes together, before the effects (per-note versions woul
 - **Bus order**: Granular before Spectral, or the other way round.
 - **Feedback Matrix**: feeds the outputs of Granular, Spectral, the tape delay and the final output back into the inputs of Granular, Spectral and the delay (12 paths, each with its own amount). Every path arrives *Time* later (10 ms to 1 s; never less than one audio block, so there are no instant loops), through a DC blocker, a *Tone* low-pass, a soft clip at the safety ceiling and its own limiter. *Safety* lowers how hard loops can drive. While any path is up, the final output passes a soft ceiling that never exceeds 0 dBFS; with every path at 0 it is completely out of the signal.
 
-## Capture tab (Capture / Resample)
+## Capture / Resample (Lab > Capture)
 
 **Record** captures up to 8 seconds of the synth, either after the effects (exactly what you hear) or before them. Drag the markers on the waveform to trim (optionally snapped to zero crossings), add fades, reverse and normalise. The pitch is detected automatically. Then send it back in: to **WT 1 / WT 2** (the root note is set from the detected pitch, so it plays in tune), to **DNA A / DNA B** (loaded into a wavetable and chosen as that DNA Splice source), to **Granular** (becomes the frozen grain buffer), or cut a **single cycle** at the detected pitch into WT 1 / WT 2 as a looping wave. **Save WAV** exports it. The last capture is saved with the project and in patch files.
 
-## Cell Instability (Modulation tab)
+## Cell Instability (Modulation > Cell Instability)
 
 Each note gets its own smooth wandering noise on a set of targets, so no two notes (or two moments of a held note) are quite the same. **Amount** scales everything (0 = off), **Rate** sets how fast it wanders. Per-target depths: Pitch (up to +/-50 cents), Cutoff, Resonance, Osc Levels (the balance between oscillators shifts; switched-off oscillators stay off), Wave Fold, WT Scan, FM (only where FM is already up), DNA Splice, Envelopes (attack/decay/release, set per note at note-on) and Resonator. The noise glides with a smooth curve, so it never steps or clicks. It's also a Mod Matrix source ("Cell Instability") for anything else.
 
-## Master Mutate (Mutate tab)
+## Master Mutate (Lab > Mutate / Lab)
 
 **Mutate** adds a seeded variation on top of the patch without moving any knob: 0% is exactly your patch, and the same patch, seed and amount always give exactly the same sound. **New seed** picks a random seed, **<** / **>** step through neighbouring seeds. 13 **locks** (Pitch, Oscillators, Wavetables, Levels, Filter, Envelopes, Modulation, Effects, DNA Splice, Wave / Audio-rate, Resonator, Granular / Spectral, Feedback) keep a group exactly as it is. Offsets move together within a group and are shaped: short attacks stay short until extreme amounts, feedback tends downwards, FM / modulator ratios lean to harmonic values, pitch moves in whole semitones, anything switched off stays off, and waveforms switch only at higher amounts. **Commit** writes the current mutation into the knobs and sets Mutate back to 0 (undoable; committed mutations are listed and saved with the patch). Mutate is an ordinary parameter, so it can be automated, put on a macro, or driven per note from the Mod Matrix (e.g. velocity -> Mutate). The sequencer, master volume, macros and scene positions are never mutated.
 
-## Genetic Lab (Mutate / Lab tab)
+## Genetic Lab (Lab > Mutate / Lab)
 
 Make two sounds the parents (**Current sound > A**, then build or load another and **Current sound > B**) and press **Breed**: you get eight children. Each child takes every one of the 13 groups (the same groups as the Mutate locks) whole from parent A or parent B, so a child might have A's oscillators and envelopes with B's filter, effects and Mod Matrix routes; **Variation** adds a light mutation on top (0 = pure combinations). Click a child to hear it, make a good one a parent (**Child > Parent A/B**) and breed again. **<** / **>** step back and forward through the generations, the family tree is shown for the sound you're playing and saved with the project, and a patch saved from the lab records its lineage. Breeding mixes the sound parameters and routes; samples, the sequence, scenes and captures stay as they are.
 
-## Sonic DNA Sequencer (DNA Seq tab)
+## Sonic DNA Sequencer (Sequencers > DNA Sequencer)
 
 Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (Wave Mutation), Shift, Ring, FM (Audio-Rate Transform), Splice (DNA Splice), Resonate (Resonator), Filter (closes both filters), Grain (Granular), Blur (Spectral, which must be On), Mutate (Master Mutate) and Octave (+12 semitones). The running step pushes its transform's destinations, **Glide** crossfades into the next step and **Depth** scales everything.
 
@@ -124,11 +164,11 @@ Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (W
 - **Mod Matrix destinations**: Glide, Depth, Density and Probability, plus Swing, Start Offset, Free Rate and Lane 2 Steps. The clock settings (Swing, Start Offset, Free Rate) follow the modulation with one audio block of delay.
 - Patches and projects from before this version load with these settings off and their steps in pattern A, and play exactly as they did.
 
-## Overview tab
+## Overview
 
-The first tab shows the whole synth at a glance: the **signal flow** (each note's chain, then the bus, with the stages that are switched in lit up, cyan badges for Mod Matrix routes into each stage and red arcs for Feedback Matrix paths), the **genetic network** (every active route as a line from its source to its destination, pulsing with the source's live value), a **spectrum** of the output, and the **DNA strand**: 13 base pairs for the 13 genetic groups, glowing with how hard the current seed and Mutate amount push each one, grey when locked. All of it is drawn from values the audio already publishes; the only addition to the audio path is copying the output into the analyser's buffer.
+The Overview shows the whole synth at a glance: the **signal flow** (each note's chain, then the bus, with the stages that are switched in lit up, cyan badges for Mod Matrix routes into each stage and red arcs for Feedback Matrix paths; click a block to open its page), the **genetic network** (every active route as a line from its source to its destination, pulsing with the source's live value), a **spectrum** of the output, and the **DNA strand**: 13 base pairs for the 13 genetic groups, glowing with how hard the current seed and Mutate amount push each one, grey when locked. All of it is drawn from values the audio already publishes; the only addition to the audio path is copying the output into the analyser's buffer.
 
-## Unison tab
+## Unison (Oscillators > Unison)
 
 - Osc 1-3, both wavetables and the Complex oscillator can each stack up to 8 voices: the oscillator itself in the centre, plus detuned copies.
 - Per oscillator:
@@ -152,7 +192,7 @@ Mega Synth has an optional stereo sidechain input, so a kick or break on another
 - In VST3 the input is declared as an aux (sidechain) bus, so hosts still treat Mega Synth as an instrument.
 - Old patches and projects load with both sidechain options off.
 
-## LFOs tab
+## LFOs (Modulation > LFOs)
 
 Each of the four LFOs has, on top of Wave, Rate and Depth:
 
@@ -164,7 +204,7 @@ Each of the four LFOs has, on top of Wave, Rate and Depth:
 - Phase, Smooth and Fade In are Mod Matrix destinations. The new settings drive every LFO destination: the Mod Matrix, the assignment slots and the filters' LFO amount.
 - Patches and projects from before this version load with Sync off and Each note retrigger, and sound exactly as they did.
 
-## Arp / Chord tab
+## Arp / Chord (Sequencers > Arp / Chord)
 
 - **Chord Memory**: one key plays a whole chord. Choose Minor 7, Major 7, Minor 9, Sus 2, Sus 4, Power, Rave minor (an open 1 5 b3 b7 9) or Octaves, or press **Learn**, play a chord and let go: it's stored relative to its lowest note. **Spread** moves every other note up by octaves to open the voicing; **Inversion** moves the lowest notes up (or the highest down). It works in mono too: a chord always gets a voice per note.
 - **Arpeggiator**:
@@ -179,7 +219,7 @@ Each of the four LFOs has, on top of Wave, Rate and Depth:
 - Only notes you play are arpeggiated, not the step sequencer's.
 - Old patches and projects load with both off.
 
-## Env+ tab (pitch envelope and MSEGs)
+## Pitch envelope and MSEGs (Envelopes > Pitch Envelope, MSEG 1 & 2)
 
 - **Pitch Envelope**: a quick pitch sweep at the start of each note, for kick-like basses, zaps, laser stabs and scoops.
   - **Amount** (-48 to +48 semitones; negative scoops up from below).
@@ -233,7 +273,7 @@ edited, saved, mutated or bred. Loading one can be undone.
 
 Quality is your setting rather than part of the sound, so loading a preset keeps it.
 
-## Modulation matrix (Mod Matrix tab)
+## Modulation matrix (Modulation > Mod Matrix)
 
 Any source can drive any sound parameter: 32 routes, each with its own depth.
 
@@ -244,9 +284,9 @@ Any source can drive any sound parameter: 32 routes, each with its own depth.
 - **Right-click any knob** to modulate it or to remove/find its routes. A modulated knob shows a cyan ring for the range the routes can reach and a white dot for the value the newest note is hearing.
 - **Audio rate**: Osc 1/2/3/Sub outputs can drive oscillator pitch (FM), levels (AM), filter cutoff and resonance, FM depths, ring mix and the complex oscillator's FM and fold, sample by sample. They can't drive other destinations; the matrix marks those routes inactive.
 - Envelope times are read when a note starts, so routes onto them use the note-on values (velocity → attack works; an LFO onto attack takes its value at note-on). Effects are shared by all notes, so routes onto effect parameters follow the newest note.
-- **Macros** (Macros & Scenes tab): 8 macro knobs you can rename. Right-click any knob > *Assign to macro* to add it (each assignment is a matrix route, so its depth, curve and direction can be changed there). Macros are also sources and destinations in the matrix, so the mod wheel or an LFO can drive a macro that drives ten knobs.
+- **Macros** (Modulation > Macros & Scenes): 8 macro knobs you can rename. Right-click any knob > *Assign to macro* to add it (each assignment is a matrix route, so its depth, curve and direction can be changed there). Macros are also sources and destinations in the matrix, so the mod wheel or an LFO can drive a macro that drives ten knobs.
 - **Scenes A-D**: *Store A-D* saves the whole sound (oscillators, filter, envelopes, LFOs, effects; not the routes, macros, volume or sequencer). Turn on *Morph* and drag the XY pad to blend them: knobs blend smoothly, switches such as waveform and filter type take the nearest scene's setting. With Morph on, the A-D buttons choose which scene the panel shows and edits; with it off they recall a scene. Scene X and Y are normal parameters, so they can be automated, put on a macro, or modulated per note from the matrix.
-- The original LFO / envelope slots on the Modulation tab still work exactly as before, alongside the matrix. Patches made before the matrix load with it empty and sound the same.
+- The original LFO / envelope slots (Modulation > Assignments) still work exactly as before, alongside the matrix. Patches made before the matrix load with it empty and sound the same.
 
 ## Differences from the browser version
 
@@ -261,7 +301,7 @@ Most behaviour is unchanged. These are the places where the browser version had 
 - **Delay Sync** stays in effect while notes play. The browser switched back to the manual delay time whenever a note was held.
 - Tempo-synced effects follow the DAW tempo.
 - The reverb, shimmer and reverse reverb share one impulse, so they run through one convolution with their returns applied before it. The sound only differs if you modulate their return levels quickly.
-- **Analog Warmth** (Filter & Env tab, new): *Warmth* makes the filter's Drive saturation softer, with a little 2nd harmonic (it doesn't colour the filter at 0 dB Drive), and adds a gentle low lift and softer top on the master. *Bass Keep* holds onto low end in the classic filter models with high-pass or band-pass stages (Steiner-Parker, State Variable, MS-20, Oberheim, SEM, CS-15...). *Drift* lets each oscillator wander slightly and start free-running. They default to 0.5 / 0.5 / 0.3; set all three to 0 for the browser's exact sound.
+- **Analog Warmth** (Mixer): *Warmth* makes the filter's Drive saturation softer, with a little 2nd harmonic (it doesn't colour the filter at 0 dB Drive), and adds a gentle low lift and softer top on the master. *Bass Keep* holds onto low end in the classic filter models with high-pass or band-pass stages (Steiner-Parker, State Variable, MS-20, Oberheim, SEM, CS-15...). *Drift* lets each oscillator wander slightly and start free-running. They default to 0.5 / 0.5 / 0.3; set all three to 0 for the browser's exact sound.
 - **New**: semitone dials on every oscillator, velocity sensitivity (off by default, as before), pitch-bend range, the DAW-synced sequencer clock, and samples saved with the project.
 
 ## Building from source

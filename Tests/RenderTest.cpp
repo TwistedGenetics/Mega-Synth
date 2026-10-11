@@ -9,6 +9,7 @@
 #include "Mut/Mutator.h"
 #include "UI/FilterPanel.h"
 #include "UI/PatchBrowser.h"
+#include "UI/Overview.h"
 
 using namespace tg;
 
@@ -100,10 +101,10 @@ static bool isLfoV2ParamForTest (const juce::String& id)
     return false;
 }
 
-static int tabByName (juce::TabbedComponent* t, const juce::String& name)
+static bool showPage (juce::AudioProcessorEditor* ed, const juce::String& name)
 {
-    if (t != nullptr) for (int i = 0; i < t->getNumTabs(); ++i) if (t->getTabNames()[i].equalsIgnoreCase (name)) return i;
-    return 0;
+    auto* e = dynamic_cast<MegaSynthEditor*> (ed);
+    return e != nullptr && e->showPage (name);
 }
 
 int main()
@@ -511,24 +512,20 @@ int main()
         p->fxRack.move (0, 4);
         render (*p, 0.5, chord (0.0, 0.4, { 48, 60 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
-        ed->setSize (1200, 860);
+        ed->setSize (1200, 890);
         std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
         {
             if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
             for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
             return nullptr;
         };
-        auto* tabs = findTabs (ed.get());
-        const int fxTab = tabByName (tabs, "Effects");
-        tabs->setCurrentTabIndex (fxTab);
-        auto* pageC = tabs->getTabContentComponent (fxTab);
-        tgui::Segmented* pick = nullptr;
-        for (auto* ch : pageC->getChildren()) if (auto* sg = dynamic_cast<tgui::Segmented*> (ch)) pick = sg;
+        juce::ignoreUnused (findTabs);
         auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+        const char* fxPages[] = { "Space", "Dirt", "Motion", "Rack" };
         for (int k = 0; k < 4; ++k)
         {
-            if (pick != nullptr && pick->onSelect) pick->onSelect (k);
-            auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 640), true, 1.0f);
+            showPage (ed.get(), fxPages[k]);
+            auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 670), true, 1.0f);
             auto f = dir.getChildFile ("fx_ui_" + juce::String (k) + ".png"); f.deleteFile();
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
         }
@@ -634,14 +631,14 @@ int main()
         render (*p, 0.3, chord (0.0, 1.0, { 48 }));
         render (*p, 0.05, { { 0.0, juce::MidiMessage::pitchWheel (1, 12000) }, { 0.0, juce::MidiMessage::controllerEvent (1, 1, 80) }, { 0.0, juce::MidiMessage::controllerEvent (1, 64, 127) } });
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
-        ed->setSize (1200, 860);
+        ed->setSize (1200, 890);
         std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
         {
             if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
             for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
             return nullptr;
         };
-        if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (tabByName (tabs, tabName));
+        showPage (ed.get(), tabName);
         auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
         auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
         auto f = dir.getChildFile ("tab_" + tabName.retainCharacters ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") + ".png"); f.deleteFile();
@@ -653,7 +650,7 @@ int main()
     {
         auto p = make();
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
-        ed->setSize (1200, 860);
+        ed->setSize (1200, 890);
         std::function<juce::TextButton* (juce::Component*, const juce::String&)> findBtn = [&] (juce::Component* c, const juce::String& t) -> juce::TextButton*
         {
             if (auto* b = dynamic_cast<juce::TextButton*> (c)) if (b->getButtonText() == t) return b;
@@ -677,15 +674,15 @@ int main()
         auto st = p->dnaSteps.get (0, 0, 3); st.lock = true; p->dnaSteps.set (0, 0, 3, st);
         render (*p, 0.3, chord (0.0, 0.2, { 48 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
-        ed->setSize (1200, 860);
+        ed->setSize (1200, 890);
         std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
         {
             if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
             for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
             return nullptr;
         };
-        if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (tabByName (tabs, "DNA Seq"));
-        auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 640), true, 1.0f);
+        showPage (ed.get(), "DNA Sequencer");
+        auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 670), true, 1.0f);
         auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
         auto f = dir.getChildFile ("dna_ui.png"); f.deleteFile();
         juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
@@ -793,14 +790,14 @@ int main()
                 setP (*p, P_filterMode, lk[0]); setP (*p, P_filterType, lk[1]); setP (*p, P_filterSlope, lk[2]); setP (*p, P_filterRes, lk[3]); setP (*p, P_filterCutoff, lk[4]);
                 setP (*p, P_filter2On, lk[5]); setP (*p, P_filterRouting, lk[6]); setP (*p, P_filterStereoSplit, lk[7]); setP (*p, P_filter2Res, 8.0f);
                 std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
-                ed->setSize (1200, 860);
+                ed->setSize (1200, 890);
                 std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
                 {
                     if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
                     for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
                     return nullptr;
                 };
-                if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (tabByName (tabs, "Filter & Env"));
+                showPage (ed.get(), "Filters");
                 auto img = ed->createComponentSnapshot (juce::Rectangle<int> (0, 88, 1200, 310), true, 1.0f);
                 auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
                 auto f = dir.getChildFile ("filter_ui_" + juce::String (n++) + ".png"); f.deleteFile();
@@ -2233,8 +2230,8 @@ int main()
             // window size memory
             auto p = make(); p->uiWidth = 1500;
             std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
-            CHECK (ed->getWidth() == 1500 && std::abs (ed->getHeight() - 1075) <= 1, "editor opens at the project's size");
-            ed->setSize (900, 645);
+            CHECK (ed->getWidth() == 1500 && std::abs (ed->getHeight() - 1113) <= 1, "editor opens at the project's size");
+            ed->setSize (900, 668);
             CHECK (p->uiWidth.load() == 900, "resizing is remembered");
             auto q = make();
             std::unique_ptr<juce::AudioProcessorEditor> e2 (q->createEditor());
@@ -2268,6 +2265,54 @@ int main()
         return pct;
     };
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_WORST", {}).isNotEmpty()) { worst (1); return 0; }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ALLSHOTS", {}).isNotEmpty())
+    {
+        // a snapshot of every tab and sub-tab (renders/page_<name>.png)
+        auto p = make();
+        setP (*p, P_arpOn, 1.0f); setP (*p, P_pEnvAmt, 12.0f);
+        p->msegs.setPreset (1, 2);
+        render (*p, 0.3, chord (0.0, 1.0, { 48 }));
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+        ed->setSize (1200, 890);
+        auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+        auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+        for (auto& name : e->allPageNames())
+        {
+            e->showPage (name);
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto f = dir.getChildFile ("page_" + name.retainCharacters ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") + ".png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+            std::cout << "SHOT " << name << std::endl;
+        }
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_UICONTROLS", {}).isNotEmpty())
+    {
+        // every parameter that has a control somewhere in the editor (knobs, switches, menus, segment pickers)
+        auto p = make();
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+        ed->setSize (1200, 890);
+        std::set<juce::String> ids;
+        std::function<void (juce::Component*)> walk = [&] (juce::Component* c)
+        {
+            if (auto* k = dynamic_cast<tgui::Knob*> (c)) ids.insert (kParamIds[k->paramIndex]);
+            if (auto* sg = dynamic_cast<tgui::Segmented*> (c); sg != nullptr && sg->getParam() >= 0) ids.insert (kParamIds[sg->getParam()]);
+            if (c->getProperties().contains ("megaParam")) ids.insert (kParamIds[(int) c->getProperties()["megaParam"]]);
+            for (auto* ch : c->getChildren()) walk (ch);
+        };
+        walk (ed.get());
+        std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
+        {
+            if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
+            for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
+            return nullptr;
+        };
+        if (auto* tabs = findTabs (ed.get()))
+            for (int t = 0; t < tabs->getNumTabs(); ++t)
+                if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
+        for (auto& id : ids) std::cout << "UICTL " << id << std::endl;
+        return 0;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_DUMPDEFAULTS", {}).isNotEmpty())
     {
         auto p = make();
@@ -2899,6 +2944,67 @@ int main()
         }
         initFile.deleteFile();
     };
+    // ---- the tab layout: every control kept, pages found by name (old names too), Overview links
+    auto layoutTests = [&]
+    {
+        std::cout << "Tab layout" << std::endl;
+        auto p = make();
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+        ed->setSize (1200, 890);
+        auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+        CHECK (e != nullptr, "editor");
+        if (e == nullptr) return;
+        std::set<juce::String> ids;
+        std::function<void (juce::Component*)> walk = [&] (juce::Component* c)
+        {
+            if (auto* k = dynamic_cast<tgui::Knob*> (c)) ids.insert (kParamIds[k->paramIndex]);
+            if (auto* sg = dynamic_cast<tgui::Segmented*> (c); sg != nullptr && sg->getParam() >= 0) ids.insert (kParamIds[sg->getParam()]);
+            if (c->getProperties().contains ("megaParam")) ids.insert (kParamIds[(int) c->getProperties()["megaParam"]]);
+            for (auto* ch : c->getChildren()) walk (ch);
+        };
+        walk (ed.get());
+        std::function<juce::TabbedComponent* (juce::Component*)> findTabs = [&] (juce::Component* c) -> juce::TabbedComponent*
+        {
+            if (auto* t = dynamic_cast<juce::TabbedComponent*> (c)) return t;
+            for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
+            return nullptr;
+        };
+        auto* tabs = findTabs (ed.get());
+        if (tabs != nullptr)
+            for (int t = 0; t < tabs->getNumTabs(); ++t)
+                if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
+        juce::StringArray before;
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.40.txt").loadFileAsString());
+        before.removeEmptyStrings();
+        juce::StringArray lost;
+        for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.40; now " << (int) ids.size() << std::endl;
+        CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
+        // the tabs, in signal-flow order
+        CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",
+                                                                             "FX & Mutation", "Modulation", "Sequencers", "Lab" }), "ten tabs in signal-flow order");
+        // every page can be shown by name, and only that sub-page is visible
+        for (auto& name : e->allPageNames())
+        {
+            CHECK (e->showPage (name) && e->currentPageName() == name, "show page " + name);
+        }
+        for (auto old : { "Effects", "Filter & Env", "Env+", "Mutation", "Macros/Scenes", "DNA Seq", "Sequencer", "LFOs", "Mod Matrix", "Unison" })
+            CHECK (e->showPage (old), juce::String ("old tab name still opens a page: ") + old);
+        CHECK (! e->showPage ("No Such Page"), "unknown page name");
+        // every Overview block opens a page that exists
+        for (int b = 0; b < 11; ++b) CHECK (e->allPageNames().contains (tgui::SignalFlowView::pageForBox (b)), "Overview block " + juce::String (b) + " has a page");
+        // "Show in Mod Matrix" lands on the Mod Matrix page
+        p->addRoute (MS_Lfo1, P_filterCutoff, 0.3f);
+        e->showPage ("Perform");
+        e->showRoute (0);
+        CHECK (e->currentPageName() == "Mod Matrix", "Show in Mod Matrix opens Modulation > Mod Matrix");
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_UIONLY", {}).isNotEmpty())
+    {
+        layoutTests();
+        std::cout << (failures == 0 ? "UI TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_MIDIONLY", {}).isNotEmpty())
     {
         midiTests();
@@ -4239,6 +4345,7 @@ int main()
     fxTests();
     playTests();
     midiTests();
+    layoutTests();
     hardTests();
     lfoTests();
     arpTests();
@@ -4482,7 +4589,7 @@ int main()
             setP (*p, i, v);
         render (*p, 0.6, chord (0.0, 0.55, { 48, 60, 64 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
-        ed->setSize (1200, 860);
+        ed->setSize (1200, 890);
         std::function<void (juce::Component*)> rings = [&] (juce::Component* c)
         {
             if (auto* k = dynamic_cast<tgui::Knob*> (c)) k->updateMod();

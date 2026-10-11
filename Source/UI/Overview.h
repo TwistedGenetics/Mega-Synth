@@ -8,15 +8,22 @@
 namespace tgui
 {
 
-class SignalFlowView : public juce::Component
+class SignalFlowView : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    explicit SignalFlowView (MegaSynthProcessor& p) : proc (p) {}
+    explicit SignalFlowView (MegaSynthProcessor& p) : proc (p) { setTooltip ("Click a block to open its page"); }
     void paint (juce::Graphics&) override;
     void update();
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    std::function<void (const juce::String&)> onOpen;   // a page name, e.g. "Filters"
+    static juce::String pageForBox (int box);
 private:
+    int boxAt (juce::Point<float>) const;
     MegaSynthProcessor& proc;
     juce::String lastKey;
+    juce::Rectangle<float> boxRects[16];
+    int numBoxRects = 0;
 };
 
 class NetworkView : public juce::Component

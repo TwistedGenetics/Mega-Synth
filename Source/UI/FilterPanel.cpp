@@ -328,7 +328,7 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
         auto* box = lfoSrc.add (new juce::ComboBox());
         for (int i = 0; i < kListFilterLfo.size; ++i) box->addItem (kListFilterLfo.labels[i], i + 1);
         lfoAtt.add (new juce::AudioProcessorValueTreeState::ComboBoxAttachment (proc.apvts, kParamIds[f.lfoSrc], tagParam (*box, f.lfoSrc)));
-        box->setTooltip ("Which LFO LFO Amt uses (rate, shape and depth are on the Modulation tab)");
+        box->setTooltip ("Which LFO LFO Amt uses (rate, shape and depth are on Modulation > LFOs)");
         addChildComponent (box);
 
         const std::pair<int, const char*> ks[] = { { f.cutoff, "Cutoff" }, { f.res, "Resonance" }, { f.drive, "Drive" }, { f.mix, "Mix" },

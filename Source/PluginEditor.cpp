@@ -1827,39 +1827,72 @@ void MegaSynthEditor::buildPages()
             if (w == nullptr || *selected >= b.nSlices) return juce::Range<double>();
             return juce::Range<double> ((double) b.start[*selected] / w->length, (double) b.start[*selected + 1] / w->length);
         };
-        wave->onClick = [this, selected, activeOf] (double f, const juce::MouseEvent& e)
+        auto selMarker = std::make_shared<int> (-1);
+        auto isManual = [this, activeOf] { const int a = activeOf(); return juce::roundToInt (proc.param (breakParams (a).sliceMode)->convertFrom0to1 (proc.param (breakParams (a).sliceMode)->getValue())) == 5; };
+        auto selectSliceAt = [this, selected, activeOf] (double f)
         {
             const int a = activeOf();
             const auto* w = proc.getSample (MegaSynthProcessor::breakSlot (a));
             if (w == nullptr) return;
-            const bool manual = juce::roundToInt (proc.param (breakParams (a).sliceMode)->convertFrom0to1 (proc.param (breakParams (a).sliceMode)->getValue())) == 5;
-            if (manual && e.mods.isShiftDown())
-            {
-                proc.breakStore.edit ([f, a] (tg::BreakData& d)
-                {
-                    auto& b = d.brk[a];
-                    if (b.nMarkers < tg::BreakSlot::kSlices - 1) { b.markers[b.nMarkers++] = (float) f; std::sort (b.markers, b.markers + b.nMarkers); }
-                });
-                proc.refreshBreakAnalysis();
-                return;
-            }
             const auto d = proc.breakStore.get(); const auto& b = d.brk[a];
             for (int k = 0; k < b.nSlices; ++k)
                 if (f * w->length >= b.start[k] && f * w->length < b.start[k + 1]) { *selected = k; proc.breakAudition.store (a * 100 + k); break; }
         };
-        wave->onRightClick = [this, activeOf] (double f)
+        // the marker within a few pixels of a click, or -1
+        auto markerNear = [this, activeOf, wave] (double f)
+        {
+            const auto d = proc.breakStore.get(); const auto& b = d.brk[activeOf()];
+            const double tol = 5.0 / std::max (1, wave->getWidth());
+            int best = -1; double bestD = tol;
+            for (int i = 0; i < b.nMarkers; ++i) if (std::abs (b.markers[i] - f) < bestD) { bestD = std::abs (b.markers[i] - f); best = i; }
+            return best;
+        };
+        wave->onClick = [this, selectSliceAt, isManual, markerNear, selMarker, activeOf] (double f, const juce::MouseEvent& e)
+        {
+            // the label strip along the top always picks (and plays) a slice; so does any click outside Manual mode
+            if (! isManual() || e.position.y < 18.0f) { selectSliceAt (f); return; }
+            const int near = markerNear (f);
+            if (near >= 0) { *selMarker = near; selectSliceAt (f); return; }   // a marker: select it (Delete removes it)
+            const int a = activeOf();
+            const auto* w = proc.getSample (MegaSynthProcessor::breakSlot (a));
+            if (w != nullptr && proc.addChopMarker (a, f * w->length, ! e.mods.isAltDown())) { proc.pushHistory ("Add marker"); selectSliceAt (f); }
+        };
+        wave->onDoubleClick = [this, isManual, activeOf] (double f)
+        {
+            // split the slice under the pointer in half
+            if (! isManual()) return;
+            const int a = activeOf();
+            const auto* w = proc.getSample (MegaSynthProcessor::breakSlot (a));
+            if (w == nullptr) return;
+            const auto d = proc.breakStore.get(); const auto& b = d.brk[a];
+            for (int k = 0; k < b.nSlices; ++k)
+                if (f * w->length >= b.start[k] && f * w->length < b.start[k + 1]) { proc.addChopMarker (a, 0.5 * (b.start[k] + b.start[k + 1]), false); break; }
+        };
+        auto removeMarker = [this, activeOf] (int idx)
         {
             const int a = activeOf();
-            if (juce::roundToInt (proc.param (breakParams (a).sliceMode)->convertFrom0to1 (proc.param (breakParams (a).sliceMode)->getValue())) != 5) return;
-            proc.breakStore.edit ([f, a] (tg::BreakData& d)
+            proc.breakStore.edit ([a, idx] (tg::BreakData& d)
             {
                 auto& b = d.brk[a];
-                if (b.nMarkers <= 0) return;
-                int best = 0; for (int i = 1; i < b.nMarkers; ++i) if (std::abs (b.markers[i] - f) < std::abs (b.markers[best] - f)) best = i;
-                for (int i = best; i + 1 < b.nMarkers; ++i) b.markers[i] = b.markers[i + 1];
+                if (idx < 0 || idx >= b.nMarkers) return;
+                for (int i = idx; i + 1 < b.nMarkers; ++i) b.markers[i] = b.markers[i + 1];
                 --b.nMarkers;
             });
             proc.refreshBreakAnalysis();
+        };
+        wave->onRightClick = [isManual, markerNear, removeMarker, this, activeOf] (double f)
+        {
+            if (! isManual()) return;
+            const auto d = proc.breakStore.get(); const auto& b = d.brk[activeOf()];
+            int best = 0; for (int i = 1; i < b.nMarkers; ++i) if (std::abs (b.markers[i] - f) < std::abs (b.markers[best] - f)) best = i;
+            if (b.nMarkers > 0) removeMarker (best);
+            juce::ignoreUnused (markerNear);
+        };
+        wave->onKey = [this, selMarker, removeMarker, isManual] (const juce::KeyPress& k)
+        {
+            if (k == juce::KeyPress::spaceKey && proc.param (P_bcChopMode)->getValue() > 0.5f) { proc.tapChop(); return true; }
+            if ((k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey) && isManual() && *selMarker >= 0) { removeMarker (*selMarker); *selMarker = -1; return true; }
+            return false;
         };
         auto* load = page->own (new juce::TextButton ("Load"));
         auto* clear = page->own (new juce::TextButton ("Clear"));
@@ -1907,6 +1940,29 @@ void MegaSynthEditor::buildPages()
         matchTempo->onClick = [this] { proc.param (P_bcSync)->setValueNotifyingHost (1.0f); setStatus ("Tempo Sync on: every break follows the song's tempo"); };
         matchLevels->onClick = [this] { setStatus (proc.matchBreakLevels() ? "Break levels matched" : "Load at least two breaks to match their levels"); };
         auto* on = page->own (new ParamToggle (proc, P_bcOn, "On", col::complex));
+        // ---- chop mode: play the break and tap keys, pads, the space bar or Tap to mark slices
+        auto* chop = page->own (new ParamToggle (proc, P_bcChopMode, "Chop", col::supersaw));
+        chop->setTooltip ("Chop mode: the break plays; every key, pad or space bar (or Tap) marks a slice where you hit it");
+        auto* play = page->own (new juce::TextButton ("Play"));
+        auto* tap = page->own (new juce::TextButton ("Tap"));
+        auto* undoChop = page->own (new juce::TextButton ("Undo chop"));
+        auto* clearMk = page->own (new juce::TextButton ("Clear markers"));
+        auto* snapAll = page->own (new juce::TextButton ("Snap all to transients"));
+        auto* snapTr = page->own (new ParamToggle (proc, P_bcChopSnapTr, "Transient", col::supersaw));
+        auto* snapZero = page->own (new ParamToggle (proc, P_bcChopSnapZero, "Zero", col::supersaw));
+        auto* latency = page->own (new juce::Slider (juce::Slider::LinearBar, juce::Slider::TextBoxLeft));
+        latencyAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, kParamIds[P_bcChopLatency], tagParam (*latency, P_bcChopLatency));
+        latency->textFromValueFunction = [] (double v) { return "Latency " + juce::String (v, 1) + " ms"; };
+        latency->setColour (juce::Slider::trackColourId, col::supersaw.withAlpha (0.5f));
+        latency->setTooltip ("Tap Latency: how long your audio interface takes to play what the plug-in makes. Taps are moved back by this much.");
+        latency->updateText();
+        play->onClick = [this] { proc.breakPreviewReq.store (proc.previewIsPlaying() ? -2.0 : 0.0); };
+        tap->onClick = [this] { proc.tapChop(); };
+        undoChop->onClick = [this] { if (! proc.undoLastChop()) setStatus ("No chops to undo"); };
+        clearMk->onClick = [this, activeOf] { proc.clearMarkers (activeOf()); proc.pushHistory ("Clear markers"); };
+        snapAll->onClick = [this, activeOf] { proc.snapAllMarkers (activeOf()); proc.pushHistory ("Snap markers"); };
+        snapTr->setTooltip ("Taps and new markers move to the nearest transient within 20 ms");
+        snapZero->setTooltip ("... and then to the nearest zero crossing within 2 ms");
 
         // ---- each break's own slicing and sound (one set shows: the Active Break's)
         juce::Array<Section*> slicing, sound;
@@ -1969,8 +2025,9 @@ void MegaSynthEditor::buildPages()
         sliceName->setColour (juce::Label::textColourId, col::text);
         sliceName->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
         auto lastActive = std::make_shared<int> (-1);
-        ticker->tick = [this, knobs, toggles, info, sliceName, selected, activeOf, lastActive, selector, wave, slicing, sound, ed, smp]
+        ticker->tick = [this, knobs, toggles, info, sliceName, selected, activeOf, lastActive, selector, wave, slicing, sound, ed, smp, play]
         {
+            play->setButtonText (proc.previewIsPlaying() ? "Stop" : "Play");
             const int a = activeOf();
             if (a != *lastActive)
             {
@@ -1993,26 +2050,31 @@ void MegaSynthEditor::buildPages()
         };
         ticker->tick();
         breakWaveForTests = wave;
-        page->onResize = [page, smp, selector, minis, wave, load, clear, toMarkers, matchTempo, matchLevels, info, on, slicing, sound, all, ed, sliceName]
+        page->onResize = [page, smp, selector, minis, wave, load, clear, toMarkers, matchTempo, matchLevels, info, on, slicing, sound, all, ed, sliceName,
+                          chop, play, tap, undoChop, clearMk, snapAll, snapTr, snapZero, latency]
         {
             const int g = 10, W = page->getWidth();
-            smp->setBounds (g, g, W - 2 * g, 228);
+            smp->setBounds (g, g, W - 2 * g, 238);
             selector->setBounds (g + 10, g + 34, 270, 26);
             const int mx = g + 290, mw = (W - 2 * g - 300) / 3;
             for (int k = 0; k < 3; ++k) minis[k]->setBounds (mx + k * mw, g + 34, mw - 6, 26);
-            wave->setBounds (g + 10, g + 66, W - 2 * g - 20, 112);
-            on->setBounds (g + 10, g + 186, 56, 28);
-            load->setBounds (g + 68, g + 188, 62, 26);
-            clear->setBounds (g + 134, g + 188, 56, 26);
-            toMarkers->setBounds (g + 194, g + 188, 124, 26);
-            matchTempo->setBounds (g + 322, g + 188, 100, 26);
-            matchLevels->setBounds (g + 426, g + 188, 100, 26);
-            info->setBounds (g + 536, g + 184, W - 2 * g - 546, 40);
-            for (auto* s : slicing) s->setBounds (g, g + 236, 510, 120);
-            for (auto* s : sound) s->setBounds (g + 520, g + 236, W - 2 * g - 520, 120);
-            ed->setBounds (g, g + 364, 510, 220);
-            sliceName->setBounds (g + 70, g + 370, 330, 20);
-            all->setBounds (g + 520, g + 364, W - 2 * g - 520, 220);
+            wave->setBounds (g + 10, g + 66, W - 2 * g - 20, 96);
+            on->setBounds (g + 10, g + 168, 56, 28);
+            load->setBounds (g + 68, g + 170, 62, 24);
+            clear->setBounds (g + 134, g + 170, 56, 24);
+            toMarkers->setBounds (g + 194, g + 170, 124, 24);
+            matchTempo->setBounds (g + 322, g + 170, 100, 24);
+            matchLevels->setBounds (g + 426, g + 170, 100, 24);
+            info->setBounds (g + 536, g + 166, W - 2 * g - 546, 36);
+            int x = g + 10; const int y = g + 204;
+            auto put = [&x, y] (juce::Component* c, int w) { c->setBounds (x, y, w, 26); x += w + 6; };
+            put (chop, 70); put (play, 56); put (tap, 52); put (undoChop, 86); put (clearMk, 104); put (snapAll, 156);
+            x += 6; put (snapTr, 98); put (snapZero, 66); put (latency, 170);
+            for (auto* s : slicing) s->setBounds (g, g + 246, 510, 118);
+            for (auto* s : sound) s->setBounds (g + 520, g + 246, W - 2 * g - 520, 118);
+            ed->setBounds (g, g + 372, 510, 216);
+            sliceName->setBounds (g + 70, g + 378, 330, 20);
+            all->setBounds (g + 520, g + 372, W - 2 * g - 520, 216);
         };
     }
 

@@ -461,6 +461,146 @@ void MegaSynthProcessor::refreshBreakAnalysis (bool force)
     }
 }
 
+//==============================================================================
+// Chop mode and markers
+double MegaSynthProcessor::snapChopFrame (int brk, double frame)
+{
+    const auto* w = getSample (breakSlot (brk));
+    if (w == nullptr) return frame;
+    const double sr = w->sampleRate;
+    if (raw[P_bcChopSnapTr]->load() > 0.5f)
+    {
+        if (onsetsFor[brk] != w) { onsets[brk] = tg::breaks::transients (*w, 1.0f); onsetsFor[brk] = w; }
+        double best = frame, bestD = 0.02 * sr;   // within 20 ms
+        for (int at : onsets[brk]) if (std::abs (at - frame) < bestD) { bestD = std::abs (at - frame); best = at; }
+        frame = best;
+    }
+    if (raw[P_bcChopSnapZero]->load() > 0.5f)
+    {
+        // the nearest zero crossing within 2 ms (where the left channel changes sign)
+        const auto& a = w->ch[0];
+        const int c = juce::jlimit (1, w->length - 2, (int) std::lround (frame)), r = (int) (0.002 * sr);
+        for (int d = 0; d <= r; ++d)
+        {
+            for (int sgn : { -1, 1 })
+            {
+                const int i = c + sgn * d;
+                if (i < 1 || i >= w->length) continue;
+                if ((a[(size_t) i - 1] <= 0.0f) != (a[(size_t) i] <= 0.0f)) return (double) i;
+            }
+        }
+    }
+    return frame;
+}
+
+bool MegaSynthProcessor::addChopMarker (int brk, double frame, bool snap)
+{
+    brk = juce::jlimit (0, 2, brk);
+    const auto* w = getSample (breakSlot (brk));
+    if (w == nullptr) return false;
+    if (snap) frame = snapChopFrame (brk, frame);
+    const float f = (float) (frame / (double) w->length);
+    if (f <= 0.001f || f >= 0.999f) return false;
+    bool added = false;
+    breakStore.edit ([&] (tg::BreakData& d)
+    {
+        auto& b = d.brk[brk];
+        for (int i = 0; i < b.nMarkers; ++i) if (std::abs (b.markers[i] - f) * w->length < 0.005 * w->sampleRate) return;   // (one there already)
+        if (b.nMarkers >= tg::BreakSlot::kSlices - 1) return;
+        b.markers[b.nMarkers++] = f; std::sort (b.markers, b.markers + b.nMarkers);
+        added = true;
+    });
+    if (added)
+    {
+        chopHistory.push_back ({ brk, f });
+        auto* prm = params[(size_t) tg::breakParams (brk).sliceMode];
+        if (juce::roundToInt (prm->convertFrom0to1 (prm->getValue())) != 5) prm->setValueNotifyingHost (prm->convertTo0to1 (5.0f));
+        refreshBreakAnalysis();
+    }
+    return added;
+}
+
+bool MegaSynthProcessor::undoLastChop()
+{
+    if (chopHistory.empty()) return false;
+    const auto [brk, f] = chopHistory.back();
+    chopHistory.pop_back();
+    breakStore.edit ([brk = brk, f = f] (tg::BreakData& d)
+    {
+        auto& b = d.brk[brk];
+        for (int i = 0; i < b.nMarkers; ++i)
+            if (b.markers[i] == f) { for (int j = i; j + 1 < b.nMarkers; ++j) b.markers[j] = b.markers[j + 1]; --b.nMarkers; break; }
+    });
+    refreshBreakAnalysis();
+    return true;
+}
+
+void MegaSynthProcessor::tapChop()
+{
+    const double fr = previewFrameShown.load();
+    if (fr < 0.0) return;
+    // the frame playing now, from the last block's frame and how long ago that was; less the latency
+    const double ms = juce::Time::getMillisecondCounterHiRes() - previewStampMs.load();
+    const double rate = previewFileRate.load() * getSampleRate();
+    const double frame = fr + (ms - (double) raw[P_bcChopLatency]->load()) * 0.001 * rate;
+    addChopMarker (previewBreakShown.load(), frame);
+}
+
+void MegaSynthProcessor::applyChopTaps()
+{
+    int s1, n1, s2, n2;
+    chopFifo.prepareToRead (chopFifo.getNumReady(), s1, n1, s2, n2);
+    for (int i = 0; i < n1; ++i) addChopMarker (chopBrks[s1 + i], chopFrames[s1 + i]);
+    for (int i = 0; i < n2; ++i) addChopMarker (chopBrks[s2 + i], chopFrames[s2 + i]);
+    chopFifo.finishedRead (n1 + n2);
+}
+
+void MegaSynthProcessor::markersFromSlices (int brk)
+{
+    brk = juce::jlimit (0, 2, brk);
+    const auto* w = getSample (breakSlot (brk));
+    auto* prm = params[(size_t) tg::breakParams (brk).sliceMode];
+    if (w == nullptr || juce::roundToInt (prm->convertFrom0to1 (prm->getValue())) == 5) return;
+    breakStore.edit ([w, brk] (tg::BreakData& d)
+    {
+        auto& b = d.brk[brk];
+        b.nMarkers = 0;
+        for (int k = 1; k < b.nSlices && b.nMarkers < tg::BreakSlot::kSlices - 1; ++k) b.markers[b.nMarkers++] = (float) b.start[k] / (float) w->length;
+    });
+    prm->setValueNotifyingHost (prm->convertTo0to1 (5.0f));
+    refreshBreakAnalysis();
+}
+
+void MegaSynthProcessor::clearMarkers (int brk)
+{
+    brk = juce::jlimit (0, 2, brk);
+    breakStore.edit ([brk] (tg::BreakData& d) { d.brk[brk].nMarkers = 0; });
+    auto* prm = params[(size_t) tg::breakParams (brk).sliceMode];
+    prm->setValueNotifyingHost (prm->convertTo0to1 (5.0f));
+    chopHistory.clear();
+    refreshBreakAnalysis();
+}
+
+void MegaSynthProcessor::snapAllMarkers (int brk)
+{
+    brk = juce::jlimit (0, 2, brk);
+    const auto* w = getSample (breakSlot (brk));
+    if (w == nullptr) return;
+    markersFromSlices (brk);
+    const auto d = breakStore.get();
+    std::vector<float> moved;
+    for (int i = 0; i < d.brk[brk].nMarkers; ++i) moved.push_back ((float) (snapChopFrame (brk, d.brk[brk].markers[i] * (double) w->length) / w->length));
+    std::sort (moved.begin(), moved.end());
+    moved.erase (std::unique (moved.begin(), moved.end(), [w] (float a, float b) { return std::abs (a - b) * w->length < 64.0f; }), moved.end());
+    breakStore.edit ([&] (tg::BreakData& x)
+    {
+        auto& b = x.brk[brk];
+        b.nMarkers = 0;
+        for (float f : moved) if (b.nMarkers < tg::BreakSlot::kSlices - 1) b.markers[b.nMarkers++] = f;
+    });
+    refreshBreakAnalysis();
+}
+
 bool MegaSynthProcessor::matchBreakLevels()
 {
     const auto d = breakStore.get();
@@ -524,6 +664,20 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
             snap.v[idx] = v;   // from this sample on, not from the next block
             return;
         }
+    }
+    // chop mode: while the break plays, every key or pad marks a slice there (and isn't played)
+    if (m.isNoteOnOrOff() && snap.v[P_bcOn] > 0.5f && snap.v[P_bcChopMode] > 0.5f && engine.breaks().previewing())
+    {
+        if (m.isNoteOn())
+        {
+            auto& ch = engine.breaks();
+            // what was heard when the key was hit: the frame playing now, less the output latency
+            const double frame = ch.previewFrame() - juce::jlimit (0.0, 100.0, (double) snap.f (P_bcChopLatency)) * 0.001 * getSampleRate() * ch.previewFileRate();
+            int s1, n1, s2, n2;
+            chopFifo.prepareToWrite (1, s1, n1, s2, n2);
+            if (n1 > 0) { chopFrames[s1] = frame; chopBrks[s1] = ch.previewBreak(); chopFifo.finishedWrite (1); }
+        }
+        return;
     }
     // the Break Chopper: pattern keys (8 from the chosen note) and the slices on keys (from First Key up)
     if (m.isNoteOnOrOff() && snap.v[P_bcOn] > 0.5f)
@@ -759,6 +913,13 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (bcOn)
     {
         engine.pullBreak (wavs + kSlotBreak);
+        const double pr = breakPreviewReq.exchange (-1.0);
+        if (pr >= 0.0)
+        {
+            const int a = juce::jlimit (0, 2, snap.i (P_bcActive) - 1);
+            if (wavs[kSlotBreak + a] != nullptr) engine.breaks().startPreview (a, pr * wavs[kSlotBreak + a]->length);
+        }
+        else if (pr < -1.5) engine.breaks().stopPreview();
         const int au = breakAudition.exchange (-1);
         if (au >= 0)
         {
@@ -766,7 +927,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             engine.breaks().trigger (t, engine.breakSettings (snap));
         }
     }
-    else breakAudition.store (-1);
+    else { breakAudition.store (-1); breakPreviewReq.store (-1.0); }
     if (grainLoadReady.load())
     {
         engine.loadGranular (grainLoad.getReadPointer (0), grainLoad.getReadPointer (1), grainLoadLen);
@@ -979,6 +1140,13 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
 
     dnaClock.endBlock (n);
+    {
+        auto& ch = engine.breaks();
+        previewFrameShown.store (ch.previewing() ? ch.previewFrame() : -1.0, std::memory_order_relaxed);
+        previewFileRate.store (ch.previewFileRate(), std::memory_order_relaxed);
+        previewBreakShown.store (ch.previewBreak(), std::memory_order_relaxed);
+        previewStampMs.store (juce::Time::getMillisecondCounterHiRes(), std::memory_order_relaxed);
+    }
     if (buffer.getNumChannels() == 1)
         for (int i = 0; i < n; ++i) L[i] = 0.5f * (L[i] + R[i]);
 
@@ -1029,6 +1197,19 @@ void MegaSynthProcessor::timerCallback()
     }
     initOnFirstUse();   // a new instance: Init, on the message thread, once (never over a restored project)
     refreshBreakAnalysis();
+    {
+        // chop mode switched on: Manual markers from the slices there are now, and the break starts playing
+        const bool chop = raw[P_bcChopMode]->load() > 0.5f;
+        if (chop && ! lastChopMode)
+        {
+            const int a = juce::jlimit (0, 2, juce::roundToInt (raw[P_bcActive]->load()) - 1);
+            markersFromSlices (a);
+            breakPreviewReq.store (0.0);
+        }
+        if (! chop && lastChopMode) breakPreviewReq.store (-2.0);
+        lastChopMode = chop;
+        applyChopTaps();
+    }
     updateLatency();
     pollCapture();
     // history: record a snapshot shortly after an edit finishes (knob released, step changed)
@@ -1234,6 +1415,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 15) setGranDefaultsForOldPatch();
     if (version < 16) setBreakDefaultsForOldPatch();
     if (version < 17) setBreak3DefaultsForOldPatch();
+    if (version < 18) setChopDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1461,6 +1643,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("gsOn")) setGranDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bcOn")) setBreakDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bcActive")) setBreak3DefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("bcChopMode")) setChopDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -1719,6 +1902,15 @@ void MegaSynthProcessor::setBreak3DefaultsForOldPatch()
         prm->beginChangeGesture();
         prm->setValueNotifyingHost (i == P_bcSelKeys ? 0.0f : prm->getDefaultValue());
         prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setChopDefaultsForOldPatch()
+{
+    for (int i = P_bcChopMode; i <= P_bcChopLatency; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
     }
 }
 

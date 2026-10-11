@@ -59,7 +59,21 @@ public:
     tg::MsegStore msegs;                      // the two multi-stage envelopes
     tg::BreakStore breakStore;                // the Break Chopper's slice settings and markers, the Break Sequencer's patterns
     void refreshBreakAnalysis (bool force = false);
-    bool matchBreakLevels();   // the three Break levels set so the loaded breaks are about equally loud (message thread)
+    bool matchBreakLevels();
+    // ---- chop mode (manual chopping): taps while the break plays become slice markers
+    std::atomic<double> breakPreviewReq { -1.0 };   // the editor: play from this fraction (0..1), or -2 to stop
+    std::atomic<double> previewFrameShown { -1.0 }, previewFileRate { 1.0 };
+    std::atomic<double> previewStampMs { 0.0 };      // when that frame was being played (for taps from the editor)
+    std::atomic<int> previewBreakShown { 0 };
+    bool previewIsPlaying() const { return previewFrameShown.load() >= 0.0; }
+    void tapChop();                                  // the editor's Tap button or space bar (message thread)
+    bool addChopMarker (int brk, double frame, bool snap = true);   // message thread
+    bool undoLastChop();
+    void applyChopTaps();                            // taps from MIDI (audio thread) into markers (message thread)
+    double snapChopFrame (int brk, double frame);    // to the nearest transient (+/-20 ms) and zero crossing, as switched on
+    void clearMarkers (int brk);
+    void snapAllMarkers (int brk);
+    void markersFromSlices (int brk);                // Manual mode, starting from the slices it has now   // the three Break levels set so the loaded breaks are about equally loud (message thread)
     double getHostTempoShown() const { const double h = hostTempo.load(); return h > 0.0 ? h : (double) raw[tg::P_seqTempo]->load(); }   // slice the loaded break again when its sample or slicing changed (message thread)
     std::atomic<int> breakAudition { -1 };    // the editor asks for a slice to be played
     std::atomic<int> bsStepShown { -1 }, bsPatternShown { 0 };   // the Break Sequencer's playing step and pattern
@@ -194,7 +208,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 17;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks
+    static constexpr int kStateVersion = 18;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -231,7 +245,8 @@ private:
     void setPerfDefaultsForOldPatch();      // ... and from before Performance FX
     void setGranDefaultsForOldPatch();      // ... and from before the Granular Synth
     void setBreakDefaultsForOldPatch();     // ... and from before the Break Chopper
-    void setBreak3DefaultsForOldPatch();    // ... and from before three breaks      // ... and from before the filter character models     // ... and from before the Mixer strips (pan / mute / solo)     // ... and from before the wheel / sustain switches
+    void setBreak3DefaultsForOldPatch();    // ... and from before three breaks
+    void setChopDefaultsForOldPatch();      // ... and from before chop mode      // ... and from before the filter character models     // ... and from before the Mixer strips (pan / mute / solo)     // ... and from before the wheel / sustain switches
     void setEnvDefaultsForOldPatch();      // ... and from before the pitch envelope and MSEGs       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
@@ -288,6 +303,12 @@ private:
     double fxBeatStart = 0.0, fxBeatInc = 0.0, fxBeatsInternal = 0.0;   // the effects' beat clock for this block
     uint32_t lastRackVersion = 0, lastLfoShapeVersion = 0, lastArpVersion = 0, lastMsegVersion = 0, lastBreakVersion = 0;
     juce::String lastBreakKey[3];
+    juce::AbstractFifo chopFifo { 64 };
+    double chopFrames[64] {}; int chopBrks[64] {};
+    std::vector<std::pair<int, float>> chopHistory;   // the markers chop mode added, newest last
+    const tg::WaveSample* onsetsFor[3] {};
+    std::vector<int> onsets[3];                       // every transient (high sensitivity), for snapping
+    bool lastChopMode = false;
     int breakSelPending = -1; double breakSelBeat = 0.0;   // a Break Select key waiting for the beat
     void bsApplyPatternBreak (const tg::BreakData&);
     // the Break Sequencer (audio thread)

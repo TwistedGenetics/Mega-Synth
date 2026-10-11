@@ -198,7 +198,7 @@ namespace
             m.unit = unitFor (id);
             if (id.startsWith ("gs")) m.unit = (id == "gsSize" || id == "gsSpray") ? "ms" : id == "gsDensity" ? "/s" : (id == "gsSemi" || id == "gsPitchRand") ? "st"
                                              : id == "gsCents" ? "cents" : id == "gsRoot" ? "note" : juce::String();
-            if (id.startsWith ("bc") || id.startsWith ("bs")) m.unit = id.startsWith ("bcTempo") ? "BPM" : id == "bcCycle" ? "ms" : id == "bcPitch" ? "st" : id == "bcKeyBase" ? "note" : juce::String();
+            if (id.startsWith ("bc") || id.startsWith ("bs")) m.unit = id == "bcChopLatency" ? "ms" : id.startsWith ("bcTempo") ? "BPM" : id == "bcCycle" ? "ms" : id == "bcPitch" ? "st" : id == "bcKeyBase" ? "note" : juce::String();
             if (id.startsWith ("pf")) m.unit = id == "pfCrushRate" ? "Hz" : id == "pfPitchGlide" ? "s" : id == "pfPitchAmt" ? "st" : id == "pfTapeTime" ? "beats" : juce::String();
             if (id == "mfCutoff") m.unit = "Hz";
             if (id == "mfDrive" || id == "outGain") m.unit = "dB";
@@ -208,7 +208,7 @@ namespace
             const bool admin = isAny (id, { "polyphony", "keyboardOctave", "bendRange", "seqLength", "seqEuclidPulses",
                                             "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum", "mutSeed", "dsSteps",
                                             "chdSpread", "chdInversion", "arpOctaves", "arpVelFixed", "arpRepeats", "arpSteps",
-                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot", "bcKeyBase", "bcTempo", "bcTempo2", "bcTempo3" });
+                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot", "bcKeyBase", "bcTempo", "bcTempo2", "bcTempo3", "bcChopLatency" });
             m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin
                             && ! isAny (id, { "pfX1", "pfY1", "pfX2", "pfY2" });   // the XY pads are sources, not destinations
             float adScale;

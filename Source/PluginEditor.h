@@ -462,6 +462,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> seqRunAtt;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Label* granInfo = nullptr;   // Granular Synth sample: name, length, size
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> latencyAtt;   // Break Chopper: chop tap latency
 public:
     juce::Component* breakWaveForTests = nullptr;
     juce::Component* breakGridForTests = nullptr;

@@ -10,7 +10,7 @@ class SampleWaveView : public juce::Component, public juce::SettableTooltipClien
 {
 public:
     struct Marker { double frac; juce::Colour colour; juce::String label; bool thick; };
-    SampleWaveView (MegaSynthProcessor& p, int slotIndex, juce::Colour c) : proc (p), slot (slotIndex), colour (c) { startTimerHz (20); }
+    SampleWaveView (MegaSynthProcessor& p, int slotIndex, juce::Colour c) : proc (p), slot (slotIndex), colour (c) { startTimerHz (20); setWantsKeyboardFocus (true); }
     void setSlot (int s) { if (s != slot) { slot = s; built = nullptr; repaint(); } }
     void setColour (juce::Colour c) { colour = c; repaint(); }
     ~SampleWaveView() override { stopTimer(); }
@@ -18,7 +18,10 @@ public:
     std::function<std::vector<Marker>()> markers;          // what to draw over the wave (fractions of its length)
     std::function<juce::Range<double>()> shade;            // a highlighted span (fractions), optional
     std::function<void (double frac, const juce::MouseEvent&)> onClick, onDrag;
-    std::function<void (double frac)> onRightClick;
+    std::function<void (double frac)> onRightClick, onDoubleClick;
+    std::function<bool (const juce::KeyPress&)> onKey;
+    bool keyPressed (const juce::KeyPress& k) override { return onKey ? onKey (k) : false; }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (onDoubleClick && ! e.mods.isPopupMenu()) onDoubleClick (fracAt (e)); }
     juce::String emptyText = "Load a sample (WAV, AIFF, FLAC or MP3)";
 
     void paint (juce::Graphics& g) override
@@ -68,6 +71,7 @@ public:
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
+        if (onKey) grabKeyboardFocus();
         if (e.mods.isPopupMenu()) { if (onRightClick) onRightClick (fracAt (e)); return; }
         if (onClick) onClick (fracAt (e), e);
     }

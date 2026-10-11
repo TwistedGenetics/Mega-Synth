@@ -4304,6 +4304,117 @@ int main()
                 CHECK (! tgui::breakInfoText (*p, 0).contains ("MB to the project"), "no size warning for small breaks");
             }
         }
+        // 12. chop mode: taps while the break plays become markers, where they were hit
+        {
+            auto chopRun = [&] (MegaSynthProcessor& p, std::vector<int> taps, double seconds)
+            {
+                p.breakPreviewReq.store (0.0);   // (the editor asks for this when chop mode goes on)
+                std::vector<std::pair<int, juce::MidiMessage>> ev;
+                for (int t : taps) { ev.push_back ({ t, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) }); ev.push_back ({ t + 200, juce::MidiMessage::noteOff (1, 60) }); }
+                juce::AudioBuffer<float> buf (2, 128);
+                for (int pos = 0; pos < (int) (seconds * sr); pos += 128)
+                {
+                    juce::MidiBuffer m; for (auto& e : ev) if (e.first >= pos && e.first < pos + 128) m.addEvent (e.second, e.first - pos);
+                    buf.clear(); p.processBlock (buf, m);
+                }
+                p.applyChopTaps();
+            };
+            const double fileRate = 44100.0 / sr;
+            {
+                auto p = make(); setP (*p, P_bcOn, 1.0f); setP (*p, P_bcChopMode, 1.0f); setP (*p, P_bcChopSnapTr, 0.0f); setP (*p, P_bcChopSnapZero, 0.0f);
+                setP (*p, P_bcChopLatency, 0.0f);
+                p->loadSampleData (demo(), "demo.wav", slot);
+                setP (*p, P_bcSliceMode, 5.0f); p->clearMarkers (0);
+                const std::vector<int> taps { 5000, 21000, 40007, 61111 };
+                chopRun (*p, taps, 1.5);
+                const auto d = p->breakStore.get();
+                bool ok = d.brk[0].nMarkers == (int) taps.size();
+                for (size_t i = 0; i < taps.size() && ok; ++i)
+                    ok = std::abs (d.brk[0].markers[i] * d.brk[0].start[d.brk[0].nSlices] - taps[i] * fileRate) < 0.001 * 44100.0;
+                CHECK (ok, "chop taps land where they were hit (within 1 ms; " + juce::String (d.brk[0].nMarkers) + " markers)");
+                CHECK (d.brk[0].nSlices == (int) taps.size() + 1, "each tap makes a slice");
+                CHECK (p->undoLastChop() && p->breakStore.get().brk[0].nMarkers == (int) taps.size() - 1, "Undo chop removes the last tap");
+            }
+            {
+                // latency: a tap 25 ms after a hit, with 25 ms latency compensation, marks the hit
+                auto p = make(); setP (*p, P_bcOn, 1.0f); setP (*p, P_bcChopMode, 1.0f); setP (*p, P_bcChopSnapTr, 0.0f); setP (*p, P_bcChopSnapZero, 0.0f);
+                setP (*p, P_bcChopLatency, 25.0f);
+                p->loadSampleData (demo(), "demo.wav", slot);
+                setP (*p, P_bcSliceMode, 5.0f); p->clearMarkers (0);
+                chopRun (*p, { 30000 }, 1.0);
+                const auto d = p->breakStore.get();
+                const double got = d.brk[0].markers[0] * d.brk[0].start[d.brk[0].nSlices], want = (30000 - 0.025 * sr) * fileRate;
+                CHECK (d.brk[0].nMarkers == 1 && std::abs (got - want) < 0.001 * 44100.0, "tap latency is taken off (" + juce::String ((got - want) / 44.1, 3) + " ms)");
+            }
+            {
+                // snap: taps a little late land on the transient
+                auto p = make(); setP (*p, P_bcOn, 1.0f); setP (*p, P_bcChopMode, 1.0f); setP (*p, P_bcChopLatency, 0.0f); setP (*p, P_bcChopSnapZero, 0.0f);
+                p->loadSampleData (demo(), "demo.wav", slot);
+                setP (*p, P_bcSliceMode, 5.0f); p->clearMarkers (0);
+                const double st16 = 60.0 / 170.0 / 4.0;
+                std::vector<int> taps;
+                for (int s16 : { 4, 10, 12 }) taps.push_back ((int) ((s16 * st16 + 0.009) * sr / 1.0));   // 9 ms late
+                chopRun (*p, taps, 2.0);
+                const auto d = p->breakStore.get();
+                bool ok = d.brk[0].nMarkers == 3;
+                for (int i = 0; i < d.brk[0].nMarkers && ok; ++i)
+                {
+                    const double t = d.brk[0].markers[i] * d.brk[0].start[d.brk[0].nSlices] / 44100.0;
+                    double best = 1.0; for (int s16 : { 4, 10, 12 }) best = std::min (best, std::abs (t - s16 * st16));
+                    ok = best < 0.0075;   // (the detector marks the start of the rise, a few ms before the peak; the tap was 9 ms late)
+                }
+                juce::String got; for (int i = 0; i < d.brk[0].nMarkers; ++i) got << juce::String (d.brk[0].markers[i] * d.brk[0].start[d.brk[0].nSlices] / 44100.0 / st16, 3) << " ";
+                CHECK (ok, "Snap to transients: taps 9 ms late land on the hits (at 16ths " + got + ")");
+            }
+            {
+                // chop mode keeps the keys to itself; Clear / Snap all / markers from slices
+                auto p = make(); setP (*p, P_bcOn, 1.0f);
+                p->loadSampleData (demo(), "demo.wav", slot);
+                setP (*p, P_bcSliceMode, 3.0f); p->refreshBreakAnalysis();
+                p->markersFromSlices (0);
+                auto d = p->breakStore.get();
+                CHECK (d.brk[0].nMarkers == 15 && juce::roundToInt (p->param (P_bcSliceMode)->convertFrom0to1 (p->param (P_bcSliceMode)->getValue())) == 5 && d.brk[0].nSlices == 16,
+                       "chop mode starts from the slices there are (16 slices -> 15 markers)");
+                p->snapAllMarkers (0);
+                d = p->breakStore.get();
+                CHECK (d.brk[0].nMarkers >= 8 && d.brk[0].nMarkers <= 15, "Snap all to transients (" + juce::String (d.brk[0].nMarkers) + " markers)");
+                p->clearMarkers (0);
+                CHECK (p->breakStore.get().brk[0].nSlices == 1, "Clear markers: one slice");
+            }
+            {
+                // the page: click adds a marker, double-click splits a slice, right-click and Delete remove one
+                auto p = make(); setP (*p, P_bcOn, 1.0f); setP (*p, P_bcChopSnapTr, 0.0f); setP (*p, P_bcChopSnapZero, 0.0f);
+                p->loadSampleData (demo(), "demo.wav", slot);
+                setP (*p, P_bcSliceMode, 5.0f); p->clearMarkers (0);
+                std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+                ed->setSize (1200, 890);
+                auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+                e->showPage ("Break Chopper"); e->timerCallbackForTests();
+                auto* wv = dynamic_cast<tgui::SampleWaveView*> (e->breakWaveForTests);
+                CHECK (wv != nullptr, "the wave view");
+                if (wv != nullptr)
+                {
+                    auto src = juce::Desktop::getInstance().getMainMouseSource();
+                    auto click = [&] (float frac, juce::ModifierKeys mods, int clicks)
+                    {
+                        const float x = 4.0f + frac * (wv->getWidth() - 8.0f), y = 60.0f;
+                        juce::MouseEvent me (src, { x, y }, mods, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, wv, wv, juce::Time::getCurrentTime(), { x, y }, juce::Time::getCurrentTime(), clicks, false);
+                        if (clicks >= 2) wv->mouseDoubleClick (me); else wv->mouseDown (me);
+                    };
+                    auto nm = [&] { return p->breakStore.get().brk[0].nMarkers; };
+                    click (0.25f, {}, 1); click (0.5f, {}, 1);
+                    CHECK (nm() == 2, "a click adds a marker (" + juce::String (nm()) + ")");
+                    click (0.75f, {}, 2);
+                    const auto d = p->breakStore.get();
+                    CHECK (nm() == 3 && std::abs (d.brk[0].markers[2] - 0.75f) < 0.01f, "a double-click splits a slice in half");
+                    click (0.26f, juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier | juce::ModifierKeys::popupMenuClickModifier), 1);
+                    CHECK (nm() == 2, "a right-click removes the nearest marker");
+                    click (p->breakStore.get().brk[0].markers[0], {}, 1);   // select it ...
+                    wv->keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
+                    CHECK (nm() == 1, "Delete removes the selected marker");
+                }
+            }
+        }
         // 10. CPU: 8 slices at once in each stretch mode, Eco / Normal / High (the chopper alone)
         {
             WaveSample w; w.numChannels = 2; w.sampleRate = 44100.0; const auto b = tg::breaks::makeDemoBreak (44100.0, 170.0, 0);
@@ -4484,11 +4595,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.52.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.53.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.52 (Performance FX, the Granular Synth, the Break Chopper / Sequencer and three breaks added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.53 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks and chop mode added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",

@@ -29,6 +29,10 @@ bcActive
 bcBars
 bcBars2
 bcBars3
+bcChopLatency
+bcChopMode
+bcChopSnapTr
+bcChopSnapZero
 bcColour
 bcColour2
 bcColour3

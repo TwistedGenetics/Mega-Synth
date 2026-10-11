@@ -92,6 +92,7 @@ inline juce::String formatParam (int idx, float v)
     if (id == "fbTime") return fixed (v, v < 100 ? 1 : 0) + " ms";
     if (id == "bcTempo" || id == "bcTempo2" || id == "bcTempo3") return v < 1.0f ? juce::String ("auto") : fixed (v, 1) + " BPM";
     if (id == "bcActive") return "Break " + juce::String (juce::roundToInt (v));
+    if (id == "bcChopLatency") return fixed (v, 1) + " ms";
     if (id == "bcLevel1" || id == "bcLevel2" || id == "bcLevel3" || id == "bsAmount") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id == "bcKeyBase") { const int n = juce::roundToInt (v); return juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")"; }
     if (id == "bcCycle") return fixed (v, v < 100 ? 1 : 0) + " ms";

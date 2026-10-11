@@ -1073,7 +1073,11 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(bcPan3,    "Break 3 Pan", -1, 1, 0, 0.01, 0) \
     C(bsAlternate, "Break Alternate", kListBsAlt, 0) \
     C(bsAltBreak,  "Break Alternate With", kListBsAltBreak, 1) \
-    F(bsAmount,    "Break Tool Amount", 0, 1, 0.6, 0.01, 0)
+    F(bsAmount,    "Break Tool Amount", 0, 1, 0.6, 0.01, 0) \
+    B(bcChopMode,  "Break Chop Mode", false) \
+    B(bcChopSnapTr,"Break Chop Snap to Transients", true) \
+    B(bcChopSnapZero,"Break Chop Snap to Zero Crossings", true) \
+    F(bcChopLatency,"Break Chop Tap Latency", 0, 100, 10, 0.1, 0)
 
 enum ParamIndex
 {

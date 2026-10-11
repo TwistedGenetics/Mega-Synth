@@ -99,7 +99,24 @@ public:
     {
         for (auto& v : voices) if (v.on && v.held && v.key == key) { v.held = false; if (v.loop) v.stop (sr); }
     }
-    void stopAll() { for (auto& v : voices) if (v.on) v.stop (sr); }
+    void stopAll() { for (auto& v : voices) if (v.on) v.stop (sr); if (pv.on) pv.stop (sr); }
+
+    // ---- chop mode: the whole break played once, at its own speed, from a frame (taps mark slices)
+    void startPreview (int brk, double startFrame)
+    {
+        const int bi = std::clamp (brk, 0, kBreaks - 1);
+        if (wav[bi] == nullptr || wav[bi]->length < 2) { pv.on = false; return; }
+        pv = Voice();
+        pv.on = true; pv.whole = true; pv.brk = bi; pv.choke = 0; pv.dir = 1;
+        pv.s0 = juce::jlimit (0.0, (double) wav[bi]->length - 2.0, startFrame); pv.s1 = (double) wav[bi]->length;
+        pv.gain = 1.0f; pv.attack = 0.0015f;
+        pv.startHead();
+    }
+    void stopPreview() { if (pv.on) pv.stop (sr); }
+    bool previewing() const { return pv.on && ! pv.releasing; }
+    int previewBreak() const { return pv.brk; }
+    double previewFrame() const { return pv.on ? pv.head : -1.0; }   // the frame being played now
+    double previewFileRate() const { return wav[pv.brk] != nullptr ? wav[pv.brk]->sampleRate / sr : 1.0; }
     int lastSlicePlayed() const { return lastSlice; }
     int lastBreakPlayed() const { return lastBreak; }
     int activeVoices() const { int n = 0; for (auto& v : voices) n += v.on ? 1 : 0; return n; }
@@ -111,6 +128,7 @@ public:
     {
         bool anyVoice[kBreaks] {};
         for (auto& v : voices) if (v.on) anyVoice[v.brk] = true;
+        if (pv.on) anyVoice[pv.brk] = true;
         bool runs[kBreaks] {}, any = false;
         for (int k = 0; k < kBreaks; ++k) { runs[k] = anyVoice[k] || tail[k] > 0; any = any || runs[k]; }
         if (! any) { peakShown = 0.0f; return; }
@@ -131,8 +149,9 @@ public:
                 const double tempoRatio = ratio (s, k);
                 const double fileRate = w->sampleRate / sr;
                 for (auto& v : voices) if (v.on && v.brk == k) renderVoice (v, xl, xr, n, s, tempoRatio, fileRate);
+                if (pv.on && pv.brk == k) renderVoice (pv, xl, xr, n, s, 1.0, fileRate);   // (chop playback: its own speed)
             }
-            bool still = false;
+            bool still = pv.on && pv.brk == k;
             for (auto& v : voices) still = still || (v.on && v.brk == k);
             tail[k] = still ? (int) (0.3 * sr) : tail[k] - n;   // the colour and filter ring on a little after the last slice
             const PerBreak& pb = s.b[k];
@@ -194,6 +213,7 @@ public:
     // for the display: the newest voice's position (fraction of the sample), -1 when none
     double playheadFrac (int k = 0) const
     {
+        if (pv.on && pv.brk == k && wav[k] != nullptr && wav[k]->length > 1) return juce::jlimit (0.0, 1.0, pv.head / (double) wav[k]->length);
         const Voice* nv = nullptr;
         for (auto& v : voices) if (v.on && v.brk == k && (nv == nullptr || v.age < nv->age)) nv = &v;
         if (nv == nullptr || wav[k] == nullptr || wav[k]->length < 2) return -1.0;
@@ -203,7 +223,7 @@ public:
 private:
     struct Voice
     {
-        bool on = false, held = false, loop = false;
+        bool on = false, held = false, loop = false, whole = false;
         int slice = 0, choke = 1, dir = 1, brk = 0, key = -1;
         double s0 = 0, s1 = 0;            // the (trimmed) slice in sample frames
         float gain = 1.0f, pl = 1.0f, pr = 1.0f, attack = 0.002f, decay = 0.0f, semis = 0.0f;
@@ -237,7 +257,7 @@ private:
     void renderVoice (Voice& v, float* bl, float* br, int n, const Settings& s, double tempoRatio, double fileRate)
     {
         const WaveSample& w = *wav[v.brk];
-        const int stretch = s.b[v.brk].stretch;
+        const int stretch = v.whole ? (int) Repitch : s.b[v.brk].stretch;
         const double pitchRate = std::pow (2.0, v.semis / 12.0) * fileRate;   // how fast the heads read (pitch only)
         const double adv = tempoRatio * fileRate;                            // how fast the slice is gone through
         const double repRate = pitchRate * tempoRatio;                       // repitch: both together
@@ -365,6 +385,7 @@ private:
     const WaveSample* wav[kBreaks] {};
     BreakData d;
     std::array<Voice, kVoices> voices {};
+    Voice pv;   // chop mode's playback
     std::vector<float> bus[2], sub[2];
     VintageSampler colourFx[kBreaks];
     std::array<float, P_COUNT> colourV {};

@@ -235,6 +235,25 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
 - **Factory content:** no copyrighted breaks are included.
   - The three new presets (**Break Chop 170**, **Break Rollers**, **Break Keys**) use a two-bar 170 BPM break synthesised by the plugin itself: a sine-sweep kick, a tone-and-noise snare with ghost notes, and noise hats, in an original pattern.
 
+### Chopping by hand (chop mode and Manual markers)
+
+- **Chop mode:**
+  - Switch on **Chop** and the Active Break plays from the start at its own speed. Every key or pad you hit, or the space bar or **Tap**, marks a slice there.
+  - While chop mode plays, keys and pads only make markers; they don't play notes.
+  - **Play** starts it again, and **Undo chop** removes the last tap.
+  - Turning chop mode on switches that break to Manual markers, starting from the slices it already has. Use **Clear markers** to start from nothing.
+- **Accuracy:**
+  - Taps from MIDI keys and pads are placed to the sample: the marker goes where the break was when the key arrived, less **Latency**.
+  - **Latency** (default 10 ms) is how long your audio interface takes to play what the plugin makes. Set it to your interface's output latency, which Live shows in its Audio preferences.
+  - Taps from the space bar or the Tap button are timed on the screen's clock, so they're only accurate to a few milliseconds. Snapping fixes most of that.
+- **Snapping:** **Transient** moves a tap to the nearest hit within 20 ms; the detector marks the start of the rise. **Zero** then moves it to the nearest zero crossing within 2 ms. Hold Alt when clicking to place a marker exactly.
+- **Manual markers mode:**
+  - Click the wave to add a marker, and double-click a slice to split it in half.
+  - Right-click removes the nearest marker. Clicking a marker selects it, and Delete or Backspace removes it.
+  - Clicking the strip of key names along the top always selects and plays a slice.
+  - **Snap all to transients** moves every marker onto the nearest hit.
+- **Live and the space bar:** Live uses the space bar for its transport, so it may never reach the plugin there. Use a key, a pad or the Tap button instead.
+
 ### Three breaks
 
 - **Slots:** there are three break slots, Break 1, Break 2 and Break 3. Each has its own sample, slicing, markers, tempo, per-slice settings, stretch mode, colour, level and pan.

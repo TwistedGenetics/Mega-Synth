@@ -88,7 +88,7 @@ jobs:
           cmake --build build --config Release --parallel 4 2>&1 | Tee-Object -FilePath build.log
           if ($LASTEXITCODE -ne 0) {
             # surface the compiler errors as annotations (readable without the full log)
-            Select-String -Path build.log -Pattern "error C|error LNK|fatal error" | Select-Object -First 30 | ForEach-Object { Write-Output "::error::$($_.Line)" }
+            Select-String -Path build.log -Pattern "error C[0-9]+: |error LNK|fatal error" | ForEach-Object { ($_.Line -replace ' \[[^\]]*\]$', '').Trim() } | Sort-Object -Unique | Select-Object -First 40 | ForEach-Object { Write-Output "::error::$_" }
             exit 1
           }
 

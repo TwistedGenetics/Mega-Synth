@@ -359,7 +359,7 @@ private:
         // the shifter's and the wow's delay lines start from the recent past, not from whatever they last held
         if ((k == PitchDown || k == Vinyl) && w[k] <= 0.0f)
         {
-            auto& buf = k == PitchDown ? pitchBuf : wowBuf;
+            std::vector<float>* buf = k == PitchDown ? pitchBuf : wowBuf;   // (each is an array of two channels)
             int& wi = k == PitchDown ? pitchW : wowW;
             const int N = k == PitchDown ? kPitchN : kWowN;
             const int m = std::min (N - 1, k == PitchDown ? (int) (0.05 * sr) + 64 : N - 1);

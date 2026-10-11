@@ -2316,6 +2316,20 @@ int main()
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
             std::cout << "SHOT " << name << std::endl;
         }
+        {
+            // the Break Chopper zoomed in on a slice, in Manual markers mode (the trim handles and the overview frame show)
+            p->markersFromSlices (1);
+            e->showPage ("Break Chopper"); e->timerCallbackForTests();
+            if (auto* wv = dynamic_cast<tgui::SampleWaveView*> (e->breakWaveForTests))
+            {
+                p->breakStore.setAnalysis ([] (tg::BreakData& d) { d.brk[1].slice[0].trimStart = 0.1f; d.brk[1].slice[0].trimEnd = 0.8f; });
+                wv->zoomTo ({ 0.05, 0.22 });
+            }
+            e->timerCallbackForTests();
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto f = dir.getChildFile ("page_BreakChopper_zoom.png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        }
         return 0;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_UICONTROLS", {}).isNotEmpty())
@@ -4415,6 +4429,125 @@ int main()
                 }
             }
         }
+        // 13. zoom and moving markers
+        {
+            auto setup = [&] (std::unique_ptr<MegaSynthProcessor>& p)
+            {
+                p = make(); setP (*p, P_bcOn, 1.0f); setP (*p, P_bcChopSnapTr, 0.0f); setP (*p, P_bcChopSnapZero, 0.0f);
+                p->loadSampleData (demo(), "demo.wav", slot);
+                setP (*p, P_bcSliceMode, 5.0f); p->clearMarkers (0);
+                for (double t : { 0.3, 0.6, 0.9 }) p->addChopMarker (0, t * 44100.0, false);
+            };
+            auto frameOf = [] (MegaSynthProcessor& p, int i) { const auto d = p.breakStore.get(); return (double) d.brk[0].markers[i] * d.brk[0].start[d.brk[0].nSlices]; };
+            {
+                std::unique_ptr<MegaSynthProcessor> p; setup (p);
+                const auto* w = p->getSample (slot);
+                // snap modes
+                setP (*p, P_bcMarkerSnap, 0.0f);
+                const double none = p->moveMarker (0, 1, 26501.3, true);
+                CHECK (std::abs (none - 26501.3) < 0.01, "Marker Snap none: the marker goes where it's dragged");
+                setP (*p, P_bcMarkerSnap, 1.0f);
+                const double z = p->moveMarker (0, 1, 26501.0, true);
+                const int zi = (int) std::round (z);
+                const bool zc = zi > 0 && zi < w->length - 1 && ((w->ch[0][(size_t) zi - 1] <= 0.0f) != (w->ch[0][(size_t) zi] <= 0.0f) || std::abs (w->ch[0][(size_t) zi]) < 1e-4f);
+                CHECK (zc && std::abs (z - 26501.0) < 0.002 * 44100.0, "Marker Snap zero crossing (" + juce::String (z - 26501.0, 1) + " samples away)");
+                setP (*p, P_bcMarkerSnap, 2.0f);
+                const double st16 = 60.0 / 170.0 / 4.0 * 44100.0;
+                const double tr = p->moveMarker (0, 1, 10 * st16 + 0.008 * 44100.0, true);   // 8 ms after the snare on 16th 10
+                CHECK (std::abs (tr - 10 * st16) < 0.0075 * 44100.0, "Marker Snap transient: lands on the hit (" + juce::String ((tr - 10 * st16) / 44.1, 2) + " ms)");
+                for (int mode = 3; mode <= 5; ++mode)
+                {
+                    setP (*p, P_bcMarkerSnap, (float) mode);
+                    const double grid = (mode == 3 ? 0.5 : mode == 4 ? 0.25 : 0.125) * 60.0 / 170.0 * 44100.0;
+                    const double n = std::floor (30000.0 / grid);   // (between its neighbours)
+                    const double gf = p->moveMarker (0, 1, (n + 0.3) * grid, true);
+                    CHECK (std::abs (gf - n * grid) < 1.0, "Marker Snap grid " + juce::String (mode == 3 ? "1/8" : mode == 4 ? "1/16" : "1/32") + " at the break's tempo");
+                }
+                // neighbours never cross; slice 1 always starts at 0
+                setP (*p, P_bcMarkerSnap, 0.0f);
+                const double next = frameOf (*p, 2);
+                const double past = p->moveMarker (0, 1, next + 5000.0, true);
+                CHECK (past < next && std::abs (past - (next - MegaSynthProcessor::kMarkerGap)) < 1.0 && frameOf (*p, 2) == next, "a dragged marker stops before its neighbour");
+                const double before = p->moveMarker (0, 0, -9999.0, true);
+                const auto d = p->breakStore.get();
+                CHECK (before >= MegaSynthProcessor::kMarkerGap - 0.5 && d.brk[0].start[0] == 0 && d.brk[0].nMarkers == 3, "the first marker stops after the start; slice 1 starts at 0");
+                bool sorted = true; for (int i = 1; i < d.brk[0].nMarkers; ++i) sorted = sorted && d.brk[0].markers[i] > d.brk[0].markers[i - 1];
+                CHECK (sorted, "markers stay in order");
+            }
+            {
+                // one undo step per drag; saved with the patch
+                std::unique_ptr<MegaSynthProcessor> p; setup (p);
+                p->pushHistory ("Edit");
+                const double orig = frameOf (*p, 1);
+                const auto v0 = p->breakStore.getVersion();
+                for (int i = 1; i <= 20; ++i) p->moveMarker (0, 1, orig + i * 50.0, false);   // the drag
+                CHECK (p->breakStore.getVersion() == v0, "dragging makes no undo steps until it ends");
+                p->commitMarkerEdit();
+                CHECK (p->breakStore.getVersion() == v0 + 1, "the end of a drag makes one");
+                p->pushHistory ("Edit");
+                const double moved = frameOf (*p, 1);
+                CHECK (std::abs (moved - (orig + 1000.0)) < 1.0, "the marker moved by the drag");
+                juce::MemoryBlock mb; p->getStateInformation (mb);
+                auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+                CHECK (std::abs (frameOf (*q, 1) - moved) < 1.0, "a moved marker is saved and loaded");
+                p->undo();
+                CHECK (std::abs (frameOf (*p, 1) - orig) < 1.0, "one Undo puts the marker back where the drag started");
+                // the arrow keys
+                const double f0 = frameOf (*q, 1);
+                q->nudgeMarker (0, 1, 10.0);
+                CHECK (std::abs (frameOf (*q, 1) - (f0 + 441.0)) < 1.0, "Shift+arrow nudges 10 ms");
+                q->nudgeMarker (0, 1, -1.0);
+                CHECK (std::abs (frameOf (*q, 1) - (f0 + 441.0 - 44.1)) < 1.0, "an arrow nudges 1 ms");
+                // trim
+                q->setSliceTrim (0, 1, false, 0.2f); q->setSliceTrim (0, 1, true, 0.1f);
+                const auto ds = q->breakStore.get().brk[0].slice[1];
+                CHECK (std::abs (ds.trimStart - 0.2f) < 1e-5f && std::abs (ds.trimEnd - 0.25f) < 1e-5f, "trim handles keep the end after the start");
+            }
+            {
+                // the page: zoom to 1 sample per pixel at most; dragging a marker (and a slice start in Equal mode)
+                std::unique_ptr<MegaSynthProcessor> p; setup (p);
+                std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+                ed->setSize (1200, 890);
+                auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+                e->showPage ("Break Chopper"); e->timerCallbackForTests();
+                auto* wv = dynamic_cast<tgui::SampleWaveView*> (e->breakWaveForTests);
+                CHECK (wv != nullptr, "the wave view (zoom)");
+                if (wv != nullptr)
+                {
+                    for (int i = 0; i < 40; ++i) wv->zoomAround (0.5, 0.5);
+                    CHECK (wv->samplesPerPixel() >= 0.99 && wv->samplesPerPixel() < 1.01, "full zoom: 1 sample per pixel (" + juce::String (wv->samplesPerPixel(), 3) + ")");
+                    wv->setView (0.0, 1.0);
+                    CHECK (wv->viewLen == 1.0 && wv->viewStart == 0.0, "whole break");
+                    auto src = juce::Desktop::getInstance().getMainMouseSource();
+                    auto ev = [&] (float x, juce::ModifierKeys mods) { return juce::MouseEvent (src, { x, 60.0f }, mods, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, wv, wv, juce::Time::getCurrentTime(), { x, 60.0f }, juce::Time::getCurrentTime(), 1, false); };
+                    setP (*p, P_bcMarkerSnap, 0.0f);
+                    const auto v0 = p->breakStore.getVersion();
+                    const double len = p->breakStore.get().brk[0].start[p->breakStore.get().brk[0].nSlices];
+                    const float x0 = wv->xFor (frameOf (*p, 1) / len);
+                    wv->mouseDown (ev (x0, {}));
+                    for (int i = 1; i <= 10; ++i) wv->mouseDrag (ev (x0 + i * 4.0f, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier)));
+                    wv->mouseUp (ev (x0 + 40.0f, {}));
+                    CHECK (std::abs (frameOf (*p, 1) / len - wv->fracAtX (x0 + 40.0f)) < 0.0005 && p->breakStore.getVersion() == v0 + 1 && p->breakStore.get().brk[0].nMarkers == 3,
+                           "dragging a marker on the wave moves it (one undo step)");
+                    // Equal mode: dragging a slice start makes Manual markers first
+                    setP (*p, P_bcSliceMode, 3.0f); p->refreshBreakAnalysis(); e->timerCallbackForTests();
+                    const auto d = p->breakStore.get();
+                    const float xs = wv->xFor ((double) d.brk[0].start[4] / len);
+                    wv->mouseDown (ev (xs, {}));
+                    for (int i = 1; i <= 5; ++i) wv->mouseDrag (ev (xs + i * 2.0f, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier)));
+                    wv->mouseUp (ev (xs + 10.0f, {}));
+                    const auto d2 = p->breakStore.get();
+                    CHECK (juce::roundToInt (p->param (P_bcSliceMode)->convertFrom0to1 (p->param (P_bcSliceMode)->getValue())) == 5 && d2.brk[0].nMarkers == 15 && d2.brk[0].nSlices == 16
+                           && std::abs ((double) d2.brk[0].start[4] / len - wv->fracAtX (xs + 10.0f)) < 0.0005,
+                           "dragging a slice start in Equal mode switches to Manual markers and moves it");
+                    // a click on a marker (no drag) changes nothing
+                    const auto v1 = p->breakStore.getVersion();
+                    const float xm = wv->xFor ((double) d2.brk[0].start[8] / len);
+                    wv->mouseDown (ev (xm, {})); wv->mouseUp (ev (xm, {}));
+                    CHECK (p->breakStore.getVersion() == v1 && p->breakStore.get().brk[0].nMarkers == 15, "a click on a marker just selects it");
+                }
+            }
+        }
         // 10. CPU: 8 slices at once in each stretch mode, Eco / Normal / High (the chopper alone)
         {
             WaveSample w; w.numChannels = 2; w.sampleRate = 44100.0; const auto b = tg::breaks::makeDemoBreak (44100.0, 170.0, 0);
@@ -4595,11 +4728,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.53.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.54.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.53 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks and chop mode added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.54 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode and Marker Snap added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",

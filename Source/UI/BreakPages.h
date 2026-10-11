@@ -158,6 +158,19 @@ private:
     void timerCallback() override { if (tick && getParentComponent() != nullptr && getParentComponent()->isShowing()) tick(); }
 };
 
+// The scroll bar under a zoomed wave (it moves the view; the view moves it)
+class WaveScrollBar : public juce::ScrollBar, private juce::ScrollBar::Listener
+{
+public:
+    WaveScrollBar() : juce::ScrollBar (false) { setRangeLimits (0.0, 1.0); setCurrentRange (0.0, 1.0); setAutoHide (false); addListener (this); }
+    ~WaveScrollBar() override { removeListener (this); }
+    std::function<void (double start)> onMove;
+    void show (double start, double len) { updating = true; setCurrentRange (start, len, juce::dontSendNotification); updating = false; }
+private:
+    void scrollBarMoved (juce::ScrollBar*, double start) override { if (! updating && onMove) onMove (start); }
+    bool updating = false;
+};
+
 // each break's colour, everywhere it's shown (the page, the step grid, the keyboard)
 inline juce::Colour breakColour (int k) { return breakColourForGrid (k); }
 

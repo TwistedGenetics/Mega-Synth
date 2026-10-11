@@ -463,6 +463,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Label* granInfo = nullptr;   // Granular Synth sample: name, length, size
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> latencyAtt;   // Break Chopper: chop tap latency
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> markerSnapAtt;   // Break Chopper: marker snap
 public:
     juce::Component* breakWaveForTests = nullptr;
     juce::Component* breakGridForTests = nullptr;

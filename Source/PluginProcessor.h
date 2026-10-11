@@ -70,7 +70,14 @@ public:
     bool addChopMarker (int brk, double frame, bool snap = true);   // message thread
     bool undoLastChop();
     void applyChopTaps();                            // taps from MIDI (audio thread) into markers (message thread)
-    double snapChopFrame (int brk, double frame);    // to the nearest transient (+/-20 ms) and zero crossing, as switched on
+    double snapChopFrame (int brk, double frame);
+    double snapMarkerFrame (int brk, double frame);  // dragging a marker: Marker Snap
+    static constexpr double kMarkerGap = 64.0;       // samples a marker keeps from its neighbours
+    double moveMarker (int brk, int idx, double frame, bool snap);   // live while dragging (returns where it landed, or -1)
+    void setSliceTrim (int brk, int slice, bool end, float value);  // live while dragging a trim handle
+    void commitMarkerEdit();                         // the end of a drag: one undo step
+    bool nudgeMarker (int brk, int idx, double ms);  // the arrow keys
+    double snapFrameTo (int brk, double frame, bool toTransient, bool toZero);    // to the nearest transient (+/-20 ms) and zero crossing, as switched on
     void clearMarkers (int brk);
     void snapAllMarkers (int brk);
     void markersFromSlices (int brk);                // Manual mode, starting from the slices it has now   // the three Break levels set so the loaded breaks are about equally loud (message thread)

@@ -168,6 +168,8 @@ inline const char* const kBsAltKeys[]   = { "off","1bar","2bar","4bar" };
 inline const char* const kBsAltLabels[] = { "Off","Every other bar","Every other 2 bars","Every other 4 bars" };
 inline const char* const kBsAltBreakKeys[]   = { "1","2","3" };
 inline const char* const kBsAltBreakLabels[] = { "Break 1","Break 2","Break 3" };
+inline const char* const kBcSnapKeys[]   = { "none","zero","transient","g8","g16","g32" };
+inline const char* const kBcSnapLabels[] = { "Snap: none","Snap: zero crossing","Snap: transient","Snap: grid 1/8","Snap: grid 1/16","Snap: grid 1/32" };
 inline const char* const kPfKeysKeys[]    = { "off","36","48","60","72","84","96" };
 inline const char* const kPfKeysLabels[]  = { "Off","MIDI 36-48 (C1-C2)","MIDI 48-60 (C2-C3)","MIDI 60-72 (C3-C4)","MIDI 72-84 (C4-C5)","MIDI 84-96 (C5-C6)","MIDI 96-108 (C6-C7)" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
@@ -336,6 +338,7 @@ inline const ChoiceList kListBsSteps   = TG_LIST(kBsSteps);
 inline const ChoiceList kListBsSwitch  = TG_LIST(kBsSwitch);
 inline const ChoiceList kListBsKeys    = TG_LIST(kBsKeys);
 inline const ChoiceList kListBsAlt     = TG_LIST(kBsAlt);
+inline const ChoiceList kListBcSnap    = TG_LIST(kBcSnap);
 inline const ChoiceList kListBsAltBreak = TG_LIST(kBsAltBreak);
 // Performance FX pads, in the order they're processed: P_pfRoll + k
 constexpr int kPfPads = 13;
@@ -1077,7 +1080,8 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(bcChopMode,  "Break Chop Mode", false) \
     B(bcChopSnapTr,"Break Chop Snap to Transients", true) \
     B(bcChopSnapZero,"Break Chop Snap to Zero Crossings", true) \
-    F(bcChopLatency,"Break Chop Tap Latency", 0, 100, 10, 0.1, 0)
+    F(bcChopLatency,"Break Chop Tap Latency", 0, 100, 10, 0.1, 0) \
+    C(bcMarkerSnap,"Break Marker Snap", kListBcSnap, 1)
 
 enum ParamIndex
 {

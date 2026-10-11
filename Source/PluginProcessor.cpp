@@ -465,17 +465,22 @@ void MegaSynthProcessor::refreshBreakAnalysis (bool force)
 // Chop mode and markers
 double MegaSynthProcessor::snapChopFrame (int brk, double frame)
 {
+    return snapFrameTo (brk, frame, raw[P_bcChopSnapTr]->load() > 0.5f, raw[P_bcChopSnapZero]->load() > 0.5f);
+}
+
+double MegaSynthProcessor::snapFrameTo (int brk, double frame, bool toTransient, bool toZero)
+{
     const auto* w = getSample (breakSlot (brk));
     if (w == nullptr) return frame;
     const double sr = w->sampleRate;
-    if (raw[P_bcChopSnapTr]->load() > 0.5f)
+    if (toTransient)
     {
         if (onsetsFor[brk] != w) { onsets[brk] = tg::breaks::transients (*w, 1.0f); onsetsFor[brk] = w; }
         double best = frame, bestD = 0.02 * sr;   // within 20 ms
         for (int at : onsets[brk]) if (std::abs (at - frame) < bestD) { bestD = std::abs (at - frame); best = at; }
         frame = best;
     }
-    if (raw[P_bcChopSnapZero]->load() > 0.5f)
+    if (toZero)
     {
         // the nearest zero crossing within 2 ms (where the left channel changes sign)
         const auto& a = w->ch[0];
@@ -489,6 +494,25 @@ double MegaSynthProcessor::snapChopFrame (int brk, double frame)
                 if ((a[(size_t) i - 1] <= 0.0f) != (a[(size_t) i] <= 0.0f)) return (double) i;
             }
         }
+    }
+    return frame;
+}
+
+double MegaSynthProcessor::snapMarkerFrame (int brk, double frame)
+{
+    // dragging a marker: the Marker Snap setting (none, zero crossing, transient, or a grid at the break's tempo)
+    brk = juce::jlimit (0, 2, brk);
+    const auto* w = getSample (breakSlot (brk));
+    if (w == nullptr) return frame;
+    const int mode = juce::roundToInt (raw[P_bcMarkerSnap]->load());
+    if (mode == 1 || mode == 2) return snapFrameTo (brk, frame, mode == 2, mode == 1);
+    if (mode >= 3)
+    {
+        const double bpm = breakStore.get().brk[brk].origBpm;
+        if (bpm <= 1.0) return frame;
+        const double beats = mode == 3 ? 0.5 : (mode == 4 ? 0.25 : 0.125);
+        const double gridF = beats * 60.0 / bpm * w->sampleRate;
+        return std::round (frame / gridF) * gridF;
     }
     return frame;
 }
@@ -518,6 +542,57 @@ bool MegaSynthProcessor::addChopMarker (int brk, double frame, bool snap)
         refreshBreakAnalysis();
     }
     return added;
+}
+
+double MegaSynthProcessor::moveMarker (int brk, int idx, double frame, bool snap)
+{
+    // live while dragging: no undo step yet (commitMarkerEdit makes one at the end of the drag)
+    brk = juce::jlimit (0, 2, brk);
+    const auto* w = getSample (breakSlot (brk));
+    if (w == nullptr) return -1.0;
+    const auto d = breakStore.get();
+    const auto& b = d.brk[brk];
+    if (idx < 0 || idx >= b.nMarkers) return -1.0;
+    if (snap) frame = snapMarkerFrame (brk, frame);
+    // never past its neighbours (or the ends): slice 1 always starts at 0
+    const double lo = (idx > 0 ? (double) b.markers[idx - 1] * w->length : 0.0) + kMarkerGap;
+    const double hi = (idx + 1 < b.nMarkers ? (double) b.markers[idx + 1] * w->length : (double) w->length) - kMarkerGap;
+    if (hi <= lo) return (double) b.markers[idx] * w->length;
+    frame = juce::jlimit (lo, hi, frame);
+    const float f = (float) (frame / (double) w->length);
+    breakStore.setAnalysis ([brk, idx, f] (tg::BreakData& x) { if (idx < x.brk[brk].nMarkers) x.brk[brk].markers[idx] = f; });
+    refreshBreakAnalysis();
+    return frame;
+}
+
+void MegaSynthProcessor::setSliceTrim (int brk, int slice, bool end, float value)
+{
+    brk = juce::jlimit (0, 2, brk);
+    slice = juce::jlimit (0, tg::BreakSlot::kSlices - 1, slice);
+    breakStore.setAnalysis ([=] (tg::BreakData& x)
+    {
+        auto& s = x.brk[brk].slice[slice];
+        if (end) s.trimEnd = juce::jlimit (s.trimStart + 0.05f, 1.0f, value);
+        else s.trimStart = juce::jlimit (0.0f, std::min (0.95f, s.trimEnd - 0.05f), value);
+    });
+}
+
+void MegaSynthProcessor::commitMarkerEdit()
+{
+    breakStore.edit ([] (tg::BreakData&) {});   // one undo step for the whole drag or nudge
+}
+
+bool MegaSynthProcessor::nudgeMarker (int brk, int idx, double ms)
+{
+    const auto* w = getSample (breakSlot (juce::jlimit (0, 2, brk)));
+    if (w == nullptr) return false;
+    const auto d = breakStore.get();
+    if (idx < 0 || idx >= d.brk[brk].nMarkers) return false;
+    const double from = (double) d.brk[brk].markers[idx] * w->length;
+    const double to = moveMarker (brk, idx, from + ms * 0.001 * w->sampleRate, false);
+    if (to < 0.0 || std::abs (to - from) < 0.5) return false;
+    commitMarkerEdit();
+    return true;
 }
 
 bool MegaSynthProcessor::undoLastChop()
@@ -1907,7 +1982,7 @@ void MegaSynthProcessor::setBreak3DefaultsForOldPatch()
 
 void MegaSynthProcessor::setChopDefaultsForOldPatch()
 {
-    for (int i = P_bcChopMode; i <= P_bcChopLatency; ++i)
+    for (int i = P_bcChopMode; i <= P_bcMarkerSnap; ++i)
     {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();

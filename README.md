@@ -251,8 +251,23 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
   - Click the wave to add a marker, and double-click a slice to split it in half.
   - Right-click removes the nearest marker. Clicking a marker selects it, and Delete or Backspace removes it.
   - Clicking the strip of key names along the top always selects and plays a slice.
-  - **Snap all to transients** moves every marker onto the nearest hit.
+  - **Snap all** moves every marker onto the nearest hit. **Clear marks** removes every marker.
 - **Live and the space bar:** Live uses the space bar for its transport, so it may never reach the plugin there. Use a key, a pad or the Tap button instead.
+
+### Zooming and moving markers
+
+- **Zoom:**
+  - The mouse wheel or a trackpad pinch zooms around the pointer. Shift+wheel (or a sideways swipe) and the scroll bar under the wave scroll.
+  - The **-**, **+**, **All** and **Slice** buttons zoom out, zoom in, show the whole break, and zoom to the selected slice.
+  - Full zoom is 1 sample per pixel. Close in, the wave is drawn sample by sample; further out it comes from a min/max cache, so long breaks stay smooth.
+  - The Active Break's small wave at the top shows the zoomed view as a frame. Click or drag there to move the view.
+- **Moving markers:**
+  - Drag a marker left or right. In Transient or Equal mode, dragging a slice start first switches that break to Manual markers, keeping the slices it had.
+  - **Snap** decides where a dragged marker lands: none, zero crossing (the default), transient (within 20 ms), or a 1/8, 1/16 or 1/32 grid at the break's own tempo. Hold Alt for a fine move with no snap.
+  - The arrow keys nudge the selected marker by 1 ms, or 10 ms with Shift.
+  - A marker stops 64 samples before its neighbours, so markers never cross. Slice 1 always starts at 0.
+  - Each drag or nudge is one Undo step, and markers are saved with the patch and the project.
+- **Trim handles:** the two triangles along the bottom of the wave are the selected slice's Trim Start and Trim End. Drag them; the Trim knobs follow.
 
 ### Three breaks
 

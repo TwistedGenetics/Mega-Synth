@@ -1786,8 +1786,10 @@ void MegaSynthEditor::buildPages()
         auto* smp = sec (page, "Breaks  (Three breaks, each with its own sample, slicing, tempo, slice settings, stretch and colour. "
                                "The selector picks the Active Break: the one you edit here and the one the keys play. All three share one key zone "
                                "from First Key up (C1 by default); the three Break Select keys just below it (A0, A#0, B0) switch the Active Break "
-                               "while you play. Click a slice to hear and edit it. In Manual markers mode, Shift-click adds a marker and "
-                               "right-click removes the nearest one. Each break is saved inside the project and patch, cut to 30 s at most.)", col::complex);
+                               "while you play. Click a slice's label to hear and edit it. Drag a marker to move it (Alt: fine, no snap; arrow keys nudge); the "
+                               "triangles along the bottom are the slice's trim. Mouse wheel or pinch zooms, Shift+wheel scrolls. In Manual markers mode a "
+                               "click adds a marker, a double-click splits a slice, right-click or Delete removes one. Each break is saved inside the "
+                               "project and patch, cut to 30 s at most.)", col::complex);
         auto* selector = page->own (new Segmented (proc, -1, { "Break 1", "Break 2", "Break 3" }, breakColour (0)));
         tagParam (*selector, P_bcActive);
         selector->setTooltip ("The Active Break: the one shown and edited here, and the one the keys play");
@@ -1797,11 +1799,23 @@ void MegaSynthEditor::buildPages()
         {
             auto* mv = page->own (new SampleWaveView (proc, MegaSynthProcessor::breakSlot (k), breakColour (k)));
             mv->emptyText = "Break " + juce::String (k + 1) + ": empty";
-            mv->onClick = [selector, k] (double, const juce::MouseEvent&) { if (selector->onSelect) selector->onSelect (k); };
-            mv->setTooltip ("Break " + juce::String (k + 1) + ": click to make it the Active Break");
+            mv->outlineShade = true;
             minis.add (mv);
         }
         auto* wave = page->own (new SampleWaveView (proc, MegaSynthProcessor::breakSlot (0), breakColour (0)));
+        for (int k = 0; k < 3; ++k)
+        {
+            auto* mv = minis[k];
+            // the Active Break's small wave shows where the zoomed view is; click or drag on it to move the view
+            mv->shade = [this, wave, k, activeOf] { return k == activeOf() && wave->viewLen < 0.999 ? juce::Range<double> (wave->viewStart, wave->viewStart + wave->viewLen) : juce::Range<double>(); };
+            mv->onClick = [selector, wave, k, activeOf] (double f, const juce::MouseEvent&)
+            {
+                if (k == activeOf()) wave->setView (f - wave->viewLen * 0.5, wave->viewLen);
+                else if (selector->onSelect) selector->onSelect (k);
+            };
+            mv->onDrag = [wave, k, activeOf] (double f, const juce::MouseEvent&) { if (k == activeOf()) wave->setView (f - wave->viewLen * 0.5, wave->viewLen); };
+            mv->setTooltip ("Break " + juce::String (k + 1) + ": click to make it the Active Break. On the Active Break, the frame shows the zoomed view: click or drag to move it.");
+        }
         wave->emptyText = "Load a break (WAV, AIFF, FLAC or MP3)";
         wave->markers = [this, selected, activeOf]
         {
@@ -1815,10 +1829,16 @@ void MegaSynthEditor::buildPages()
             for (int k = 0; k < b.nSlices; ++k)
                 m.push_back ({ (double) b.start[k] / w->length, k == *selected ? col::text : breakColour (a).brighter (0.4f),
                                juce::MidiMessage::getMidiNoteName (kb + k, true, true, 3), k == *selected });
+            // the selected slice's trim start and end: handles along the bottom
+            const int sk = juce::jlimit (0, b.nSlices - 1, *selected);
+            const double s0 = b.start[sk], len = b.start[sk + 1] - b.start[sk];
+            m.push_back ({ (s0 + b.slice[sk].trimStart * len) / w->length, col::supersaw, {}, false, true });
+            m.push_back ({ (s0 + b.slice[sk].trimEnd * len) / w->length, col::supersaw, {}, false, true });
             const double ph = proc.getEngine().breakPlayheadShown.load();
             if (ph >= 0.0) m.push_back ({ ph, col::supersaw, {}, false });
             return m;
         };
+        wave->zoomable = true;
         wave->shade = [this, selected, activeOf]
         {
             const int a = activeOf();
@@ -1842,9 +1862,9 @@ void MegaSynthEditor::buildPages()
         auto markerNear = [this, activeOf, wave] (double f)
         {
             const auto d = proc.breakStore.get(); const auto& b = d.brk[activeOf()];
-            const double tol = 5.0 / std::max (1, wave->getWidth());
-            int best = -1; double bestD = tol;
-            for (int i = 0; i < b.nMarkers; ++i) if (std::abs (b.markers[i] - f) < bestD) { bestD = std::abs (b.markers[i] - f); best = i; }
+            const float x = wave->xFor (f);
+            int best = -1; float bestD = 5.0f;
+            for (int i = 0; i < b.nMarkers; ++i) if (std::abs (wave->xFor (b.markers[i]) - x) < bestD) { bestD = std::abs (wave->xFor (b.markers[i]) - x); best = i; }
             return best;
         };
         wave->onClick = [this, selectSliceAt, isManual, markerNear, selMarker, activeOf] (double f, const juce::MouseEvent& e)
@@ -1888,11 +1908,79 @@ void MegaSynthEditor::buildPages()
             if (b.nMarkers > 0) removeMarker (best);
             juce::ignoreUnused (markerNear);
         };
-        wave->onKey = [this, selMarker, removeMarker, isManual] (const juce::KeyPress& k)
+        wave->onKey = [this, selMarker, removeMarker, isManual, activeOf] (const juce::KeyPress& k)
         {
             if (k == juce::KeyPress::spaceKey && proc.param (P_bcChopMode)->getValue() > 0.5f) { proc.tapChop(); return true; }
             if ((k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey) && isManual() && *selMarker >= 0) { removeMarker (*selMarker); *selMarker = -1; return true; }
+            // the arrow keys nudge the selected marker: 1 ms, or 10 ms with Shift
+            const int kc = k.getKeyCode();
+            if ((kc == juce::KeyPress::leftKey || kc == juce::KeyPress::rightKey) && isManual() && *selMarker >= 0)
+            {
+                const double ms = (kc == juce::KeyPress::leftKey ? -1.0 : 1.0) * (k.getModifiers().isShiftDown() ? 10.0 : 1.0);
+                proc.nudgeMarker (activeOf(), *selMarker, ms);
+                return true;
+            }
             return false;
+        };
+        // dragging a marker (left / right) or the selected slice's trim handles (along the bottom)
+        struct DragState { int kind = 0, idx = -1, slice = 0; bool moved = false; float x0 = 0.0f; };
+        auto drag = std::make_shared<DragState>();
+        wave->onDragStart = [this, wave, drag, selected, selMarker, isManual, activeOf] (double f, const juce::MouseEvent& e)
+        {
+            const int a = activeOf();
+            const auto* w = proc.getSample (MegaSynthProcessor::breakSlot (a));
+            if (w == nullptr) return false;
+            const auto d = proc.breakStore.get(); const auto& b = d.brk[a];
+            if (b.nSlices <= 0) return false;
+            *drag = {}; drag->x0 = e.position.x;
+            const float x = wave->xFor (f);
+            // a trim handle (the bottom strip)
+            if (e.position.y > wave->inner().getBottom() - 14.0f)
+            {
+                const int sk = juce::jlimit (0, b.nSlices - 1, *selected);
+                const double s0 = b.start[sk], len = b.start[sk + 1] - b.start[sk];
+                const float xs = wave->xFor ((s0 + b.slice[sk].trimStart * len) / w->length), xe = wave->xFor ((s0 + b.slice[sk].trimEnd * len) / w->length);
+                const float ds = std::abs (xs - x), de = std::abs (xe - x);
+                if (std::min (ds, de) < 7.0f) { drag->kind = de < ds ? 3 : 2; drag->slice = sk; return true; }
+            }
+            if (e.position.y < 18.0f) return false;   // the label strip picks slices
+            // a marker: in Manual mode the markers themselves; otherwise a slice start (converted to Manual once it moves)
+            float bestD = 5.0f; int best = -1;
+            if (isManual()) { for (int i = 0; i < b.nMarkers; ++i) { const float dd = std::abs (wave->xFor (b.markers[i]) - x); if (dd < bestD) { bestD = dd; best = i; } } }
+            else for (int k = 1; k < b.nSlices; ++k) { const float dd = std::abs (wave->xFor ((double) b.start[k] / w->length) - x); if (dd < bestD) { bestD = dd; best = k - 1; } }
+            if (best < 0) return false;
+            drag->kind = 1; drag->idx = best; *selMarker = best;
+            return true;
+        };
+        wave->onDragMove = [this, drag, isManual, activeOf] (double f, const juce::MouseEvent& e)
+        {
+            if (! drag->moved && std::abs (e.position.x - drag->x0) < 3.0f) return;   // a click, not a drag
+            const int a = activeOf();
+            const auto* w = proc.getSample (MegaSynthProcessor::breakSlot (a));
+            if (w == nullptr) return;
+            if (drag->kind == 1)
+            {
+                if (! isManual()) proc.markersFromSlices (a);   // Transient or Equal: to Manual markers first
+                proc.moveMarker (a, drag->idx, f * w->length, ! e.mods.isAltDown());   // Alt: fine, no snap
+            }
+            else if (drag->kind >= 2)
+            {
+                const auto d = proc.breakStore.get(); const auto& b = d.brk[a];
+                const double s0 = b.start[drag->slice], len = std::max (1, b.start[drag->slice + 1] - b.start[drag->slice]);
+                proc.setSliceTrim (a, drag->slice, drag->kind == 3, (float) ((f * w->length - s0) / len));
+            }
+            drag->moved = true;
+        };
+        wave->onDragEnd = [this, drag, selectSliceAt, wave]
+        {
+            if (drag->moved) proc.commitMarkerEdit();   // one undo step per drag
+            else if (drag->kind == 1)
+            {
+                // a click on a marker: select it, and the slice after it
+                const auto d = proc.breakStore.get(); juce::ignoreUnused (d);
+                selectSliceAt (wave->fracAtX (drag->x0 + 3.0f));
+            }
+            *drag = {};
         };
         auto* load = page->own (new juce::TextButton ("Load"));
         auto* clear = page->own (new juce::TextButton ("Clear"));
@@ -1946,8 +2034,8 @@ void MegaSynthEditor::buildPages()
         auto* play = page->own (new juce::TextButton ("Play"));
         auto* tap = page->own (new juce::TextButton ("Tap"));
         auto* undoChop = page->own (new juce::TextButton ("Undo chop"));
-        auto* clearMk = page->own (new juce::TextButton ("Clear markers"));
-        auto* snapAll = page->own (new juce::TextButton ("Snap all to transients"));
+        auto* clearMk = page->own (new juce::TextButton ("Clear marks"));
+        auto* snapAll = page->own (new juce::TextButton ("Snap all"));
         auto* snapTr = page->own (new ParamToggle (proc, P_bcChopSnapTr, "Transient", col::supersaw));
         auto* snapZero = page->own (new ParamToggle (proc, P_bcChopSnapZero, "Zero", col::supersaw));
         auto* latency = page->own (new juce::Slider (juce::Slider::LinearBar, juce::Slider::TextBoxLeft));
@@ -1960,7 +2048,28 @@ void MegaSynthEditor::buildPages()
         tap->onClick = [this] { proc.tapChop(); };
         undoChop->onClick = [this] { if (! proc.undoLastChop()) setStatus ("No chops to undo"); };
         clearMk->onClick = [this, activeOf] { proc.clearMarkers (activeOf()); proc.pushHistory ("Clear markers"); };
+        clearMk->setTooltip ("Clear markers: the whole break is one slice again");
+        snapAll->setTooltip ("Snap all to transients: every marker moves to the nearest transient within 20 ms");
         snapAll->onClick = [this, activeOf] { proc.snapAllMarkers (activeOf()); proc.pushHistory ("Snap markers"); };
+        auto* zoomOut = page->own (new juce::TextButton ("-"));
+        auto* zoomIn = page->own (new juce::TextButton ("+"));
+        auto* zoomAll = page->own (new juce::TextButton ("All"));
+        auto* zoomSlice = page->own (new juce::TextButton ("Slice"));
+        zoomOut->setTooltip ("Zoom out (or the mouse wheel / pinch on the wave)");
+        zoomIn->setTooltip ("Zoom in (or the mouse wheel / pinch on the wave; Shift+wheel scrolls)");
+        zoomAll->setTooltip ("Show the whole break");
+        zoomSlice->setTooltip ("Zoom to the selected slice");
+        zoomOut->onClick = [wave] { wave->zoomAround (wave->viewStart + wave->viewLen * 0.5, 2.0); };
+        zoomIn->onClick = [wave] { wave->zoomAround (wave->viewStart + wave->viewLen * 0.5, 0.5); };
+        zoomAll->onClick = [wave] { wave->setView (0.0, 1.0); };
+        zoomSlice->onClick = [wave] { if (wave->shade) wave->zoomTo (wave->shade()); };
+        auto* scroll = page->own (new WaveScrollBar());
+        scroll->onMove = [wave] (double st) { wave->setView (st, wave->viewLen); };
+        wave->onViewChanged = [wave, scroll] { scroll->show (wave->viewStart, wave->viewLen); };
+        auto* markerSnap = page->own (new juce::ComboBox());
+        if (auto* c = dynamic_cast<juce::AudioParameterChoice*> (proc.param (P_bcMarkerSnap))) markerSnap->addItemList (c->choices, 1);
+        markerSnapAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, kParamIds[P_bcMarkerSnap], tagParam (*markerSnap, P_bcMarkerSnap));
+        markerSnap->setTooltip ("Marker Snap: where a dragged marker lands (hold Alt for fine moves with no snap; the arrow keys nudge the selected marker 1 ms, Shift 10 ms)");
         snapTr->setTooltip ("Taps and new markers move to the nearest transient within 20 ms");
         snapZero->setTooltip ("... and then to the nearest zero crossing within 2 ms");
 
@@ -2051,14 +2160,15 @@ void MegaSynthEditor::buildPages()
         ticker->tick();
         breakWaveForTests = wave;
         page->onResize = [page, smp, selector, minis, wave, load, clear, toMarkers, matchTempo, matchLevels, info, on, slicing, sound, all, ed, sliceName,
-                          chop, play, tap, undoChop, clearMk, snapAll, snapTr, snapZero, latency]
+                          chop, play, tap, undoChop, clearMk, snapAll, snapTr, snapZero, latency, zoomOut, zoomIn, zoomAll, zoomSlice, scroll, markerSnap]
         {
             const int g = 10, W = page->getWidth();
             smp->setBounds (g, g, W - 2 * g, 238);
             selector->setBounds (g + 10, g + 34, 270, 26);
             const int mx = g + 290, mw = (W - 2 * g - 300) / 3;
             for (int k = 0; k < 3; ++k) minis[k]->setBounds (mx + k * mw, g + 34, mw - 6, 26);
-            wave->setBounds (g + 10, g + 66, W - 2 * g - 20, 96);
+            wave->setBounds (g + 10, g + 66, W - 2 * g - 20, 84);
+            scroll->setBounds (g + 10, g + 151, W - 2 * g - 20, 11);
             on->setBounds (g + 10, g + 168, 56, 28);
             load->setBounds (g + 68, g + 170, 62, 24);
             clear->setBounds (g + 134, g + 170, 56, 24);
@@ -2068,8 +2178,10 @@ void MegaSynthEditor::buildPages()
             info->setBounds (g + 536, g + 166, W - 2 * g - 546, 36);
             int x = g + 10; const int y = g + 204;
             auto put = [&x, y] (juce::Component* c, int w) { c->setBounds (x, y, w, 26); x += w + 6; };
-            put (chop, 70); put (play, 56); put (tap, 52); put (undoChop, 86); put (clearMk, 104); put (snapAll, 156);
-            x += 6; put (snapTr, 98); put (snapZero, 66); put (latency, 170);
+            put (chop, 66); put (play, 52); put (tap, 48); put (undoChop, 84); put (clearMk, 90); put (snapAll, 72);
+            put (snapTr, 94); put (snapZero, 62); put (latency, 150);
+            x += 6; put (markerSnap, 120);
+            x += 6; put (zoomOut, 28); put (zoomIn, 28); put (zoomAll, 40); put (zoomSlice, 50);
             for (auto* s : slicing) s->setBounds (g, g + 246, 510, 118);
             for (auto* s : sound) s->setBounds (g + 520, g + 246, W - 2 * g - 520, 118);
             ed->setBounds (g, g + 372, 510, 216);

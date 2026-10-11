@@ -37,7 +37,7 @@ namespace
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
-            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id);
+            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -237,6 +237,88 @@ void MegaSynthProcessor::midiMapFromString (const juce::String& s)
     midiMapVersion.fetch_add (1);
 }
 
+// ---- chord memory and arpeggiator
+void MegaSynthProcessor::startVoice (int key, int note, float vel, int ch, float accent)
+{
+    dnaClock.noteOn (midiPos);
+    engine.fx().shaperNoteOn (fxBeatStart + fxBeatInc * midiPos);
+    Voice::StartOptions o;
+    o.velocity = vel;
+    o.channel = ch;
+    o.note = note;
+    if (accent > 0.0f) { o.accentBoost = 0.35f * accent; o.filterAccent = 1500.0f * accent; }
+    modInputs.polyAT[note & 127] = 0.0f;
+    engine.noteOn (key, midiToFreq (note), o, snap);
+}
+
+void MegaSynthProcessor::routeNoteOn (int note, float vel, int ch)
+{
+    note &= 127;
+    if (arpStore.learning.load()) { learnNotes.push_back (note); ++learnHeld; }
+    // chord memory: the key becomes the chord
+    int tones[8]; int n = 1; tones[0] = note;
+    const bool chord = snap.i (P_chdOn) != 0;
+    if (chord)
+    {
+        const auto iv = tg::chordIntervals (juce::jlimit (0, 8, snap.i (P_chdPreset)), arpStore,
+                                            juce::jlimit (0, 3, snap.i (P_chdSpread)), juce::jlimit (-3, 3, snap.i (P_chdInversion)));
+        n = 0;
+        for (int x : iv) if (n < 8 && note + x >= 0 && note + x <= 127) tones[n++] = note + x;
+        if (n == 0) { tones[0] = note; n = 1; }
+    }
+    chordCount[(size_t) note] = n;
+    for (int j = 0; j < n; ++j) chordTones[(size_t) note][(size_t) j] = tones[j];
+    if (snap.i (P_arpOn) != 0)
+    {
+        noteRoute[(size_t) note] = 1;
+        for (int j = 0; j < n; ++j) arp.keyDown (tones[j], vel, fxBeatStart + fxBeatInc * midiPos);
+        return;
+    }
+    noteRoute[(size_t) note] = chord ? 2 : 0;
+    if (! chord) { startVoice (note, note, vel, ch, 0.0f); return; }   // as before
+    engine.polyFloor = n;
+    for (int j = 0; j < n; ++j) startVoice (2000 + note * 16 + j, tones[j], vel, ch, 0.0f);
+    engine.polyFloor = 0;
+}
+
+void MegaSynthProcessor::routeNoteOff (int note)
+{
+    note &= 127;
+    if (arpStore.learning.load() && learnHeld > 0 && --learnHeld == 0 && ! learnNotes.empty())
+    {
+        // the chord just played (and let go) becomes the Learned chord
+        arpStore.setLearned (learnNotes);
+        learnNotes.clear();
+        arpStore.learning = false;
+        setParamFromAudio (P_chdPreset, 0.0f);
+        setParamFromAudio (P_chdOn, 1.0f);
+    }
+    const int n = juce::jlimit (1, 8, chordCount[(size_t) note]);
+    if (noteRoute[(size_t) note] == 1)
+    {
+        for (int j = 0; j < n; ++j) arp.keyUp (chordTones[(size_t) note][(size_t) j]);
+        return;
+    }
+    if (noteRoute[(size_t) note] == 0) { engine.noteOff (note); return; }   // as before
+    for (int j = 0; j < n; ++j) engine.noteOff (2000 + note * 16 + j);
+}
+
+void MegaSynthProcessor::arpTick (double beatNow)
+{
+    arpEvents.clear();
+    arp.tick (beatNow, arpStore, [this] { arpRng ^= arpRng << 13; arpRng ^= arpRng >> 17; arpRng ^= arpRng << 5; return (float) (arpRng & 0xFFFFFF) / 16777216.0f; }, arpEvents);
+    int ons = 0; for (auto& e : arpEvents) ons += e.on ? 1 : 0;
+    engine.polyFloor = ons > 1 ? ons : 0;
+    for (auto& e : arpEvents)
+    {
+        if (arpLog != nullptr) arpLog->push_back ({ beatNow, e.note, e.on, e.vel });
+        if (e.on) startVoice (3000 + e.note, e.note, e.vel, 1, e.accent);
+        else engine.noteOff (3000 + e.note);
+    }
+    engine.polyFloor = 0;
+    if (ons > 0) { modInputs.arpGate = 1.0f; modInputs.arpPos = arp.position(); arpStepShown.store (arp.currentStep()); }
+}
+
 void MegaSynthProcessor::setParamFromAudio (int index, float plain)
 {
     auto* p = params[(size_t) index];
@@ -267,18 +349,11 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
     }
     if (m.isNoteOn())
     {
-        dnaClock.noteOn (midiPos);
-        engine.fx().shaperNoteOn (fxBeatStart + fxBeatInc * midiPos);
-        Voice::StartOptions o;
-        o.velocity = m.getFloatVelocity();
-        o.channel = ch;
-        o.note = m.getNoteNumber();
-        modInputs.polyAT[m.getNoteNumber() & 127] = 0.0f;
-        engine.noteOn (m.getNoteNumber(), midiToFreq (m.getNoteNumber()), o, snap);
+        routeNoteOn (m.getNoteNumber(), m.getFloatVelocity(), ch);
     }
     else if (m.isNoteOff())
     {
-        engine.noteOff (m.getNoteNumber());
+        routeNoteOff (m.getNoteNumber());
     }
     else if (m.isController())
     {
@@ -502,6 +577,30 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         fxBeatsInternal = fxBeatStart + fxBeatInc * n;
     }
 
+    // ---- arpeggiator settings for this block (Swing and Gate can be modulated: last block's offsets)
+    const bool arpOn = snap.i (P_arpOn) != 0;
+    {
+        tg::Arpeggiator::Settings a;
+        a.mode = juce::jlimit (0, 6, snap.i (P_arpMode)); a.octaves = juce::jlimit (1, 4, snap.i (P_arpOctaves));
+        a.rate = juce::jlimit (0, 8, snap.i (P_arpRate)); a.velMode = snap.i (P_arpVelMode); a.velFixed = snap.f (P_arpVelFixed);
+        a.repeats = juce::jlimit (1, 4, snap.i (P_arpRepeats)); a.restart = snap.i (P_arpRestart); a.steps = juce::jlimit (1, 16, snap.i (P_arpSteps));
+        a.swing = juce::jlimit (0.0, 0.75, (double) (snap.f (P_arpSwing) + engine.arpModOffset (0)));
+        a.gate = juce::jlimit (0.05, 1.0, (double) (snap.f (P_arpGate) + engine.arpModOffset (1)));
+        a.latch = snap.i (P_arpLatch) != 0;
+        a.beatsPerBar = snap.fxBeatsPerBar; a.barOrigin = snap.fxBarOrigin;
+        arp.configure (a);
+        if (arpWasOn && ! arpOn)
+        {
+            // switched off: end its notes; keys held now play normally from their next press
+            arpEvents.clear(); arp.allOff (arpEvents);
+            for (auto& e : arpEvents) engine.noteOff (3000 + e.note);
+            arp.reset();
+        }
+        arpWasOn = arpOn;
+        modInputs.arpGate *= (float) std::exp (-(double) n / (0.03 * sampleRate));
+    }
+    auto beatAt = [this] (int p) { return fxBeatStart + fxBeatInc * p; };
+
     float* L = buffer.getWritePointer (0);
     float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
     juce::HeapBlock<float> monoR;
@@ -516,6 +615,12 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (it != end) next = std::min (next, juce::jlimit (pos, n, (*it).samplePosition));
         if (seqRunning) next = std::min (next, pos + (int) std::ceil (std::max (0.0, seqSamplesToNext)));
         if (seqReleaseIn >= 0) next = std::min (next, pos + (int) std::ceil (std::max (0.0, seqReleaseIn)));
+        if ((arpOn && arp.active()) || arp.sounding())
+        {
+            const double due = arp.nextDue (beatAt (pos));
+            if (due < 1.0e299 && fxBeatInc > 0.0)
+                next = std::min (next, pos + std::max (1, (int) std::ceil ((due - beatAt (pos)) / fxBeatInc - 1.0e-6)));
+        }
 
         // render up to the next event, in chunks no larger than the prepared block size
         while (pos < next)
@@ -553,6 +658,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             handleMidi ((*it).getMessage());
             ++it;
         }
+        if ((arpOn && arp.active()) || arp.sounding()) arpTick (beatAt (pos));
         if (seqRunning && seqSamplesToNext <= 0.5)
         {
             if (hostClock)
@@ -630,6 +736,8 @@ void MegaSynthProcessor::timerCallback()
         if (fv != lastRackVersion) { lastRackVersion = fv; snapshotPending = true; snapshotDelay = 0; }
         const auto lv = lfoShapes.getVersion();
         if (lv != lastLfoShapeVersion) { lastLfoShapeVersion = lv; snapshotPending = true; snapshotDelay = 0; }
+        const auto av = arpStore.getVersion();
+        if (av != lastArpVersion) { lastArpVersion = av; snapshotPending = true; snapshotDelay = 0; }
         const auto rv = routes.getVersion();
         if (rv != lastRoutesVersion) { lastRoutesVersion = rv; snapshotPending = true; snapshotDelay = 0; }
         if (snapshotPending && ++snapshotDelay >= 6)
@@ -744,6 +852,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("dnaSeq2", dnaSteps.toJson(), nullptr);         // everything
     state.setProperty ("fxRack", juce::JSON::toString (fxRack.toVar(), true), nullptr);
     state.setProperty ("lfoShapes", lfoShapes.toJson(), nullptr);
+    state.setProperty ("arp", arpStore.toJson(), nullptr);
     state.setProperty ("midiMap", midiMapToString(), nullptr);        // MIDI learn belongs to the project, not the patch
     state.setProperty ("uiWidth", uiWidth.load(), nullptr);
     state.setProperty ("program", curProgram.load(), nullptr);
@@ -782,8 +891,10 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 5) setDnaDefaultsForOldPatch();
     if (version < 6) setFxDefaultsForOldPatch();
     if (version < 7) setLfoDefaultsForOldPatch();
+    if (version < 8) setArpDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
+    arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
     midiMapFromString (tree.getProperty ("midiMap").toString());
     if (tree.hasProperty ("uiWidth")) uiWidth.store ((int) tree.getProperty ("uiWidth"));
     pendingProgram.store (-1);   // a program change still waiting must not replace the restored state
@@ -864,6 +975,7 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
     root->setProperty ("dnaSequencer", dnaSteps.toVar());     // everything
     root->setProperty ("fxRack", fxRack.toVar());
     root->setProperty ("lfoShapes", lfoShapes.toVar());
+    root->setProperty ("arp", arpStore.toVar());
     root->setProperty ("scenes", scenes.toVar());
     root->setProperty ("sceneEdit", getEditScene());
     root->setProperty ("capture", captureToVar());
@@ -989,6 +1101,8 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("lfo1Sync")) setLfoDefaultsForOldPatch();
         fxRack.fromVar (patch["fxRack"]);
         lfoShapes.fromVar (patch["lfoShapes"]);
+        if (extra == nullptr || ! extra->hasProperty ("arpOn")) setArpDefaultsForOldPatch();
+        arpStore.fromVar (patch["arp"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
         const juce::var names = patch["macroNames"];
@@ -1082,6 +1196,7 @@ void MegaSynthProcessor::resetPatchState()
     dnaSteps.fromString ({});
     fxRack.fromVar ({});
     lfoShapes.fromVar ({});
+    arpStore.fromVar ({});
     scenes.clear();
     sceneEditIndex = 0;
     for (int k = 0; k < 8; ++k) setMacroName (k, {});
@@ -1089,6 +1204,21 @@ void MegaSynthProcessor::resetPatchState()
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
+}
+
+void MegaSynthProcessor::setArpDefaultsForOldPatch()
+{
+    // Before chord memory and the arpeggiator: both off, notes play as they always did
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        const juce::String id (kParamIds[i]);
+        if (! (id.startsWith ("arp") || id.startsWith ("chd"))) continue;
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
+    arpStore.fromVar ({});
 }
 
 void MegaSynthProcessor::setLfoDefaultsForOldPatch()
@@ -1259,6 +1389,9 @@ bool MegaSynthProcessor::loadFactoryPreset (int index)
     if (b.dnaChain.isNotEmpty()) dnaSteps.setChain (b.dnaChain);
     if (b.rackSet) fxRack.setOrder (b.rack);
     if (b.shaperCurve != 0) fxRack.setCurvePreset (b.shaperCurve);
+    for (int k = 0; k < 4; ++k) if (b.lfoShape[k] >= 0) lfoShapes.setPreset (k, b.lfoShape[k]);
+    for (auto& st : b.arpPattern) arpStore.setStep (st.i, st.state, st.prob);
+    if (! b.learnedChord.empty()) arpStore.setLearned (b.learnedChord);
     for (int k = 0; k < 8; ++k) setMacroName (k, b.macroNames[k]);
 
     for (int i = 0; i < tg::P_COUNT; ++i)
@@ -1301,6 +1434,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
     s.dnaSteps = dnaSteps.toJson();
     s.fxRack = juce::JSON::toString (fxRack.toVar(), true);
     s.lfoShapes = lfoShapes.toJson();
+    s.arpStore = arpStore.toJson();
     s.scenes = juce::JSON::toString (scenes.toVar(), true);
     s.sceneEdit = getEditScene();
     s.macroNames = macroNamesJoined();
@@ -1313,7 +1447,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
 
 bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
 {
-    return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.lfoShapes == b.lfoShapes && a.scenes == b.scenes && a.macroNames == b.macroNames
+    return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.lfoShapes == b.lfoShapes && a.arpStore == b.arpStore && a.scenes == b.scenes && a.macroNames == b.macroNames
         && a.sceneEdit == b.sceneEdit && a.patchName == b.patchName
         && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1]
         && a.params.isEquivalentTo (b.params);
@@ -1332,6 +1466,8 @@ void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
     lastRackVersion = fxRack.getVersion();
     lfoShapes.fromVar (juce::JSON::parse (s.lfoShapes));
     lastLfoShapeVersion = lfoShapes.getVersion();
+    arpStore.fromVar (juce::JSON::parse (s.arpStore));
+    lastArpVersion = arpStore.getVersion();
     scenes.fromVar (juce::JSON::parse (s.scenes));
     lastScenesVersion = scenes.version.load();
     sceneEditIndex = s.sceneEdit;

@@ -68,7 +68,9 @@ enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_
     X(Osc1Audio,   "Osc 1 (audio rate)",K_AUDIO,  true)  \
     X(Osc2Audio,   "Osc 2 (audio rate)",K_AUDIO,  true)  \
     X(Osc3Audio,   "Osc 3 (audio rate)",K_AUDIO,  true)  \
-    X(SubAudio,    "Sub (audio rate)",  K_AUDIO,  true)
+    X(SubAudio,    "Sub (audio rate)",  K_AUDIO,  true)  \
+    X(ArpPos,      "Arp Position",      K_SEQ,    false) \
+    X(ArpGate,     "Arp Step Gate",     K_SEQ,    false)
 
 enum ModSource
 {
@@ -203,6 +205,7 @@ struct GlobalModInputs
     float wheel = 0, bend = 0, aftertouch = 0, ccA = 0, ccB = 0;
     float polyAT[128] {};
     float mpePressure[16] {}, mpeSlide[16] {}, mpeGlide[16] {};
+    float arpPos = 0, arpGate = 0;   // the arpeggiator's place in its note cycle (0..1) and a pulse at each step
 };
 
 //==============================================================================

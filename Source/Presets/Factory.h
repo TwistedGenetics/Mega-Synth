@@ -1,5 +1,5 @@
 #pragma once
-// Factory presets: the 28 demo patches that ship inside the plugin.
+// Factory presets: the 32 demo patches that ship inside the plugin.
 //
 // Each preset is written as code against the parameter table (so it can never refer to a
 // control that doesn't exist) and is built on top of a clean starting point: every parameter
@@ -37,6 +37,10 @@ struct PresetBuilder
     std::array<int, FS_COUNT> rack {};
     bool rackSet = false;
     int shaperCurve = 0;
+    int lfoShape[4] { -1, -1, -1, -1 };                       // LfoShapeStore preset per LFO (-1: default)
+    struct ArpStep { int i, state; float prob; };
+    std::vector<ArpStep> arpPattern;                          // steps that differ from "on, 100%"
+    std::vector<int> learnedChord;                            // chord memory's Learned chord (empty: default)
 
     PresetBuilder()
     {
@@ -110,6 +114,26 @@ struct PresetBuilder
         }
         return *this;
     }
+    // LFO k (0..3) with a custom shape preset (turns Custom on)
+    PresetBuilder& lfoCustom (int k, int shapePreset)
+    {
+        lfoShape[k] = shapePreset;
+        v[(size_t) (P_lfo1Custom + kLfoXStride * k)] = 1.0f;
+        return *this;
+    }
+    // arpeggiator pattern from a string: 'x' on, 'A' accent, '.' rest, digits 1-9 = on at 10-90%
+    PresetBuilder& arpPat (const char* p)
+    {
+        for (int i = 0; p[i] != 0 && i < 16; ++i)
+        {
+            const char c = p[i];
+            if (c == 'A') arpPattern.push_back ({ i, 2, 1.0f });
+            else if (c == '.') arpPattern.push_back ({ i, 0, 1.0f });
+            else if (c >= '1' && c <= '9') arpPattern.push_back ({ i, 1, (c - '0') / 10.0f });
+        }
+        return *this;
+    }
+
     PresetBuilder& rackOrder (std::initializer_list<int> order)
     {
         int i = 0; for (int s : order) if (i < FS_COUNT) rack[(size_t) i++] = s;
@@ -648,12 +672,82 @@ namespace factory_detail
         b.macro (0, "Grain", { { P_grMix, 0.5f } });
         b.macro (1, "Space", { { P_reverbMix, 0.4f } });
     }
+
+    //==============================================================================================
+    // Jungle / DnB bank 2: synced LFOs, chord memory and the arpeggiator
+
+    // 29 -----------------------------------------------------------------------------------------
+    inline void raveChordStab (B& b)
+    {
+        b.set (P_osc1Wave, 0).set (P_osc1Gain, 0.5f).set (P_osc2Wave, 1).set (P_osc2Gain, 0.35f).set (P_osc2Detune, 9)
+         .set (P_ampA, 0.001f).set (P_ampD, 0.45f).set (P_ampS, 0.0f).set (P_ampR, 0.35f)
+         .set (P_filterMode, 9).set (P_filterCutoff, 1500).set (P_filterRes, 3.5f)
+         .set (P_fEnvAmt, 4200).set (P_fEnvA, 0.001f).set (P_fEnvD, 0.2f).set (P_fEnvS, 0.0f)
+         .set (P_chdOn, 1).set (P_chdPreset, 7).set (P_polyphony, 12)
+         .set (P_fxOnSampler, 1).set (P_smpModel, 1).set (P_smpRate, 26000).set (P_smpDrive, 0.3f)
+         .set (P_delayMix, 0.28f).set (P_delaySync, 6).set (P_reverbMix, 0.3f).set (P_chorusMix, 0.2f);
+        b.route (MS_Velocity, P_filterCutoff, 0.12f);
+        b.macro (0, "Snap", { { P_fEnvAmt, 0.2f } });
+        b.macro (1, "Crunch", { { P_smpDrive, 0.5f } });
+    }
+
+    // 30 -----------------------------------------------------------------------------------------
+    inline void syncedWobBass (B& b)
+    {
+        monoBass (b, 0.02f);
+        b.set (P_osc1Wave, 0).set (P_osc1Gain, 0.6f).set (P_osc2Wave, 1).set (P_osc2Gain, 0.5f).set (P_osc2Oct, -1)
+         .set (P_subWave, 1).set (P_subGain, 0.45f)
+         .set (P_filterMode, 0).set (P_filterSlope, 3).set (P_filterCutoff, 180).set (P_filterRes, 6.0f).set (P_filterDrive, 3.0f)
+         // LFO 1: a drawn "wub" at 1/8, locked to the song position, sweeping the cutoff by up to 4 octaves
+         .set (P_lfo1Sync, 6).set (P_lfo1Retrig, 1).set (P_lfo1Depth, 1.0f).set (P_lfo1Smooth, 0.15f)
+         .set (P_filterLfoAmt, 0.6f).set (P_filterLfoSrc, 0)
+         .set (P_fxOnMultiband, 1).set (P_mbcDepth, 0.4f).set (P_fxOnStereo, 1).set (P_sttMono, 1);
+        b.lfoCustom (0, 4 /* wub */);
+        b.macro (0, "Wobble", { { P_filterLfoAmt, 0.3f } });
+        b.macro (1, "Grit", { { P_wmMix, 0.4f }, { P_wmFold, 0.35f } });
+    }
+
+    // 31 -----------------------------------------------------------------------------------------
+    inline void arpHoover (B& b)
+    {
+        b.set (P_polyphony, 6).set (P_porta, 0.03f)
+         .set (P_supersawGain, 0.6f).set (P_supersawVoices, 9).set (P_supersawSpread, 32)
+         .set (P_osc1Wave, 4).set (P_osc1Gain, 0.4f).set (P_osc1Oct, -1)
+         .set (P_ampA, 0.004f).set (P_ampD, 0.18f).set (P_ampS, 0.45f).set (P_ampR, 0.08f)
+         .set (P_filterMode, 0).set (P_filterCutoff, 3200).set (P_filterRes, 1.8f).set (P_filterDrive, 2.0f)
+         .set (P_arpOn, 1).set (P_arpMode, 2).set (P_arpOctaves, 2).set (P_arpRate, 2).set (P_arpGate, 0.6f)
+         // LFO 2: 1 bar sine on the cutoff, restarting every bar
+         .set (P_lfo2Sync, 14).set (P_lfo2Retrig, 2).set (P_lfo2Depth, 1.0f).set (P_filterLfoAmt, 0.25f).set (P_filterLfoSrc, 1)
+         .set (P_fxOnFlanger, 1).set (P_fxMixFlanger, 0.45f).set (P_flpRate, 0.12f).set (P_flpFeedback, 0.5f)
+         .set (P_delayMix, 0.25f).set (P_delaySync, 6).set (P_reverbMix, 0.25f).set (P_chorusMix, 0.0f);
+        b.arpPat ("A.xxAxx.Axx.Axxx");
+        b.macro (0, "Arp Gate", { { P_arpGate, 0.35f } });
+        b.macro (1, "Bright", { { P_filterCutoff, 0.25f } });
+    }
+
+    // 32 -----------------------------------------------------------------------------------------
+    inline void liquidArp (B& b)
+    {
+        b.set (P_osc1Wave, 2).set (P_osc1Gain, 0.5f).set (P_osc2Wave, 3).set (P_osc2Gain, 0.35f).set (P_osc2Oct, 1)
+         .set (P_ampA, 0.002f).set (P_ampD, 0.3f).set (P_ampS, 0.1f).set (P_ampR, 0.22f)
+         .set (P_filterMode, 0).set (P_filterCutoff, 1800).set (P_filterRes, 2.0f)
+         .set (P_fEnvAmt, 2500).set (P_fEnvD, 0.25f).set (P_fEnvS, 0.0f)
+         .set (P_chdOn, 1).set (P_chdPreset, 3).set (P_chdSpread, 1)
+         .set (P_arpOn, 1).set (P_arpMode, 0).set (P_arpOctaves, 1).set (P_arpRate, 2).set (P_arpSwing, 0.15f).set (P_arpGate, 0.45f)
+         // LFO 3: a 2-bar triangle drifting the cutoff
+         .set (P_lfo3Sync, 15).set (P_lfo3Retrig, 1).set (P_lfo3Depth, 1.0f).set (P_filterLfoAmt, 0.2f).set (P_filterLfoSrc, 2)
+         .set (P_fxOnFlanger, 1).set (P_flpMode, 1).set (P_flpStages, 1).set (P_flpRate, 0.15f).set (P_fxMixFlanger, 0.4f)
+         .set (P_delayMix, 0.35f).set (P_delaySync, 7).set (P_reverbMix, 0.4f).set (P_reverbSize, 3.2f).set (P_chorusMix, 0.3f);
+        b.arpPat ("xx6xx7xxx6xx8xx5");
+        b.macro (0, "Space", { { P_reverbMix, 0.3f }, { P_delayMix, 0.2f } });
+        b.macro (1, "Bright", { { P_filterCutoff, 0.3f } });
+    }
 }
 
-inline const std::array<FactoryPreset, 28>& factoryPresets()
+inline const std::array<FactoryPreset, 32>& factoryPresets()
 {
     using namespace factory_detail;
-    static const std::array<FactoryPreset, 28> list { {
+    static const std::array<FactoryPreset, 32> list { {
         { "Init Genome",           "Init",   "Two saws and a sub, with the eight macros wired to the main mutation engines.", initGenome },
         { "Reese Mutation",        "Bass",   "Detuned reese with slow wave-fold and filter drift plus Cell Instability.", reeseMutation },
         { "Sub Helix",             "Bass",   "Sine sub with an audio-rate FM blip at the front of each note.", subHelix },
@@ -682,6 +776,10 @@ inline const std::array<FactoryPreset, 28>& factoryPresets()
         { "Pirate Radio Lead",     "Jungle / DnB", "Lead: square lead crunched by the SP-1200 with a 4-stage phaser; mod wheel adds depth.", pirateRadioLead },
         { "Stutter Pluck",         "Jungle / DnB", "Pluck: random Beat Repeats (35% chance per beat), through-zero flanger and triplet delay.", stutterPluck },
         { "Jungle Atmos",          "Jungle / DnB", "Pad: soft grains and a big reverb, then resampled by the E-mu at the end of the rack.", jungleAtmos },
+        { "Rave Chord Stab",       "Jungle / DnB", "Stab: chord memory turns one key into an open rave minor chord, through an S950 and dotted delay.", raveChordStab },
+        { "Synced Wob Bass",       "Jungle / DnB", "Bass: a drawn wub shape on LFO 1 at 1/8, locked to the song position, sweeping a resonant low pass.", syncedWobBass },
+        { "Arp Hoover",            "Jungle / DnB", "Arp: up/down 2-octave 1/16 hoover arpeggio with accents and rests; a 1-bar LFO opens the filter.", arpHoover },
+        { "Liquid Arp",            "Jungle / DnB", "Arp: one key plays a spread minor 9 as a swung 1/16 arpeggio with probability steps, phaser and space.", liquidArp },
     } };
     return list;
 }

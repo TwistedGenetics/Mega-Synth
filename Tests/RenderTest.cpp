@@ -562,6 +562,13 @@ int main()
                     for (int n : { 53, 56, 60, 63 }) notes.push_back ({ o, 3.9, n, 90 });
                     for (int n : { 49, 53, 56, 60 }) notes.push_back ({ o + 4, 3.9, n, 90 });
                 });
+            else if (desc.startsWith ("Arp"))
+                bars ([&] (double o)
+                {
+                    for (int n : { 53, 56, 60 }) notes.push_back ({ o, 3.9, n, 100 });
+                    for (int n : { 49, 53, 56 }) notes.push_back ({ o + 4, 3.9, n, 100 });
+                    if (desc.contains ("one key")) { notes.erase (notes.end() - 6, notes.end()); notes.push_back ({ o, 3.9, 53, 100 }); notes.push_back ({ o + 4, 3.9, 49, 100 }); }
+                });
             else if (desc.startsWith ("Lead"))
                 bars ([&] (double o)
                 {
@@ -606,7 +613,11 @@ int main()
 
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_LFOSHOT", {}).isNotEmpty())
     {
+        const juce::String tabName = juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_LFOSHOT", {}) == "1" ? juce::String ("LFOs")
+                                                                                                             : juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_LFOSHOT", {});
         auto p = make();
+        setP (*p, P_arpOn, 1.0f); setP (*p, P_chdOn, 1.0f);
+        p->arpStore.setStep (2, ArpStore::ST_Accent, 1.0f); p->arpStore.setStep (5, ArpStore::ST_Rest, 1.0f); p->arpStore.setStep (9, ArpStore::ST_On, 0.4f);
         p->lfoShapes.setPreset (1, LfoShapeStore::PR_Wub); setP (*p, P_lfo1Custom + kLfoXStride, 1);
         setP (*p, P_lfo1Sync + kLfoXStride, 9); setP (*p, P_lfo1Retrig + 2 * kLfoXStride, 2);
         p->lfoShapes.setPreset (3, LfoShapeStore::PR_Stairs); setP (*p, P_lfo1Custom + 3 * kLfoXStride, 1);
@@ -619,10 +630,10 @@ int main()
             for (auto* ch : c->getChildren()) if (auto* t = findTabs (ch)) return t;
             return nullptr;
         };
-        if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (tabByName (tabs, "LFOs"));
+        if (auto* tabs = findTabs (ed.get())) tabs->setCurrentTabIndex (tabByName (tabs, tabName));
         auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
         auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
-        auto f = dir.getChildFile ("lfo_ui.png"); f.deleteFile();
+        auto f = dir.getChildFile ("tab_" + tabName.retainCharacters ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") + ".png"); f.deleteFile();
         juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
         return 0;
     }
@@ -1473,7 +1484,7 @@ int main()
             r->importBrowserPatch (juce::JSON::toString (obj));
             CHECK (r->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f && r->param (P_lfo1Custom + 2 * X)->getValue() < 0.5f, "old patches load with the original LFOs");
             // an old project: state version 6
-            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"7\"", "stateVersion=\"6\"");
+            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"8\"", "stateVersion=\"6\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (xml), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (o->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f, "old projects load with the original LFOs");
@@ -1488,6 +1499,228 @@ int main()
     {
         lfoTests();
         std::cout << (failures == 0 ? "LFO TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
+    // ---- Chord memory and arpeggiator (state version 8)
+    auto arpTests = [&]
+    {
+        std::cout << "Chord memory / arpeggiator" << std::endl;
+        struct FakeHead : juce::AudioPlayHead
+        {
+            PositionInfo info;
+            juce::Optional<PositionInfo> getPosition() const override { return info; }
+        };
+        // chord shapes
+        {
+            ArpStore st;
+            CHECK ((chordIntervals (1, st, 0, 0) == std::vector<int> { 0, 3, 7, 10 }), "minor 7");
+            CHECK ((chordIntervals (6, st, 0, 0) == std::vector<int> { 0, 7, 12 }), "power");
+            CHECK ((chordIntervals (1, st, 0, 1) == std::vector<int> { 3, 7, 10, 12 }), "first inversion");
+            CHECK ((chordIntervals (1, st, 0, -1) == std::vector<int> { -2, 0, 3, 7 }), "inversion down");
+            CHECK ((chordIntervals (1, st, 1, 0) == std::vector<int> { 0, 7, 15, 22 }), "spread: every other note up an octave");
+            st.setLearned ({ 62, 65, 69 });
+            CHECK ((chordIntervals (0, st, 0, 0) == std::vector<int> { 0, 3, 7 }), "learned chord relative to its lowest note");
+        }
+        // chord memory in the synth: one key, a whole chord, in poly and mono
+        for (int poly : { 10, 1 })
+        {
+            auto p = make(); setP (*p, P_polyphony, (float) poly); setP (*p, P_chdOn, 1.0f); setP (*p, P_chdPreset, 7.0f);
+            render (*p, 0.1, { { 0.0, juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100) } });
+            CHECK (p->getEngine().activeVoiceCount() == 5, "rave minor: 5 voices from one key (poly " + juce::String (poly) + ")");
+            render (*p, 0.05, { { 0.0, juce::MidiMessage::noteOff (1, 48) } });
+            int held = 0; for (int j = 0; j < 8; ++j) held += p->getEngine().isHeld (2000 + 48 * 16 + j) ? 1 : 0;
+            CHECK (held == 0, "letting go releases the whole chord");
+        }
+        // Learn
+        {
+            auto p = make(); p->arpStore.learning = true;
+            render (*p, 0.05, { { 0.0, juce::MidiMessage::noteOn (1, 50, (juce::uint8) 100) }, { 0.01, juce::MidiMessage::noteOn (1, 53, (juce::uint8) 100) },
+                                { 0.02, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) }, { 0.03, juce::MidiMessage::noteOff (1, 53) },
+                                { 0.035, juce::MidiMessage::noteOff (1, 57) }, { 0.04, juce::MidiMessage::noteOff (1, 50) } });
+            CHECK (! p->arpStore.learning.load() && (p->arpStore.getLearned() == std::vector<int> { 0, 3, 7 }), "Learn stores the chord played");
+            CHECK (p->param (P_chdOn)->getValue() > 0.5f && p->param (P_chdPreset)->getValue() < 1e-6f, "Learn switches chord memory on with the learned chord");
+        }
+        // the arpeggiator in a simulated DAW: steps on the song's grid at any tempo, play pressed mid-bar
+        auto runArp = [&] (double bpm, std::function<void (MegaSynthProcessor&)> setup, std::vector<std::pair<double, juce::MidiMessage>> ev, double beats,
+                           std::vector<MegaSynthProcessor::ArpLogEntry>& log, double startPpq = 5.37)
+        {
+            FakeHead head;
+            auto p = std::make_unique<MegaSynthProcessor>();
+            p->setPlayConfigDetails (0, 2, sr, 512); p->prepareToPlay (sr, 512);
+            p->setPlayHead (&head);
+            setP (*p, P_arpOn, 1.0f);
+            setup (*p);
+            p->arpLog = &log;
+            const double inc = bpm / 60.0 / sr;
+            juce::AudioBuffer<float> buf (2, 256);
+            double ppq = startPpq;
+            for (int pos = 0; ppq < startPpq + beats; pos += 256)
+            {
+                head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+                head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+                head.info.setTimeSignature (juce::AudioPlayHead::TimeSignature { 4, 4 });
+                juce::MidiBuffer midi;
+                for (auto& e : ev) { const int at = (int) std::lround ((e.first - startPpq) / inc); if (at >= pos && at < pos + 256) midi.addEvent (e.second, at - pos); }
+                buf.clear(); p->processBlock (buf, midi);
+                ppq += 256 * inc;
+            }
+            p->arpLog = nullptr;
+            p->setPlayHead (nullptr);   // the fake head goes out of scope
+            return p;
+        };
+        auto onsOf = [] (const std::vector<MegaSynthProcessor::ArpLogEntry>& log) { std::vector<MegaSynthProcessor::ArpLogEntry> v; for (auto& e : log) if (e.on) v.push_back (e); return v; };
+        auto hold = [] (std::initializer_list<int> notes, double at) { std::vector<std::pair<double, juce::MidiMessage>> v; for (int n : notes) v.push_back ({ at, juce::MidiMessage::noteOn (1, n, (juce::uint8) 100) }); return v; };
+        for (double bpm : { 90.0, 140.0, 174.0 })
+        {
+            std::vector<MegaSynthProcessor::ArpLogEntry> log;
+            runArp (bpm, [] (MegaSynthProcessor&) {}, hold ({ 48, 52, 55 }, 6.1), 4.0, log);
+            const auto on = onsOf (log);
+            const double tol = 1.5 * bpm / 60.0 / sr;   // a sample and a half
+            bool grid = on.size() >= 10; double worst = 0;
+            for (auto& e : on) { const double d = std::abs (e.beat / 0.25 - std::round (e.beat / 0.25)) * 0.25; worst = std::max (worst, d); grid &= d <= tol; }
+            CHECK (grid, "arp steps on the 1/16 grid at " + juce::String (bpm) + " BPM (" + juce::String ((int) on.size()) + " notes, worst " + juce::String (worst, 8) + " beats)");
+            CHECK (! on.empty() && std::abs (on[0].beat - 6.25) < tol, "first arp note on the next grid line after the key");
+            bool order = true; const int want[3] = { 48, 52, 55 };
+            for (size_t i = 0; i < on.size(); ++i) order &= on[i].note == want[i % 3];
+            CHECK (order, "Up mode: 48 52 55 48 ...");
+            // gate: each note ends half a step later
+            bool gate = true;
+            for (auto& e : log) if (! e.on) { const double frac = (e.beat - std::floor (e.beat / 0.25) * 0.25) / 0.25; gate &= std::abs (frac - 0.5) < 0.01; }
+            CHECK (gate, "Gate 50%");
+        }
+        // a key pressed just after a grid line plays straight away
+        {
+            std::vector<MegaSynthProcessor::ArpLogEntry> log;
+            runArp (120.0, [] (MegaSynthProcessor&) {}, hold ({ 60 }, 6.01), 1.0, log);
+            const auto on = onsOf (log);
+            CHECK (! on.empty() && std::abs (on[0].beat - 6.01) < 0.002, "a slightly late key isn't held back to the next step");
+        }
+        // swing, octaves, modes, repeats
+        {
+            std::vector<MegaSynthProcessor::ArpLogEntry> log;
+            runArp (120.0, [] (MegaSynthProcessor& p) { setP (p, P_arpSwing, 0.5f); }, hold ({ 48, 52 }, 6.0), 2.0, log);
+            const auto on = onsOf (log);
+            bool sw = on.size() >= 6;
+            for (auto& e : on) { const double k = e.beat / 0.25; const double fr = k - std::floor (k + 1e-6); const bool odd = ((long long) std::floor (k + 1e-6)) & 1;
+                                 sw &= odd ? std::abs (fr - 0.5) < 0.01 : fr < 0.01; }
+            CHECK (sw, "Swing 50%: every second step half a step late");
+        }
+        {
+            auto seqOf = [&] (int mode, int octaves, int repeats)
+            {
+                std::vector<MegaSynthProcessor::ArpLogEntry> log;
+                runArp (120.0, [=] (MegaSynthProcessor& p) { setP (p, P_arpMode, (float) mode); setP (p, P_arpOctaves, (float) octaves); setP (p, P_arpRepeats, (float) repeats); },
+                        hold ({ 60, 64, 67 }, 6.0), 3.0, log);
+                std::vector<int> v; for (auto& e : onsOf (log)) v.push_back (e.note);
+                return v;
+            };
+            auto starts = [] (const std::vector<int>& v, std::vector<int> w) { if (v.size() < w.size()) return false; for (size_t i = 0; i < w.size(); ++i) if (v[i] != w[i]) return false; return true; };
+            CHECK (starts (seqOf (1, 1, 1), { 67, 64, 60, 67 }), "Down");
+            CHECK (starts (seqOf (2, 1, 1), { 60, 64, 67, 64, 60, 64 }), "Up / Down");
+            CHECK (starts (seqOf (3, 1, 1), { 67, 64, 60, 64, 67 }), "Down / Up");
+            CHECK (starts (seqOf (0, 2, 1), { 60, 64, 67, 72, 76, 79, 60 }), "two octaves");
+            CHECK (starts (seqOf (0, 1, 2), { 60, 60, 64, 64, 67, 67 }), "repeats");
+            const auto rnd = seqOf (5, 1, 1);
+            bool inSet = rnd.size() > 8; for (int n : rnd) inSet &= n == 60 || n == 64 || n == 67;
+            CHECK (inSet, "Random stays on the held notes");
+            std::vector<MegaSynthProcessor::ArpLogEntry> log;
+            runArp (120.0, [] (MegaSynthProcessor& p) { setP (p, P_arpMode, 6.0f); }, hold ({ 60, 64, 67 }, 6.0), 1.0, log);
+            const auto on = onsOf (log);
+            CHECK (on.size() >= 6 && on[0].beat == on[1].beat && on[1].beat == on[2].beat, "Chord mode plays them together");
+        }
+        // as played; pattern rests, accents and probability
+        {
+            std::vector<MegaSynthProcessor::ArpLogEntry> log;
+            auto ev = hold ({ 67 }, 6.0); ev.push_back ({ 6.001, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) }); ev.push_back ({ 6.002, juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100) });
+            runArp (120.0, [] (MegaSynthProcessor& p) { setP (p, P_arpMode, 4.0f); }, ev, 2.0, log);
+            const auto on = onsOf (log);
+            CHECK (on.size() >= 3 && on[0].note == 67 && on[1].note == 60 && on[2].note == 64, "As played");
+        }
+        {
+            std::vector<MegaSynthProcessor::ArpLogEntry> log;
+            auto p = runArp (120.0, [] (MegaSynthProcessor& q)
+            {
+                setP (q, P_arpSteps, 4.0f); setP (q, P_arpVelMode, 1.0f); setP (q, P_arpVelFixed, 0.5f);
+                q.arpStore.setStep (1, ArpStore::ST_Rest, 1.0f); q.arpStore.setStep (2, ArpStore::ST_Accent, 1.0f); q.arpStore.setStep (3, ArpStore::ST_On, 0.0f);
+            }, hold ({ 60, 64 }, 6.0), 4.0, log);
+            const auto on = onsOf (log);
+            bool ok = on.size() >= 6;
+            for (auto& e : on)
+            {
+                const int step = ((int) std::lround ((e.beat - 6.0) / 0.25)) % 4;
+                ok &= step == 0 || step == 2;   // step 2 (index 1) rests, step 4 (index 3) never plays
+                if (step == 2) ok &= e.vel > 0.7f; else ok &= std::abs (e.vel - 0.5f) < 1e-3f;
+            }
+            CHECK (ok, "pattern: rest, accent and a 0% step");
+            CHECK (on.size() >= 2 && on[0].note == 60 && on[1].note == 64, "a rest doesn't skip a note");
+        }
+        // latch and each-bar restart
+        {
+            std::vector<MegaSynthProcessor::ArpLogEntry> log;
+            auto ev = hold ({ 60, 64 }, 6.0);
+            ev.push_back ({ 6.6, juce::MidiMessage::noteOff (1, 60) }); ev.push_back ({ 6.6, juce::MidiMessage::noteOff (1, 64) });
+            runArp (120.0, [] (MegaSynthProcessor& p) { setP (p, P_arpLatch, 1.0f); }, ev, 3.0, log);
+            bool late = false; for (auto& e : onsOf (log)) late |= e.beat > 8.0;
+            CHECK (late, "Latch keeps playing after the keys are let go");
+            std::vector<MegaSynthProcessor::ArpLogEntry> log2;
+            auto ev2 = ev; ev2.push_back ({ 7.5, juce::MidiMessage::noteOn (1, 72, (juce::uint8) 100) });
+            runArp (120.0, [] (MegaSynthProcessor& p) { setP (p, P_arpLatch, 1.0f); }, ev2, 4.0, log2);
+            bool only72 = true; int n72 = 0; for (auto& e : onsOf (log2)) if (e.beat > 7.6) { only72 &= e.note == 72; ++n72; }
+            CHECK (only72 && n72 > 4, "a new chord after letting go replaces the latched one");
+            std::vector<MegaSynthProcessor::ArpLogEntry> log3;
+            runArp (120.0, [] (MegaSynthProcessor& p) { setP (p, P_arpRestart, 1.0f); setP (p, P_arpRate, 4.0f); }, hold ({ 60, 64, 67, 71, 74 }, 6.0), 6.0, log3);   // 1/8T: 6 per bar over 5 notes
+            bool bar = false; for (auto& e : onsOf (log3)) if (std::abs (e.beat - 8.0) < 0.01) bar = e.note == 60;
+            CHECK (bar, "Each bar: the cycle starts again at the bar line");
+        }
+        // chord memory feeds the arpeggiator; the arp drives DNA restarts and its own mod sources
+        {
+            std::vector<MegaSynthProcessor::ArpLogEntry> log;
+            runArp (120.0, [] (MegaSynthProcessor& p) { setP (p, P_chdOn, 1.0f); setP (p, P_chdPreset, 6.0f); }, hold ({ 48 }, 6.0), 2.0, log);
+            std::vector<int> v; for (auto& e : onsOf (log)) v.push_back (e.note);
+            juce::StringArray dbg; for (int x : v) dbg.add (juce::String (x));
+            CHECK (v.size() >= 3 && v[0] == 48 && v[1] == 55 && v[2] == 60, "one key + chord memory = an arpeggiated chord (" + dbg.joinIntoString (" ") + ")");
+            std::vector<MegaSynthProcessor::ArpLogEntry> log2;
+            auto p = runArp (120.0, [] (MegaSynthProcessor& q)
+            {
+                setP (q, P_dsOn, 1.0f); setP (q, P_dsRestart, 1.0f); setP (q, P_dsRate, 0.0f);   // 1/32, restart on each note
+                for (int i = 0; i < 16; ++i) q.dnaSteps.set (i, DT_Fold, 0.5f);
+                RouteConfig c; c.on = true; c.src = MS_ArpGate; c.dst = P_filterRes; q.routes.set (0, c);
+            }, hold ({ 60, 64 }, 6.0), 0.66, log2);   // ends just after the step at beat 6
+            CHECK (p->getEngine().dnaSeqStep.load() <= 1, "arp notes restart the DNA Sequencer (" + juce::String (p->getEngine().dnaSeqStep.load()) + ")");
+            CHECK (p->getEngine().liveSrc[MS_ArpGate].load() > 0.3f, "Arp Step Gate pulses (" + juce::String (p->getEngine().liveSrc[MS_ArpGate].load()) + ")");
+        }
+        // switching off ends the arp's notes; saved with projects / patches; old ones get it off; undo
+        {
+            std::vector<MegaSynthProcessor::ArpLogEntry> log;
+            auto p = runArp (120.0, [] (MegaSynthProcessor& q) { setP (q, P_arpGate, 1.0f); }, hold ({ 60 }, 6.0), 0.5, log);
+            setP (*p, P_arpOn, 0.0f);
+            render (*p, 0.05, {});
+            CHECK (! p->getEngine().isHeld (3060), "switching the arp off ends its note");
+            setP (*p, P_arpMode, 3.0f); setP (*p, P_chdPreset, 4.0f);
+            p->arpStore.setStep (5, ArpStore::ST_Accent, 0.5f); p->arpStore.setLearned ({ 0, 5, 9 });
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (q->arpStore.toJson() == p->arpStore.toJson() && q->param (P_arpMode)->getValue() == p->param (P_arpMode)->getValue(), "arp saved with the project");
+            auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
+            CHECK (r->arpStore.toJson() == p->arpStore.toJson() && r->param (P_chdPreset)->getValue() == p->param (P_chdPreset)->getValue(), "arp and chord saved in patches");
+            setP (*p, P_arpOn, 1.0f); juce::MemoryBlock mb2; p->getStateInformation (mb2);
+            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"8\"", "stateVersion=\"7\"");
+            {   // a version 7 project has no arpeggiator data at all
+                const int a0 = x2.indexOf (" arp=\"");
+                if (a0 >= 0) { const int a1 = x2.indexOfChar (a0 + 6, '"'); x2 = x2.substring (0, a0) + x2.substring (a1 + 1); }
+            }
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x2), old);
+            auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
+            CHECK (o->param (P_arpOn)->getValue() < 0.5f && o->arpStore.getState (5) == ArpStore::ST_On, "old projects load with the arp off and a fresh pattern");
+            p->pushHistory ("x"); p->arpStore.setStep (0, ArpStore::ST_Rest, 1.0f); p->pushHistory ("step"); p->undo();
+            CHECK (p->arpStore.getState (0) == ArpStore::ST_On, "pattern edits are undoable");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ARPONLY", {}).isNotEmpty())
+    {
+        arpTests();
+        std::cout << (failures == 0 ? "ARP TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
 
@@ -2048,9 +2281,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 7"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 8"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"7\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"8\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -3144,12 +3377,13 @@ int main()
     playTests();
     hardTests();
     lfoTests();
+    arpTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {
         std::cout << "Stage 17: factory presets" << std::endl;
         const auto& list = factoryPresets();
-        CHECK (list.size() == 28, "28 factory presets");
+        CHECK (list.size() == 32, "32 factory presets");
         std::set<juce::String> names;
         for (auto& fp : list) names.insert (fp.name);
         CHECK (names.size() == list.size(), "factory preset names are unique");
@@ -3209,6 +3443,7 @@ int main()
             same &= q->dnaSteps.toString() == p->dnaSteps.toString();
             same &= q->dnaSteps.toJson() == p->dnaSteps.toJson();
             same &= q->fxRack.getOrder() == p->fxRack.getOrder();
+            same &= q->lfoShapes.toJson() == p->lfoShapes.toJson() && q->arpStore.toJson() == p->arpStore.toJson();
             for (int k = 0; k < 4; ++k) same &= q->scenes.stored[k].load() == p->scenes.stored[k].load();
             CHECK (same, juce::String (list[(size_t) i].name) + ": state round trip");
         }

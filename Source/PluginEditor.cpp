@@ -3,6 +3,7 @@
 #include "UI/DnaSeqPage.h"
 #include "UI/FxPages.h"
 #include "UI/LfoPage.h"
+#include "UI/ArpPage.h"
 #include "ParamFormat.h"
 #include "Registry.h"
 #include "UI/Overview.h"
@@ -1233,13 +1234,20 @@ void MegaSynthEditor::buildPages()
                                { P_mbcDepth, "OTT" }, { P_smpDrive, "Crunch" } })
             snd->knob (idx, n);
         auto* rpt = new StutterPad (proc);
-        snd->add (rpt, 130, 70);
+        snd->add (rpt, 108, 70);
+        auto* arpS = sec (page, "Arp / Chord", col::seq);
+        arpS->add (new ParamToggle (proc, P_arpOn, "Arp", col::seq), 64, 40);
+        arpS->add (new ParamToggle (proc, P_arpLatch, "Latch", col::seq), 74, 40);
+        arpS->choice (P_arpRate, "Rate", 100);
+        arpS->choice (P_arpMode, "Mode", 96);
+        arpS->knob (P_arpGate, "Gate", 64);
+        arpS->add (new ParamToggle (proc, P_chdOn, "Chord", col::seq), 74, 40);
         auto* help = page->own (new juce::Label ({}, "Right-click any knob for MIDI Learn, modulation and macros. "
                                                      "Pump, OTT and Crunch need the Volume Shaper, Multiband and Vintage Sampler switched on (Effects > Rack); "
                                                      "the repeat pad needs Beat Repeat."));
         help->setColour (juce::Label::textColourId, col::muted);
         help->setFont (juce::Font (juce::FontOptions (11.5f)));
-        page->onResize = [this, page, macSec, cells, scSec, pad, mu, ds, snd, help]
+        page->onResize = [this, page, macSec, cells, scSec, pad, mu, ds, snd, arpS, help]
         {
             const int g = 10, W = page->getWidth(), H = page->getHeight();
             macSec->setBounds (g, g, W - 2 * g, 160);
@@ -1250,7 +1258,8 @@ void MegaSynthEditor::buildPages()
             perfMorphBtn.setBounds (g + 20, 482, 200, 26);
             mu->setBounds (320, 180, 330, 150);
             ds->setBounds (320, 340, 330, H - 340 - g - 22);
-            snd->setBounds (660, 180, W - g - 660, H - 180 - g - 22);
+            snd->setBounds (660, 180, W - g - 660, 212);
+            arpS->setBounds (660, 400, W - g - 660, H - 400 - g - 22);
             help->setBounds (g, H - 28, W - 2 * g, 20);
         };
     }
@@ -1868,6 +1877,53 @@ void MegaSynthEditor::buildPages()
             const int g = 8, W = page->getWidth(), H = page->getHeight();
             const int h = (H - 5 * g) / 4;
             for (int k = 0; k < 4; ++k) lp[k]->setBounds (g, g + k * (h + g), W - 2 * g, h);
+        };
+    }
+
+    // ---------------------------------------------------------------- Arp / Chord
+    {
+        auto* page = addPage ("Arp / Chord");
+        auto* ch = sec (page, "Chord Memory  (one key plays a whole chord)", col::seq);
+        ch->add (new ParamToggle (proc, P_chdOn, "On", col::seq), 56, 40);
+        ch->choice (P_chdPreset, "Chord", 210);
+        ch->knob (P_chdSpread, "Spread");
+        ch->knob (P_chdInversion, "Inversion");
+        auto* learn = new juce::TextButton ("Learn");
+        learn->setTooltip ("Play a chord and let go: it becomes the Learned chord (relative to its lowest note) and Chord Memory turns on");
+        learn->onClick = [this] { proc.arpStore.learning = ! proc.arpStore.learning.load(); };
+        ch->add (learn, 80, 30);
+        auto* disp = page->own (new ChordDisplay (proc));
+        auto* ar = sec (page, "Arpeggiator  (plays the held notes, or chords, on the beat)", col::seq);
+        ar->add (new ParamToggle (proc, P_arpOn, "On", col::seq), 56, 40);
+        ar->add (new ParamToggle (proc, P_arpLatch, "Latch", col::seq), 74, 40);
+        ar->choice (P_arpMode, "Mode", 130);
+        ar->choice (P_arpRate, "Rate", 130);
+        ar->knob (P_arpOctaves, "Octaves");
+        ar->knob (P_arpSwing, "Swing");
+        ar->knob (P_arpGate, "Gate");
+        ar->knob (P_arpRepeats, "Repeats");
+        ar->newRow();
+        ar->choice (P_arpVelMode, "Velocity", 130);
+        ar->knob (P_arpVelFixed, "Fixed Vel");
+        ar->choice (P_arpRestart, "Restart", 130);
+        ar->knob (P_arpSteps, "Pattern Steps", 90);
+        auto* pat = sec (page, "Pattern  (click: On / Accent / Rest; drag: probability)", col::seq);
+        auto* grid = page->own (new ArpPatternGrid (proc));
+        auto* help = page->own (new juce::Label ({}, "Chord Memory feeds the arpeggiator. Both play through the voices, so the DNA Sequencer "
+                                                     "(restart on each note), the Volume Shaper (each note) and Beat Repeat all follow the arpeggiated notes. "
+                                                     "Arp Position and Arp Step Gate are Mod Matrix sources. The step sequencer's notes aren't arpeggiated."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.0f)));
+        help->setJustificationType (juce::Justification::topLeft);
+        page->onResize = [page, ch, disp, ar, pat, grid, help]
+        {
+            const int g = 10, W = page->getWidth();
+            ch->setBounds (g, g, W - 2 * g, 120);
+            disp->setBounds (W - g - 330, g + 40, 316, 34);
+            ar->setBounds (g, 140, W - 2 * g, 210);
+            pat->setBounds (g, 360, W - 2 * g, 170);
+            grid->setBounds (g + 12, 392, W - 2 * g - 24, 126);
+            help->setBounds (g, 540, W - 2 * g, 60);
         };
     }
 

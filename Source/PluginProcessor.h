@@ -7,6 +7,7 @@
 #include "Lab/Breeder.h"
 #include "Presets/Factory.h"
 #include "Seq/DnaGenerator.h"
+#include "Seq/Arp.h"
 
 class MegaSynthProcessor : public juce::AudioProcessor,
                            private juce::Timer,
@@ -52,6 +53,10 @@ public:
     tg::DnaSeqStore dnaSteps;                 // Sonic DNA Sequencer steps
     tg::FxRackStore fxRack;                   // effects rack order and the Volume Shaper curve
     tg::LfoShapeStore lfoShapes;              // the four LFOs' custom shapes
+    tg::ArpStore arpStore;                    // the arpeggiator's step pattern and the learned chord
+    std::atomic<int> arpStepShown { -1 };     // for the editor
+    struct ArpLogEntry { double beat; int note; bool on; float vel; };
+    std::vector<ArpLogEntry>* arpLog = nullptr;   // tests: every arpeggiator event with its beat
     // Output tap for the spectrum display: the audio thread only copies samples in; the editor reads
     static constexpr int kScopeLen = 8192;
     float scope[kScopeLen] {};
@@ -148,7 +153,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 7;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes
+    static constexpr int kStateVersion = 8;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -174,7 +179,8 @@ private:
     void setFilter2DefaultsForOldPatch();  // ... and from before Filter 2
     void setDnaDefaultsForOldPatch();      // ... and from before the DNA Sequencer update
     void setFxDefaultsForOldPatch();
-    void setLfoDefaultsForOldPatch();      // ... and from before LFO sync / custom shapes       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
+    void setLfoDefaultsForOldPatch();      // ... and from before LFO sync / custom shapes
+    void setArpDefaultsForOldPatch();      // ... and from before chord memory / the arpeggiator       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
     void seqStopHeld();
@@ -183,7 +189,7 @@ private:
     struct Snapshot
     {
         juce::ValueTree params;
-        juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps, fxRack, lfoShapes;
+        juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps, fxRack, lfoShapes, arpStore;
         int sceneEdit = 0;
         std::shared_ptr<const juce::MemoryBlock> wave[2];
         juce::String waveName[2];
@@ -207,11 +213,24 @@ private:
     tg::DnaLane dnaClip {};         // DNA Sequencer copy / paste
     bool dnaClipValid = false;
     int midiPos = 0;                // sample position of the MIDI event being handled
+    // ---- chord memory and arpeggiator (audio thread)
+    void routeNoteOn (int note, float vel, int ch);
+    void routeNoteOff (int note);
+    void startVoice (int key, int note, float vel, int ch, float accent);
+    void arpTick (double beatNow);
+    tg::Arpeggiator arp;
+    std::vector<tg::ArpEvent> arpEvents;
+    std::array<std::array<int, 8>, 128> chordTones {};
+    std::array<int, 128> chordCount {}, noteRoute {};   // noteRoute: 0 voice (key = note), 1 arpeggiator, 2 chord
+    std::vector<int> learnNotes; int learnHeld = 0;
+    bool arpWasOn = false;
+    uint32_t arpRng = 0x2545F491u;
+    double fxBeatAtBlock = 0.0;
     std::array<std::atomic<int>, 128> ccMap;   // MIDI learn: controller -> parameter (-1 = none)
     std::atomic<int> learnParam { -1 };
     std::atomic<uint32_t> midiMapVersion { 0 };
     double fxBeatStart = 0.0, fxBeatInc = 0.0, fxBeatsInternal = 0.0;   // the effects' beat clock for this block
-    uint32_t lastRackVersion = 0, lastLfoShapeVersion = 0;
+    uint32_t lastRackVersion = 0, lastLfoShapeVersion = 0, lastArpVersion = 0;
     double hostStartBeat = 0.0; bool hostWasPlayingLfo = false;
     bool dnaGateRouted() const;     // a Mod Matrix route uses the DNA step gate
     tg::GlobalModInputs modInputs;

@@ -46,6 +46,12 @@ inline juce::String formatParam (int idx, float v)
         if (id == "flpFeedback") { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
         if (id == "sttHaas") return v < 0.05f ? juce::String ("off") : fixed (v, 1) + " ms";
     }
+    // ---- chord memory / arpeggiator
+    if (id == "arpOctaves" || id == "chdSpread") { const int n = juce::roundToInt (v); return id == "chdSpread" && n == 0 ? juce::String ("closed") : juce::String (n) + (n == 1 ? " oct" : " octs"); }
+    if (id == "arpRepeats") return juce::String (juce::roundToInt (v)) + "x";
+    if (id == "arpSteps") return juce::String (juce::roundToInt (v)) + " steps";
+    if (id == "chdInversion") { const int n = juce::roundToInt (v); return n == 0 ? juce::String ("root") : (n > 0 ? "+" : "") + juce::String (n); }
+    if (id == "arpSwing" || id == "arpGate" || id == "arpVelFixed") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     // ---- LFO extras
     if (id.startsWith ("lfo") && id.endsWith ("Phase")) return juce::String (juce::roundToInt (v * 360.0f)) + juce::String::fromUTF8 ("\xc2\xb0");
     if (id.startsWith ("lfo") && id.endsWith ("Smooth")) return v < 0.005f ? juce::String ("off") : juce::String (juce::roundToInt (v * 100.0f)) + "%";

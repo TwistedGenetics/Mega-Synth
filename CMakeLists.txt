@@ -44,6 +44,7 @@ set(MEGASYNTH_SOURCES
     Source/UI/FxPages.cpp
     Source/UI/PatchBrowser.cpp
     Source/UI/LfoPage.cpp
+    Source/UI/ArpPage.cpp
     Source/Filter/Filter.cpp
     Source/Fx/RackFx.cpp
     Source/Fx/FxBus.cpp)

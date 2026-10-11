@@ -220,6 +220,8 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
         v[MS_MpePressure] = in->mpePressure[ch];
         v[MS_MpeSlide]    = in->mpeSlide[ch];
         v[MS_MpeGlide]    = in->mpeGlide[ch];
+        v[MS_ArpPos]      = in->arpPos;
+        v[MS_ArpGate]     = in->arpGate;
     }
     v[MS_RandNote] = randNote;
     v[MS_CellNoise] = inst.value (CI_Source);
@@ -1128,7 +1130,7 @@ void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const S
     if (findActive (key) != nullptr) return;   // the browser ignores a repeated note-on
 
     // polyphony: release the oldest held voices (they keep their release tail)
-    const int poly = clampv (s.i (P_polyphony), 1, 16);
+    const int poly = std::max (clampv (s.i (P_polyphony), 1, 16), std::min (polyFloor, 16));
     for (;;)
     {
         int held = 0; Voice* oldest = nullptr;
@@ -1183,6 +1185,16 @@ void Engine::allNotesOff()
 
 void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, const WaveSample* const* wavs)
 {
+    // ---- the arpeggiator runs in the processor: its Swing and Gate follow last block's global sources
+    arpMod[0] = arpMod[1] = 0.0f;
+    if (sDry.v[P_arpOn] > 0.5f && routeStore != nullptr && routeSet.n > 0 && routeSet.anyGlobal)
+    {
+        arpModSnap = sDry;
+        applyRoutes (routeSet, sDry.v, arpModSnap.v, lastSrc, arpRouteState, (float) (numSamples / sr), RF_Global);
+        arpMod[0] = arpModSnap.v[P_arpSwing] - sDry.v[P_arpSwing];
+        arpMod[1] = arpModSnap.v[P_arpGate] - sDry.v[P_arpGate];
+    }
+
     // ---- DNA Sequencer: the running step's transform moves its destinations (before Mutate)
     const Snapshot* seqBase = &sDry;
     dsValue = dsValue2 = dsGate = 0.0f;
@@ -1277,6 +1289,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         {
             globalSrc[MS_ModWheel] = modIn->wheel; globalSrc[MS_PitchBend] = modIn->bend;
             globalSrc[MS_Aftertouch] = modIn->aftertouch; globalSrc[MS_CcA] = modIn->ccA; globalSrc[MS_CcB] = modIn->ccB;
+            globalSrc[MS_ArpPos] = modIn->arpPos; globalSrc[MS_ArpGate] = modIn->arpGate;
         }
         for (int k = 0; k < 8; ++k) globalSrc[MS_Macro1 + k] = s.v[P_macro1 + k];
         globalSrc[MS_DnaSeq] = dsValue; globalSrc[MS_DnaSeq2] = dsValue2; globalSrc[MS_DnaGate] = dsGate;

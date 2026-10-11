@@ -234,6 +234,7 @@ public:
     void noteOff (int key);
     void allNotesOff();
     Voice* findActive (int key);    // held (not released) voice for key
+    bool isHeld (int key) const { for (auto& v : voices) if (v.active && ! v.released && v.key == key) return true; return false; }
     void rekey (Voice* v, int newKey) { if (v) v->key = newKey; }
 
     void render (float* L, float* R, int numSamples, const Snapshot&, const WaveSample* const* wavs);
@@ -261,6 +262,9 @@ public:
     const float* preFx (int ch) const { return preFxBuf[ch].data(); }
     int activeVoiceCount() const;
     void setLfoShapes (const LfoShapeStore* st) { lfoShapes = st; }
+    int polyFloor = 0;   // chord memory: a chord's notes always get their own voices, even in mono
+    // Arpeggiator Swing / Gate as moved by the Mod Matrix last block (offsets; 0 when unmodulated)
+    float arpModOffset (int which) const { return arpMod[juce::jlimit (0, 1, which)]; }
     std::atomic<float> lfoPlayhead[4] { -1.0f, -1.0f, -1.0f, -1.0f };   // newest voice's LFO phases (-1: no voice)
 
 private:
@@ -287,7 +291,10 @@ private:
     const DnaSeqStore* dnaStore = nullptr;
     double dsPos = 0.0;
     float dsValue = 0.0f, dsValue2 = 0.0f, dsGate = 0.0f;
-    float dsClockMod[3] { 0, 0, 0 };   // last block's Mod Matrix offsets for Swing, Start Offset, Free Rate
+    float dsClockMod[3] { 0, 0, 0 };
+    float arpMod[2] { 0, 0 };
+    Snapshot arpModSnap;
+    RouteState arpRouteState;   // last block's Mod Matrix offsets for Swing, Start Offset, Free Rate
     Snapshot dnaModSnap;            // the DNA Sequencer's own settings with any Mod Matrix routes applied
     RouteState dnaRouteState;
     float lastSrc[MS_COUNT] {};     // last block's global sources (for routes onto the DNA settings)

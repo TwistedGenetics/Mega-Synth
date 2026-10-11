@@ -125,9 +125,36 @@ Up to 32 steps, each a **transform** and an **amount**: Fold, Crush, Decimate (W
 
 The first tab shows the whole synth at a glance: the **signal flow** (each note's chain, then the bus, with the stages that are switched in lit up, cyan badges for Mod Matrix routes into each stage and red arcs for Feedback Matrix paths), the **genetic network** (every active route as a line from its source to its destination, pulsing with the source's live value), a **spectrum** of the output, and the **DNA strand**: 13 base pairs for the 13 genetic groups, glowing with how hard the current seed and Mutate amount push each one, grey when locked. All of it is drawn from values the audio already publishes; the only addition to the audio path is copying the output into the analyser's buffer.
 
+## LFOs tab
+
+Each of the four LFOs has, on top of Wave, Rate and Depth:
+
+- **Sync**: Off uses the Rate knob in Hz. Otherwise one cycle lasts a note length (1/32 to 4 bars, with dotted and triplet) at the DAW's tempo, or the synth's own tempo when the DAW is stopped. With Sync on, the Rate knob is greyed out and has no effect.
+- **Retrigger**: *Each note* (every note starts its own LFO, as before), *Free* (one LFO shared by all notes; when synced it is locked to the song position, so a 1/4 wobble always lands on the beat), *Each bar* (restarts at every bar line, following the DAW's time signature) or *Host start* (counts from where you pressed play).
+- **Phase** (where it starts), **Mode** (Loop, or One-shot: runs once from the retrigger point and holds at the end), **Smooth** (slew, up to half a second), **Fade In** (after each note starts) and **Unipolar** (0..1 instead of -1..1).
+- **Custom** shape: draw it in the editor next to the knobs. Drag points, double-click to add one, right-click a point for Linear / Smooth / Step or to delete it, shift-drag a segment to bend it. Snap to 1/4, 1/8, 1/16 or triplets. *Presets* has saw down, saw up, square, triangle, wub, stairs and random steps; *Copy* / *Paste* move a shape between LFOs. Drawing turns Custom on.
+- A live playhead shows where the newest note's LFO is.
+- Phase, Smooth and Fade In are Mod Matrix destinations. The new settings drive every LFO destination: the Mod Matrix, the assignment slots and the filters' LFO amount.
+- Patches and projects from before this version load with Sync off and Each note retrigger, and sound exactly as they did.
+
+## Arp / Chord tab
+
+- **Chord Memory**: one key plays a whole chord. Choose Minor 7, Major 7, Minor 9, Sus 2, Sus 4, Power, Rave minor (an open 1 5 b3 b7 9) or Octaves, or press **Learn**, play a chord and let go: it's stored relative to its lowest note. **Spread** moves every other note up by octaves to open the voicing; **Inversion** moves the lowest notes up (or the highest down). It works in mono too: a chord always gets a voice per note.
+- **Arpeggiator**:
+  - Modes: Up, Down, Up / Down, Down / Up, As played, Random, Chord (all together).
+  - Octaves 1-4, Rate 1/32 to 1/4 (with dotted and triplet), Swing, Gate, Latch, Velocity (as played or fixed), Repeats per note, and Restart (on the first note, or every bar).
+  - Steps land on the song's grid at the DAW's tempo. A key pressed slightly late (within 15% of a step) plays straight away.
+  - A 16-step pattern: click a step for On / Accent / Rest, drag up or down for its probability. *Pattern Steps* sets the length. A rest or a skipped step doesn't move on to the next note.
+- Chord memory feeds the arpeggiator: hold one key and the arp plays the chord.
+- Both play through the voices, so the DNA Sequencer (restart on each note), the Volume Shaper (each note) and Beat Repeat follow the arpeggiated notes.
+- **Arp Position** and **Arp Step Gate** are Mod Matrix sources. Arp Swing and Gate are Mod Matrix destinations; they follow the modulation with one audio block of delay.
+- Arp On, Latch, Rate, Mode, Gate and Chord are also on the Perform tab.
+- Only notes you play are arpeggiated, not the step sequencer's.
+- Old patches and projects load with both off.
+
 ## Factory presets
 
-The patch menu (and *Browse*) starts with 28 built-in presets, followed by your saved patches. The arrows step through both.
+The patch menu (and *Browse*) starts with 32 built-in presets, followed by your saved patches. The arrows step through both.
 Each preset is an ordinary patch - routes, macros (named), scenes, DNA steps and the effects rack included - so it can be
 edited, saved, mutated or bred. Loading one can be undone.
 
@@ -145,6 +172,10 @@ edited, saved, mutated or bred. Loading one can be undone.
   - *Pirate Radio Lead*: SP-1200 crunch.
   - *Stutter Pluck*: random Beat Repeats.
   - *Jungle Atmos*: a reverb wash resampled by the E-mu, which is moved to the end of the rack.
+  - *Rave Chord Stab*: chord memory turns one key into an open rave minor chord.
+  - *Synced Wob Bass*: a drawn wub shape on LFO 1 at 1/8, locked to the song position.
+  - *Arp Hoover*: an up/down 2-octave arpeggio with accents and rests.
+  - *Liquid Arp*: one key plays a swung minor 9 arpeggio with probability steps.
 
   The sequenced and repeating presets follow your DAW's tempo, so set it to 160-175 BPM.
 

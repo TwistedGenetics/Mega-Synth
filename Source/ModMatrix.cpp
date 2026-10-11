@@ -132,7 +132,8 @@ const NormTable& normTable()
                 t.logSpan[i] = (float) std::log ((double) m.max / m.min);
             }
             t.global[i] = m.category == Category::Fx || i == P_masterVolume || i == P_warmth || m.module == "Granular" || m.module == "Spectral" || m.module == "Feedback Matrix"   // bus stages
-                         || m.id.startsWith ("ds");   // the DNA Sequencer runs once for all voices
+                         || m.id.startsWith ("ds")    // the DNA Sequencer runs once for all voices
+                         || m.id.startsWith ("arp");  // ... and so does the arpeggiator
             t.envTime[i] = m.category == Category::Env && m.unit == "s";
             t.modulatable[i] = m.modulatable;
             t.audioRate[i] = m.audioRate;

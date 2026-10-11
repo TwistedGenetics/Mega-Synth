@@ -110,6 +110,17 @@ inline const char* const kLfoRetrigKeys[]   = { "note","free","bar","hoststart" 
 inline const char* const kLfoRetrigLabels[] = { "Each note","Free (shared)","Each bar","Host start" };
 inline const char* const kLfoModeKeys[]   = { "loop","oneshot" };
 inline const char* const kLfoModeLabels[] = { "Loop","One-shot" };
+// Chord memory and arpeggiator
+inline const char* const kChdPresetKeys[]   = { "learned","min7","maj7","min9","sus2","sus4","power","raveminor","octaves" };
+inline const char* const kChdPresetLabels[] = { "Learned chord","Minor 7","Major 7","Minor 9","Sus 2","Sus 4","Power (5th)","Rave minor (open 1 5 b3 b7 9)","Octaves" };
+inline const char* const kArpModeKeys[]   = { "up","down","updown","downup","played","random","chord" };
+inline const char* const kArpModeLabels[] = { "Up","Down","Up / Down","Down / Up","As played","Random","Chord" };
+inline const char* const kArpRateKeys[]   = { "1/32","1/16t","1/16","1/16d","1/8t","1/8","1/8d","1/4t","1/4" };
+inline const char* const kArpRateLabels[] = { "1/32","1/16 Triplet","1/16","1/16 Dotted","1/8 Triplet","1/8","1/8 Dotted","1/4 Triplet","1/4" };
+inline const char* const kArpVelKeys[]   = { "played","fixed" };
+inline const char* const kArpVelLabels[] = { "As played","Fixed" };
+inline const char* const kArpRestartKeys[]   = { "first","bar" };
+inline const char* const kArpRestartLabels[] = { "First note","Each bar" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -249,6 +260,11 @@ inline const ChoiceList kListDsMidi      { kDsMidiKeys, kDsMidiLabels, 4 };
 inline const ChoiceList kListLfoSync     = TG_LIST(kLfoSync);
 inline const ChoiceList kListLfoRetrig   = TG_LIST(kLfoRetrig);
 inline const ChoiceList kListLfoMode     = TG_LIST(kLfoMode);
+inline const ChoiceList kListChdPreset   = TG_LIST(kChdPreset);
+inline const ChoiceList kListArpMode     = TG_LIST(kArpMode);
+inline const ChoiceList kListArpRate     = TG_LIST(kArpRate);
+inline const ChoiceList kListArpVel      = TG_LIST(kArpVel);
+inline const ChoiceList kListArpRestart  = TG_LIST(kArpRestart);
 
 // LFO extras (state version 7): 8 parameters per LFO, LFO k at P_lfo1Sync + kLfoXStride * k
 constexpr int kLfoXStride = 8;
@@ -764,7 +780,23 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(lfo4Smooth, "LFO4 Smooth", 0, 1, 0, 0.01, 0) \
     B(lfo4Uni,    "LFO4 Unipolar", false) \
     F(lfo4Fade,   "LFO4 Fade In", 0, 10, 0, 0.01, 0.4) \
-    B(lfo4Custom, "LFO4 Custom Shape", false)
+    B(lfo4Custom, "LFO4 Custom Shape", false) \
+    B(chdOn,       "Chord Memory On", false) \
+    C(chdPreset,   "Chord Memory Chord", kListChdPreset, 1) \
+    F(chdSpread,   "Chord Memory Spread", 0, 3, 0, 1, 0) \
+    F(chdInversion, "Chord Memory Inversion", -3, 3, 0, 1, 0) \
+    B(arpOn,       "Arpeggiator On", false) \
+    C(arpMode,     "Arpeggiator Mode", kListArpMode, 0) \
+    F(arpOctaves,  "Arpeggiator Octaves", 1, 4, 1, 1, 0) \
+    C(arpRate,     "Arpeggiator Rate", kListArpRate, 2) \
+    F(arpSwing,    "Arpeggiator Swing", 0, 0.75, 0, 0.01, 0) \
+    F(arpGate,     "Arpeggiator Gate", 0.05, 1, 0.5, 0.01, 0) \
+    B(arpLatch,    "Arpeggiator Latch", false) \
+    C(arpVelMode,  "Arpeggiator Velocity", kListArpVel, 0) \
+    F(arpVelFixed, "Arpeggiator Fixed Velocity", 0.05, 1, 0.8, 0.01, 0) \
+    F(arpRepeats,  "Arpeggiator Repeats", 1, 4, 1, 1, 0) \
+    C(arpRestart,  "Arpeggiator Restart", kListArpRestart, 0) \
+    F(arpSteps,    "Arpeggiator Pattern Steps", 1, 16, 16, 1, 0)
 
 enum ParamIndex
 {

@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "UI/MixerConsole.h"
 #include "UI/FilterPanel.h"
 #include "UI/DnaSeqPage.h"
 #include "UI/FxPages.h"
@@ -1274,6 +1275,7 @@ void MegaSynthEditor::showInitMenu()
 MegaSynthEditor::~MegaSynthEditor()
 {
     stopTimer();
+    proc.getEngine().mixerMeters.store (false);
     setLookAndFeel (nullptr);
 }
 
@@ -1594,14 +1596,56 @@ void MegaSynthEditor::buildPages()
     // ---------------------------------------------------------------- Mixer & FM
     {
         auto* page = addPage ("Mixer");
-        auto* lv = sec (page, "Oscillator Levels", col::mixer);
-        for (auto [idx, n] : { std::pair<int, const char*> { P_osc1Gain, "Osc 1" }, { P_osc2Gain, "Osc 2" }, { P_osc3Gain, "Osc 3" }, { P_subGain, "Sub" },
-                               { P_osc4Gain, "WT 1" }, { P_wt2Gain, "WT 2" }, { P_complexGain, "Complex" }, { P_supersawGain, "SuperSaw" }, { P_masterVolume, "Master" } })
-            lv->knob (idx, n, 56);
-        auto* rt = sec (page, "FM / Ring / FX Return Levels", col::mixer);
-        for (auto [idx, n] : { std::pair<int, const char*> { P_fmAmount, "FM 2>1" }, { P_ringMix, "Ring Mix" }, { P_ringGain, "Ring Out" },
-                               { P_delayMix, "Delay" }, { P_reverbMix, "Reverb" }, { P_shimmerMix, "Shimmer" }, { P_chorusMix, "Chorus" }, { P_reverseMix, "Reverse" } })
-            rt->knob (idx, n, 62);
+        // ---- channel strips, in the order the sources are listed everywhere else
+        struct StripDef { const char* name; int level, extra; const char* extraCap; int pEnv; juce::Colour c; };
+        const StripDef strips[kMxSources] = {
+            { "Osc 1", P_osc1Gain, P_uni1Voices, "Voices", 1, col::osc },
+            { "Osc 2", P_osc2Gain, P_uni1Voices + kUniStride, "Voices", 2, col::osc },
+            { "Osc 3", P_osc3Gain, P_uni1Voices + 2 * kUniStride, "Voices", 3, col::osc },
+            { "Sub", P_subGain, -1, "", 4, col::osc },
+            { "WT 1", P_osc4Gain, P_uni1Voices + 3 * kUniStride, "Voices", 5, col::wavetable },
+            { "WT 2", P_wt2Gain, P_uni1Voices + 4 * kUniStride, "Voices", 6, col::wavetable },
+            { "Complex", P_complexGain, P_uni1Voices + 5 * kUniStride, "Voices", 7, col::complex },
+            { "SuperSaw", P_supersawGain, P_supersawVoices, "Voices", 8, col::supersaw },
+            { "Ring", P_ringGain, P_ringMix, "Ring Mix", -1, col::fm } };
+        juce::Array<ChannelStrip*> stripList;
+        for (int k = 0; k < kMxSources; ++k)
+            stripList.add (page->own (new ChannelStrip (proc, k, strips[k].name, strips[k].level, strips[k].extra, strips[k].extraCap, strips[k].pEnv, strips[k].c)));
+        mixerStrips = stripList;
+        auto* srcHelp = sec (page, "Sources", col::mixer);
+        srcHelp->addInfo ("Each source's level, pan, unison voices (or the SuperSaw's voices, or the ring modulator's wet / dry) and Mute / Solo. "
+                          "Pan is a balance: the centre leaves both sides at full level, so a centred mix sounds exactly as before. "
+                          "A muted source still works as an FM or ring modulator. PITCH ENV lights up when the pitch envelope moves that source. "
+                          "The meters show each source before the filter (only measured while this page is open).");
+
+        // ---- the engines (mutation stages), lit when they're doing something
+        auto plainOf = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+        auto* engS = sec (page, "Engines", col::fx);
+        engS->addInfo ("The mutation stages, in the order the sound goes through them. Lit when they're doing something; click one to open its page.");
+        struct EngDef { const char* name; int mix; std::function<bool()> on; const char* page; juce::Colour c; };
+        const EngDef engs[] = {
+            { "DNA Splice", P_dnaMix, [=] { return plainOf (P_dnaMix) > 1.0e-4f; }, "Note Mutation", col::wavetable },
+            { "Wave Mutation", P_wmMix, [=] { return plainOf (P_wmMix) > 1.0e-4f; }, "Note Mutation", col::fx },
+            { "Audio-Rate", -1, [=] { return plainOf (P_arFm) + plainOf (P_arAm) + plainOf (P_arRing) + plainOf (P_arShiftMix) > 1.0e-4f; }, "Note Mutation", col::mod },
+            { "Resonator", P_resMix, [=] { return plainOf (P_resMix) > 1.0e-4f; }, "Note Mutation", col::filter },
+            { "Granular", P_grMix, [=] { return plainOf (P_grMix) > 1.0e-4f; }, "Bus Mutation", col::supersaw },
+            { "Spectral", P_spMix, [=] { return plainOf (P_spOn) > 0.5f; }, "Bus Mutation", col::fx },
+            { "Feedback", -1, [=] { float a = 0; for (int i = P_fbGrGr; i <= P_fbOutDl; ++i) a += std::abs (plainOf (i)); return a > 1.0e-4f; }, "Bus Mutation", col::complex } };
+        juce::Array<EngineChip*> chipList;
+        for (auto& e : engs)
+        {
+            auto* chip = page->own (new EngineChip (proc, e.name, e.mix, e.on, e.c));
+            const juce::String target (e.page);
+            chip->onOpen = [this, target] { showPage (target); };
+            chipList.add (chip);
+        }
+        engineChips = chipList;
+
+        // ---- effect returns
+        auto* rt = sec (page, "Effect Returns", col::mixer);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_delayMix, "Delay" }, { P_reverbMix, "Reverb" }, { P_shimmerMix, "Shimmer" },
+                               { P_chorusMix, "Chorus" }, { P_reverseMix, "Reverse" } })
+            rt->knob (idx, n, 66);
         auto* pageFm = addPage ("FM & Ring");
         auto* fmS = sec (pageFm, "FM Matrix  (source -> destination, Hz of deviation)", col::fm);
         for (int i = 0; i < 4; ++i)
@@ -1611,6 +1655,7 @@ void MegaSynthEditor::buildPages()
             fmS->knob (P_fmSlot1Amt + 3 * i, "Amount");
             if (i % 2 == 1) fmS->newRow();
         }
+        fmS->knob (P_fmAmount, "FM 2>1 (legacy)", 96);
         auto* rg = sec (pageFm, "Ring Mod Matrix", col::fm);
         for (int i = 0; i < 2; ++i)
         {
@@ -1619,27 +1664,44 @@ void MegaSynthEditor::buildPages()
             rg->knob (P_ringSlot1Amt + 3 * i, "Amount");
             rg->newRow();
         }
-        // Analog Warmth (was on Filter & Env): the colour of the whole output
-        auto* w = sec (page, "Analog Warmth", col::supersaw);
-        w->knob (P_warmth, "Warmth");
-        w->knob (P_bassKeep, "Bass Keep");
-        w->knob (P_analogDrift, "Drift");
+        // Analog Warmth: the colour of the whole output
+        auto* w = sec (page, "Analog", col::supersaw);
+        w->knob (P_warmth, "Warmth", 64);
+        w->knob (P_bassKeep, "Bass Keep", 64);
+        w->knob (P_analogDrift, "Drift", 64);
         w->addInfo ("Warmth: softer, rounder filter Drive saturation, plus a gentle low lift and smoother top.  "
-                                           "Bass Keep: holds onto low end in the classic models with high-pass or band-pass stages.  "
-                                           "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
+                    "Bass Keep: holds onto low end in the classic models with high-pass or band-pass stages.  "
+                    "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
+        // the output: Master Volume (before the effects, as always), the Master Filter and the Output trim (the very end)
         auto* outS = sec (page, "Output", col::master);
-        outS->addInfo ("The end of the chain: the Master Filter (Filters tab), then the Output level. Master Volume (Oscillator Levels) "
-                       "comes before the effects, as it always has.");
-        outS->add (new ParamToggle (proc, P_mfOn, "Master Filter", col::filter), 130, 40);
+        outS->addInfo ("Master Volume comes before the effects, as it always has. At the very end: the Master Filter (Filters tab), "
+                       "then Output. The meter shows what leaves the plug-in, with the peak held.");
+        outS->knob (P_masterVolume, "Master", 64);
+        outS->add (new ParamToggle (proc, P_mfOn, "Master Filter", col::filter), 120, 40);
         outS->knob (P_mfCutoff, "Filter Cutoff", 80);
-        outS->knob (P_outGain, "Output", 72);
-        page->onResize = [page, lv, rt, w, outS]
+        outS->knob (P_outGain, "Output", 64);
+        auto* outL = page->own (new LevelMeter()); auto* outR = page->own (new LevelMeter());
+        outMeters[0] = outL; outMeters[1] = outR;
+        page->onResize = [page, stripList, srcHelp, engS, chipList, rt, w, outS, outL, outR]
         {
-            const int W = page->getWidth(), g = 10, w2 = (W - g * 3) / 2;
-            lv->setBounds (g, g, w2, 136);
-            rt->setBounds (g * 2 + w2, g, w2, 136);
-            w->setBounds (g, 156, w2, 130);
-            outS->setBounds (g * 2 + w2, 156, w2, 130);
+            const int g = 10, W = page->getWidth();
+            const int stripW = 80, stripsW = stripW * kMxSources + 2 * 4;
+            srcHelp->setBounds (g, g, stripsW + 8, 32 + 360 + 8);
+            for (int k = 0; k < stripList.size(); ++k) { stripList[k]->setBounds (g + 4 + k * stripW, g + 32, stripW - 4, 360); stripList[k]->toFront (false); }
+            w->setBounds (g, g + 410, 260, 130);
+            const int rx = g + stripsW + 8 + g, rw = W - rx - g;
+            engS->setBounds (rx, g, rw, 270);
+            const int cw = (rw - 20) / 4;
+            for (int k = 0; k < chipList.size(); ++k)
+            {
+                const int row = k / 4, c = k % 4;
+                chipList[k]->setBounds (rx + 10 + c * cw, g + 32 + row * 114, cw - 6, 110);
+                chipList[k]->toFront (false);
+            }
+            rt->setBounds (rx, g + 280, rw, 130);
+            outS->setBounds (rx, g + 420, rw - 46, 130);
+            outL->setBounds (rx + rw - 40, g + 420, 14, 130);
+            outR->setBounds (rx + rw - 22, g + 420, 14, 130);
         };
         pageFm->onResize = [pageFm, fmS, rg]
         {
@@ -2921,8 +2983,28 @@ bool MegaSynthEditor::keyPressed (const juce::KeyPress& k)
     return false;
 }
 
+void MegaSynthEditor::updateMixerView()
+{
+    auto* mixer = pageFor ("Mixer");
+    const bool showing = mixer != nullptr && mixer->isShowing();
+    proc.getEngine().mixerMeters.store (showing, std::memory_order_relaxed);   // the strip meters cost a little: only while you can see them
+    for (int c = 0; c < 2; ++c)
+    {
+        const float pk = proc.getEngine().outputPeak[(size_t) c].exchange (0.0f, std::memory_order_relaxed);
+        if (showing && outMeters[c] != nullptr) outMeters[c]->push (pk);
+    }
+    if (! showing) return;
+    for (int k = 0; k < mixerStrips.size(); ++k)
+    {
+        mixerStrips[k]->pushMeter (proc.getEngine().mixerPeak[(size_t) k].exchange (0.0f, std::memory_order_relaxed));
+        mixerStrips[k]->refresh();
+    }
+    for (auto* c : engineChips) c->refresh();
+}
+
 void MegaSynthEditor::timerCallback()
 {
+    updateMixerView();
     // remember the open tab and sub-tabs in the project
     {
         juce::StringArray subsNow;

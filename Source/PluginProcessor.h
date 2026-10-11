@@ -203,7 +203,8 @@ private:
     void setSidechainDefaultsForOldPatch(); // ... and from before the sidechain input
     void setUnisonDefaultsForOldPatch();   // ... and from before per-oscillator unison
     void setMasterDefaultsForOldPatch();   // ... and from before the Master Filter and Output trim
-    void setMidiDefaultsForOldPatch();     // ... and from before the wheel / sustain switches
+    void setMidiDefaultsForOldPatch();
+    void setMixerDefaultsForOldPatch();     // ... and from before the Mixer strips (pan / mute / solo)     // ... and from before the wheel / sustain switches
     void setEnvDefaultsForOldPatch();      // ... and from before the pitch envelope and MSEGs       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);

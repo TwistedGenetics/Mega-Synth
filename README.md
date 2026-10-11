@@ -65,10 +65,10 @@ Moved from earlier versions:
 |---|---|
 | Oscillators (one page) | Oscillators > Osc 1-3 & Sub / Wavetables / Complex & SuperSaw |
 | Unison | Oscillators > Unison |
-| Mixer: FM and Ring matrices | Oscillators > FM & Ring |
+| Mixer: FM and Ring matrices, FM 2>1 | Oscillators > FM & Ring |
 | Filter & Env: filters | Filters |
 | Filter & Env: Amp and Filter Envelopes | Envelopes > Amp & Filter |
-| Filter & Env: Analog Warmth | Mixer |
+| Filter & Env: Analog Warmth | Mixer > Analog |
 | Modulation: LFO 1-3 Wave / Rate / Depth | Modulation > LFOs (they were also there already) |
 | Modulation: Mod Envelopes 1-3 | Envelopes > Mod Envelopes |
 | Modulation: Assignments | Modulation > Assignments (with the MIDI controller switches) |
@@ -110,6 +110,20 @@ Moved from earlier versions:
 - Every filter control except the type, slope and model buttons can be a Mod Matrix destination (Cutoff and Resonance at audio rate too). Changing type, slope or model while a note plays crossfades over about 6 ms, so it doesn't click.
 - Patches and projects from before this version load as they were: the classic model at its own slope, Low Pass, fully wet, no key tracking or filter LFO.
 - **Filter 2**: a second, identical filter. **Filter 1 | Filter 2** in the panel header picks which one the controls show; **Filter 2 On** switches it in (off, it costs nothing and the sound is Filter 1 alone). **Serial** runs Filter 1 then Filter 2; **Parallel** feeds both the same sound and adds them, with **Balance** going from Filter 1 only, through both at full level in the middle, to Filter 2 only. **Stereo Split** (parallel only) puts Filter 1 on the left and Filter 2 on the right. **Copy 1 > 2** gives Filter 2 all of Filter 1's settings. Both filters share the Filter Envelope but each has its own Env Amt, LFO Amt and Key Track. Routing changes crossfade, the response curve shows both filters and the combined result, all of Filter 2's knobs and Balance are Mod Matrix destinations (cutoff and resonance at audio rate too), and the DNA Sequencer's Filter step, Cell Instability, Mutate and scenes cover both. Patches and projects from before Filter 2 load with it off.
+
+## Mixer
+
+A console, in the order the sound flows:
+
+- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw and the Ring modulator, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
+  - Pan is a balance: centred, both sides stay at full level, so a centred mix sounds exactly as it did before the strips. Panning turns the other side down.
+  - A muted source still works as an FM or ring modulator. With any Solo on, only soloed sources are heard. Mute and Solo ramp over a few milliseconds, so they don't click.
+  - Pan is a Mod Matrix destination. The strips aren't changed by Mutate.
+  - The strip meters show each source before the filter. They're only measured while the Mixer is on screen (about 0.2-1% of a core with 8 notes); the output meter costs next to nothing.
+- **Engines**: the mutation stages (DNA Splice, Wave Mutation, Audio-Rate, Resonator, Granular, Spectral, Feedback), lit when they're doing something, with their Mix where they have one. Click one to open its page.
+- **Effect Returns**: Delay, Reverb, Shimmer, Chorus, Reverse.
+- **Analog**: Warmth, Bass Keep, Drift.
+- **Output**: Master Volume (before the effects, as always), the Master Filter's On and Cutoff, the Output trim, and a stereo meter with the peak held.
 
 ## Master Filter and Output (Filters tab, and the Mixer's Output section)
 

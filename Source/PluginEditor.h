@@ -291,6 +291,7 @@ public:
 
 // A top-level tab with sub-tabs: a strip of segments at the top, one sub-page shown below it
 class Segmented;
+class ChannelStrip; class EngineChip; class LevelMeter;   // the Mixer console (UI/MixerConsole.h)
 class GroupPage : public juce::Component
 {
 public:
@@ -338,6 +339,10 @@ private:
     struct PageRef { int tab = -1, sub = -1; tgui::Page* page = nullptr; };
     std::map<juce::String, PageRef> pageIndex;
     juce::String lastUiTabs;
+    juce::Array<tgui::ChannelStrip*> mixerStrips;
+    juce::Array<tgui::EngineChip*> engineChips;
+    tgui::LevelMeter* outMeters[2] { nullptr, nullptr };
+    void updateMixerView();
     tgui::Page* pageFor (const juce::String& name) const { auto it = pageIndex.find (name); return it != pageIndex.end() ? it->second.page : nullptr; }
     void setStatus (const juce::String&);
     void shiftOctave (int delta);

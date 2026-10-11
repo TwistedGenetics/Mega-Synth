@@ -282,6 +282,8 @@ inline const ChoiceList kListMfSlope = TG_LIST(kMfSlope);
 constexpr int kLfoXStride = 8;
 // Unison (state version 10): 5 parameters per oscillator (Osc 1-3, WT 1, WT 2, Complex) at P_uni1Voices + kUniStride * k
 constexpr int kUniStride = 5, kUniOscs = 6;
+// Mixer channel strips: Pan, Mute, Solo per source (Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, Ring), from P_mxOsc1Pan
+constexpr int kMxStride = 3, kMxSources = 9;
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
@@ -866,7 +868,34 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(mfRes,       "Master Filter Resonance", 0, 1, 0.1, 0.01, 0) \
     F(mfDrive,     "Master Filter Drive", 0, 24, 0, 0.1, 0) \
     F(mfMix,       "Master Filter Mix", 0, 1, 1, 0.01, 0) \
-    F(outGain,     "Output", -24, 12, 0, 0.1, 0)
+    F(outGain,     "Output", -24, 12, 0, 0.1, 0) \
+    F(mxOsc1Pan,  "Osc 1 Pan", -1, 1, 0, 0.01, 0) \
+    B(mxOsc1Mute, "Osc 1 Mute", false) \
+    B(mxOsc1Solo, "Osc 1 Solo", false) \
+    F(mxOsc2Pan,  "Osc 2 Pan", -1, 1, 0, 0.01, 0) \
+    B(mxOsc2Mute, "Osc 2 Mute", false) \
+    B(mxOsc2Solo, "Osc 2 Solo", false) \
+    F(mxOsc3Pan,  "Osc 3 Pan", -1, 1, 0, 0.01, 0) \
+    B(mxOsc3Mute, "Osc 3 Mute", false) \
+    B(mxOsc3Solo, "Osc 3 Solo", false) \
+    F(mxSubPan,  "Sub Pan", -1, 1, 0, 0.01, 0) \
+    B(mxSubMute, "Sub Mute", false) \
+    B(mxSubSolo, "Sub Solo", false) \
+    F(mxWt1Pan,  "WT 1 Pan", -1, 1, 0, 0.01, 0) \
+    B(mxWt1Mute, "WT 1 Mute", false) \
+    B(mxWt1Solo, "WT 1 Solo", false) \
+    F(mxWt2Pan,  "WT 2 Pan", -1, 1, 0, 0.01, 0) \
+    B(mxWt2Mute, "WT 2 Mute", false) \
+    B(mxWt2Solo, "WT 2 Solo", false) \
+    F(mxComplexPan,  "Complex Pan", -1, 1, 0, 0.01, 0) \
+    B(mxComplexMute, "Complex Mute", false) \
+    B(mxComplexSolo, "Complex Solo", false) \
+    F(mxSupersawPan,  "SuperSaw Pan", -1, 1, 0, 0.01, 0) \
+    B(mxSupersawMute, "SuperSaw Mute", false) \
+    B(mxSupersawSolo, "SuperSaw Solo", false) \
+    F(mxRingPan,  "Ring Pan", -1, 1, 0, 0.01, 0) \
+    B(mxRingMute, "Ring Mute", false) \
+    B(mxRingSolo, "Ring Solo", false)
 
 enum ParamIndex
 {

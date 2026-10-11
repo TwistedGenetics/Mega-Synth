@@ -426,6 +426,33 @@ void Voice::advanceLfos (const Snapshot& s, int n)
 }
 
 // Pitch envelope: up to the amount over Attack, back to 0 over Decay (Curve > 0: a fast drop like an 808)
+void Voice::updateMixer (const Snapshot& s, bool first, float c)
+{
+    bool anySolo = false;
+    for (int k = 0; k < kMxSources; ++k) anySolo |= s.v[P_mxOsc1Solo + kMxStride * k] > 0.5f;
+    bool active = false;
+    for (int k = 0; k < kMxSources; ++k)
+    {
+        const int b = P_mxOsc1Pan + kMxStride * k;
+        float pan = clampv (s.f (b), -1.0f, 1.0f);
+        if (std::abs (pan) < 1.0e-6f) pan = 0.0f;
+        const bool muted = s.v[b + 1] > 0.5f || (anySolo && s.v[b + 2] <= 0.5f);
+        mxPan[k].target = pan; mxGate[k].target = muted ? 0.0f : 1.0f;
+        if (first) { mxPan[k].v = mxPan[k].target; mxGate[k].v = mxGate[k].target; }
+        else
+        {
+            mxPan[k].step (c); mxGate[k].step (c);
+            if (std::abs (mxPan[k].v - mxPan[k].target) < 1.0e-5f) mxPan[k].v = mxPan[k].target;
+            if (std::abs (mxGate[k].v - mxGate[k].target) < 1.0e-5f) mxGate[k].v = mxGate[k].target;
+        }
+        active |= mxPan[k].v != 0.0f || mxGate[k].v != 1.0f || mxPan[k].target != 0.0f || mxGate[k].target != 1.0f;
+        // balance: the centre leaves both sides at full level; panning turns the other side down
+        mxL[k] = mxGate[k].v * std::min (1.0f, 1.0f - mxPan[k].v);
+        mxR[k] = mxGate[k].v * std::min (1.0f, 1.0f + mxPan[k].v);
+    }
+    mxActive = active;
+}
+
 void Voice::updatePitchEnv (const Snapshot& s)
 {
     const float amt = s.f (P_pEnvAmt);
@@ -756,8 +783,9 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     }
 
     updateUnison (s);
-    // stereo processing is only needed for the SuperSaw spread, a stereo sample or spread unison
-    bool stereoWt = uniAny;
+    updateMixer (s, first, c10);
+    // stereo processing is only needed for the SuperSaw spread, a stereo sample, spread unison or a panned source
+    bool stereoWt = uniAny || mxActive;
     for (auto& w : wt) if (w.loaded && w.wav->numChannels > 1 && w.level.target > 0) stereoWt = true;
     if (! stereo && ((lSS.target > 0 && width > 0.001f) || stereoWt))
     {
@@ -1125,6 +1153,28 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 for (int k = 0; k < kUniOscs; ++k)
                     if (uniN[k] > 1) { mL += uL[k] * gk[k] * uniGs[k]; mR += uR[k] * gk[k] * uniGs[k]; }
             }
+            if (mxActive || mc.meters)
+            {
+                // the Mixer strips: each source panned and muted / soloed (and measured for the meters)
+                const float t0 = o1 * g1 * uniGc[0], t1 = o2 * g2 * uniGc[1], t2 = o3 * g3 * uniGc[2], t3 = osub * gs, t6 = cOut * uniGc[5];
+                float sL[kMxSources] = { t0, t1, t2, t3, o4L * o4g * uniGc[3], w2L * w2g * uniGc[4], t6, ssL, 0.0f };
+                float sR[kMxSources] = { t0, t1, t2, t3, o4R * o4g * uniGc[3], w2R * w2g * uniGc[4], t6, ssR, 0.0f };
+                if (uniN[0] > 1 || uniN[1] > 1 || uniN[2] > 1 || uniN[3] > 1 || uniN[4] > 1 || uniN[5] > 1)
+                {
+                    const float gk[kUniOscs] = { g1, g2, g3, o4g, w2g, 1.0f };
+                    static constexpr int strip[kUniOscs] = { 0, 1, 2, 4, 5, 6 };
+                    for (int k = 0; k < kUniOscs; ++k)
+                        if (uniN[k] > 1) { sL[strip[k]] += uL[k] * gk[k] * uniGs[k]; sR[strip[k]] += uR[k] * gk[k] * uniGs[k]; }
+                }
+                if (mc.meters)
+                    for (int k = 0; k < kMxSources - 1; ++k) mxPeak[k] = std::max (mxPeak[k], std::max (std::abs (sL[k]), std::abs (sR[k])));
+                if (mxActive)
+                {
+                    float a = 0.0f, b = 0.0f;
+                    for (int k = 0; k < kMxSources - 1; ++k) { a += sL[k] * mxL[k]; b += sR[k] * mxR[k]; }
+                    mL = a; mR = b;
+                }
+            }
             if (dnaOn)
             {
                 // the splice of A and B, blended with the oscillator mix
@@ -1190,6 +1240,8 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             }
 
             const float rmix = ! ARType::value ? ringMix.v : clampv (ringMix.v + ad[AD_Ring], 0.0f, 1.0f);
+            if (mxActive) { rL *= mxL[kMxSources - 1]; rR *= mxR[kMxSources - 1]; }
+            if (mc.meters) mxPeak[kMxSources - 1] = std::max (mxPeak[kMxSources - 1], std::max (std::abs (rL), std::abs (rR)) * rmix);
             xb[0][i] = mL * dry.v + rL * rmix;
             xb[1][i] = mR * dry.v + rR * rmix;
         }
@@ -1326,7 +1378,7 @@ void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const S
 
     const double glide = (s.f (P_porta) > 0.0005f && lastFreq > 0) ? lastFreq : freq;
     ModContext mc;
-    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh; mc.msegs = msegStore;
+    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh; mc.msegs = msegStore; mc.meters = mixerMeters.load (std::memory_order_relaxed);
     if (routeStore != nullptr)
     {
         routeSet.build (*routeStore);
@@ -1430,7 +1482,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     for (auto& v : voices) if (v.active && (! newest || v.order > newest->order)) newest = &v;
 
     ModContext mc;
-    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh; mc.msegs = msegStore;
+    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh; mc.msegs = msegStore; mc.meters = mixerMeters.load (std::memory_order_relaxed);
     if (routeStore != nullptr)
     {
         routeSet.build (*routeStore);
@@ -1444,6 +1496,15 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     for (auto& v : voices)
         if (v.active)
             v.render (L, R, numSamples, s, wavs, &v == newest ? globalMod : scratch, mc, &v == newest ? liveScratch : nullptr);
+    if (mc.meters)
+    {
+        // the Mixer's strip meters: the loudest voice's level per source, held until the editor reads it
+        float pk[kMxSources] {};
+        for (auto& v : voices)
+            for (int k = 0; k < kMxSources; ++k) { if (v.active) pk[k] = std::max (pk[k], v.mxPeak[k]); v.mxPeak[k] = 0.0f; }
+        for (int k = 0; k < kMxSources; ++k)
+            if (pk[k] > mixerPeak[k].load (std::memory_order_relaxed)) mixerPeak[k].store (pk[k], std::memory_order_relaxed);
+    }
     // the shared "Free" LFO clocks (Hz mode) and the editor's playheads
     for (int k = 0; k < 4; ++k)
     {

@@ -67,6 +67,7 @@ namespace
         if (id.startsWith ("arp")) return "Arpeggiator";
         if (id.startsWith ("uni")) return "Unison";
         if (id.startsWith ("mf")) return "Master Filter";
+        if (id.startsWith ("mx")) return "Mixer";
         if (id == "outGain") return "Output";
         if (id.startsWith ("pEnv")) return "Pitch Envelope";
         if (id.startsWith ("mseg")) return "MSEG";
@@ -182,6 +183,7 @@ namespace
             // the Master Filter and the Output trim: on the bus, after everything; not part of Mutate
             if (id.startsWith ("mf")) { m.category = Category::Filter; m.group = MutGroup::None; }
             if (id == "outGain") { m.category = Category::Performance; m.group = MutGroup::None; }
+            if (id.startsWith ("mx")) { m.category = Category::Mixer; m.group = MutGroup::None; }   // the mix stays put when mutating
             m.unit = unitFor (id);
             if (id == "mfCutoff") m.unit = "Hz";
             if (id == "mfDrive" || id == "outGain") m.unit = "dB";

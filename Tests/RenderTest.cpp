@@ -3104,6 +3104,115 @@ int main()
         return failures == 0 ? 0 : 1;
     }
 
+    // ---- Mixer channel strips: pan, mute, solo; meters
+    auto mixerTests = [&]
+    {
+        std::cout << "Mixer strips" << std::endl;
+        auto clean = [&]
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain, P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain })
+                setP (*p, i, 0.0f);
+            setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_lfoAssignAmt0, 0.0f); setP (*p, P_osc1Wave, 3.0f); setP (*p, P_osc2Wave, 3.0f);
+            return p;
+        };
+        auto rms = [&] (const juce::AudioBuffer<float>& c, int ch, double t0, double t1) { double e = 0; for (int i = (int) (t0 * sr); i < (int) (t1 * sr); ++i) e += c.getSample (ch, i) * c.getSample (ch, i); return std::sqrt (e / ((t1 - t0) * sr)); };
+        auto play = [&] (MegaSynthProcessor& p, juce::AudioBuffer<float>& c) { tg::resetVoiceRandom(); render (p, 0.6, chord (0.0, 0.55, { 57 }), &c); };
+        auto maxDiff = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, int ch = -1)
+        {
+            double d = 0; for (int c = 0; c < 2; ++c) if (ch < 0 || ch == c) for (int i = 0; i < a.getNumSamples(); ++i) d = std::max (d, (double) std::abs (a.getSample (c, i) - b.getSample (c, i))); return d;
+        };
+        juce::AudioBuffer<float> ref; { auto p = clean(); play (*p, ref); }
+        {
+            // pan: hard left leaves the left side as it was and silences the right; centre is exactly as before
+            auto p = clean(); setP (*p, P_mxOsc1Pan, -1.0f);
+            juce::AudioBuffer<float> c; play (*p, c);
+            std::cout << "  Osc 1 hard left: L " << rms (c, 0, 0.2, 0.5) << " (was " << rms (ref, 0, 0.2, 0.5) << "), R " << rms (c, 1, 0.2, 0.5) << std::endl;
+            CHECK (maxDiff (c, ref, 0) < 1e-5 && rms (c, 1, 0.2, 0.5) < 1e-4, "balance pan: hard left");
+            auto q = clean(); setP (*q, P_mxOsc1Pan, 0.5f);
+            juce::AudioBuffer<float> h; play (*q, h);
+            CHECK (std::abs (rms (h, 0, 0.2, 0.5) / rms (ref, 0, 0.2, 0.5) - 0.5) < 0.01 && std::abs (rms (h, 1, 0.2, 0.5) / rms (ref, 1, 0.2, 0.5) - 1.0) < 0.01, "half right: left at half, right untouched");
+        }
+        {
+            // mute / solo
+            auto two = [&] { auto p = clean(); setP (*p, P_osc2Gain, 0.5f); setP (*p, P_osc2Oct, 1.0f); return p; };
+            auto m = two(); setP (*m, P_mxOsc2Mute, 1.0f);
+            juce::AudioBuffer<float> cm; play (*m, cm);
+            CHECK (maxDiff (cm, ref) < 1e-5, "muting Osc 2 leaves Osc 1 alone");
+            auto so = two(); setP (*so, P_mxOsc1Solo, 1.0f);
+            juce::AudioBuffer<float> cs; play (*so, cs);
+            CHECK (maxDiff (cs, ref) < 1e-5, "soloing Osc 1 takes Osc 2 out");
+            auto both = two(); setP (*both, P_mxOsc1Solo, 1.0f); setP (*both, P_mxOsc2Solo, 1.0f);
+            juce::AudioBuffer<float> cb, c2; play (*both, cb); auto plain2 = two(); play (*plain2, c2);
+            CHECK (maxDiff (cb, c2) < 1e-5, "two solos: both heard");
+            // a muted source is still an FM modulator
+            auto fmOn = two(); setP (*fmOn, P_mxOsc2Mute, 1.0f); setP (*fmOn, P_fmSlot1Source, 1.0f); setP (*fmOn, P_fmSlot1Dest, 0.0f); setP (*fmOn, P_fmSlot1Amt, 400.0f);
+            juce::AudioBuffer<float> cf; play (*fmOn, cf);
+            CHECK (maxDiff (cf, ref) > 0.05, "a muted Osc 2 still modulates Osc 1");
+            // switching mute on mid-note ramps (no click)
+            auto r = clean();
+            juce::AudioBuffer<float> a; tg::resetVoiceRandom(); render (*r, 0.3, { { 0.0, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100) } }, &a);
+            setP (*r, P_mxOsc1Mute, 1.0f);
+            juce::AudioBuffer<float> b; render (*r, 0.1, {}, &b);
+            float step = 0; for (int i = 1; i < 2400; ++i) step = std::max (step, std::abs (b.getSample (0, i) - b.getSample (0, i - 1)));
+            const float natural = 0.3f * 2.0f * (float) kPi * 220.0f / (float) sr;   // a 220 Hz sine's own largest step at this level
+            CHECK (step < natural * 1.5f + 0.01f && rms (b, 0, 0.06, 0.1) < 1e-4, "mute ramps out and goes silent");
+            // the ring modulator's strip
+            auto rg = clean(); setP (*rg, P_ringMix, 0.6f); setP (*rg, P_ringSlot1Amt, 0.7f); setP (*rg, P_mxRingPan, 1.0f);
+            auto rg0 = clean(); setP (*rg0, P_ringMix, 0.6f); setP (*rg0, P_ringSlot1Amt, 0.7f);
+            juce::AudioBuffer<float> cr, cr0; play (*rg, cr); play (*rg0, cr0);
+            CHECK (maxDiff (cr, cr0, 1) < 1e-5 && maxDiff (cr, cr0, 0) > 1e-3, "Ring pan: right leaves the right side as it was");
+        }
+        {
+            // meters: measured only while asked for; the right source shows
+            auto p = clean();
+            render (*p, 0.2, chord (0.0, 0.19, { 57 }));
+            CHECK (p->getEngine().mixerPeak[0].load() == 0.0f, "no meters unless the Mixer is showing");
+            p->getEngine().mixerMeters = true;
+            render (*p, 0.2, chord (0.0, 0.19, { 57 }));
+            const float o1 = p->getEngine().mixerPeak[0].load(), o2 = p->getEngine().mixerPeak[1].load();
+            std::cout << "  meters: Osc 1 " << o1 << ", Osc 2 " << o2 << std::endl;
+            CHECK (o1 > 0.1f && o2 == 0.0f, "Osc 1's meter moves, Osc 2's doesn't");
+            p->getEngine().mixerMeters = false;
+            CHECK (p->getEngine().outputPeak[0].load() > 0.01f, "output meter");
+            // CPU of the meters (only while the Mixer is open)
+            auto cost = [&] (bool on)
+            {
+                double best = 1e9;
+                for (int run = 0; run < 3; ++run)
+                {
+                    auto q = make(); for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix }) setP (*q, i, 0.0f);
+                    q->getEngine().mixerMeters = on;
+                    double cpu = 0; render (*q, 2.0, chord (0.0, 1.9, { 48, 52, 55, 59, 62, 65, 69, 72 }), nullptr, &cpu);
+                    best = std::min (best, cpu / 2.0 * 100.0);
+                }
+                return best;
+            };
+            const double off = cost (false), on = cost (true);
+            std::cout << "  CPU: 8 notes " << juce::String (off, 2) << "% of a core, with the strip meters " << juce::String (on, 2) << "%" << std::endl;
+            CHECK (on - off < 1.5, "strip meters are cheap");
+        }
+        {
+            // saved; old patches centred and unmuted; pans are Mod Matrix destinations, not mutated
+            auto plain = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+            auto p = make(); setP (*p, P_mxWt1Pan, 0.4f); setP (*p, P_mxSubMute, 1.0f);
+            auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
+            CHECK (std::abs (plain (*r, P_mxWt1Pan) - 0.4f) < 0.01f && plain (*r, P_mxSubMute) > 0.5f, "strips saved in patches");
+            auto json = juce::JSON::parse (p->exportBrowserPatch());
+            if (auto* extra = json["plugin"].getDynamicObject())
+                for (int i = P_mxOsc1Pan; i < P_mxOsc1Pan + kMxStride * kMxSources; ++i) extra->removeProperty (kParamIds[i]);
+            auto o = make(); setP (*o, P_mxOsc3Pan, -0.7f); o->importBrowserPatch (juce::JSON::toString (json));
+            CHECK (std::abs (plain (*o, P_mxOsc3Pan)) < 1e-4f && plain (*o, P_mxSubMute) < 0.5f, "a patch from before the strips: centred, unmuted");
+            CHECK (tg::meta (P_mxOsc1Pan).modulatable && ! tg::meta (P_mxOsc1Mute).modulatable && tg::meta (P_mxOsc1Pan).group == MutGroup::None, "pan modulatable, not mutated");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_MIXONLY", {}).isNotEmpty())
+    {
+        mixerTests();
+        std::cout << (failures == 0 ? "MIXER TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
     // ---- the tab layout: every control kept, pages found by name (old names too), Overview links
     auto layoutTests = [&]
     {
@@ -4540,6 +4649,7 @@ int main()
     midiTests();
     layoutTests();
     masterTests();
+    mixerTests();
     hardTests();
     lfoTests();
     arpTests();

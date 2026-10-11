@@ -38,7 +38,7 @@ namespace
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
             || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni") || id.startsWith ("pEnv") || id.startsWith ("mseg")
-            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain";
+            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -745,6 +745,13 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         float* d = buffer.getWritePointer (c);
         for (int i = 0; i < n; ++i) if (! std::isfinite (d[i])) { engine.reset(); buffer.clear(); return; }
     }
+    // the output meter (the editor reads and resets it)
+    for (int c = 0; c < juce::jmin (2, buffer.getNumChannels()); ++c)
+    {
+        const float pk = buffer.getMagnitude (c, 0, n);
+        auto& m = engine.outputPeak[(size_t) c];
+        if (pk > m.load (std::memory_order_relaxed)) m.store (pk, std::memory_order_relaxed);
+    }
 
     // spectrum display tap (a copy only; the analysis happens in the editor)
     {
@@ -958,7 +965,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 9) setSidechainDefaultsForOldPatch();
     if (version < 10) setUnisonDefaultsForOldPatch();
     if (version < 11) setEnvDefaultsForOldPatch();
-    if (version < 12) setMasterDefaultsForOldPatch();
+    if (version < 12) { setMasterDefaultsForOldPatch(); setMixerDefaultsForOldPatch(); }
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1176,6 +1183,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("pEnvAmt")) setEnvDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("wheelLfo1")) setMidiDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("mfOn")) setMasterDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("mxOsc1Pan")) setMixerDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -1380,6 +1388,18 @@ void MegaSynthProcessor::setMasterDefaultsForOldPatch()
     {
         const juce::String id (kParamIds[i]);
         if (! (id.startsWith ("mf") || id == "outGain")) continue;
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setMixerDefaultsForOldPatch()
+{
+    // Before the Mixer's channel strips: every source centred, nothing muted or soloed
+    for (int i = P_mxOsc1Pan; i < P_mxOsc1Pan + kMxStride * kMxSources; ++i)
+    {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture();
         prm->setValueNotifyingHost (prm->getDefaultValue());

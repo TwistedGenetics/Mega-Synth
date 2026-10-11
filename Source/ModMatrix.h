@@ -147,12 +147,13 @@ public:
         const auto& r = routes[(size_t) i];
         const uint32_t p = r.packed.load (std::memory_order_relaxed);
         RouteConfig c;
+        // packed: on (1 bit) | source (7) | destination + 1 (12) | curve (4) | unipolar (1) | via (7)
         c.on = (p & 1u) != 0;
-        c.src = (int) ((p >> 1) & 63u);
-        c.dst = (int) ((p >> 7) & 511u) - 1;
-        c.curve = (int) ((p >> 16) & 15u);
-        c.unipolar = ((p >> 20) & 1u) != 0;
-        c.via = (int) ((p >> 22) & 63u);
+        c.src = (int) ((p >> 1) & 127u);
+        c.dst = (int) ((p >> 8) & 4095u) - 1;
+        c.curve = (int) ((p >> 20) & 15u);
+        c.unipolar = ((p >> 24) & 1u) != 0;
+        c.via = (int) ((p >> 25) & 127u);
         c.viaDepth = r.viaDepth.load (std::memory_order_relaxed);
         c.smoothMs = r.smoothMs.load (std::memory_order_relaxed);
         if (c.src >= MS_COUNT) c.src = MS_None;
@@ -164,12 +165,14 @@ public:
     void set (int i, const RouteConfig& c)
     {
         auto& r = routes[(size_t) i];
+        static_assert (P_COUNT + 1 <= 4095, "route destinations need more bits");
+        static_assert (MS_COUNT <= 127, "route sources need more bits");
         const uint32_t p = (c.on ? 1u : 0u)
-                         | ((uint32_t) juce::jlimit (0, 63, c.src) << 1)
-                         | ((uint32_t) juce::jlimit (0, 511, c.dst + 1) << 7)
-                         | ((uint32_t) juce::jlimit (0, 15, c.curve) << 16)
-                         | ((c.unipolar ? 1u : 0u) << 20)
-                         | ((uint32_t) juce::jlimit (0, 63, c.via) << 22);
+                         | ((uint32_t) juce::jlimit (0, 127, c.src) << 1)
+                         | ((uint32_t) juce::jlimit (0, 4095, c.dst + 1) << 8)
+                         | ((uint32_t) juce::jlimit (0, 15, c.curve) << 20)
+                         | ((c.unipolar ? 1u : 0u) << 24)
+                         | ((uint32_t) juce::jlimit (0, 127, c.via) << 25);
         r.viaDepth.store (juce::jlimit (0.0f, 1.0f, c.viaDepth));
         r.smoothMs.store (juce::jlimit (0.0f, 2000.0f, c.smoothMs));
         r.packed.store (p);

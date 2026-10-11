@@ -46,6 +46,11 @@ inline juce::String formatParam (int idx, float v)
         if (id == "flpFeedback") { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
         if (id == "sttHaas") return v < 0.05f ? juce::String ("off") : fixed (v, 1) + " ms";
     }
+    // ---- Master Filter and Output
+    if (id == "mfCutoff") return formatHz (v);
+    if (id == "mfRes" || id == "mfMix") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    if (id == "mfDrive") return v < 0.05f ? juce::String ("0 dB") : "+" + fixed (v, 1) + " dB";
+    if (id == "outGain") return std::abs (v) < 0.05f ? juce::String ("0 dB") : (v > 0 ? "+" : "") + fixed (v, 1) + " dB";
     // ---- pitch envelope / MSEG
     if (id == "pEnvAmt") return (v > 0.05f ? "+" : "") + fixed (v, 1) + " st";
     if (id == "pEnvA" || id == "pEnvD") return v < 1.0f ? juce::String (juce::roundToInt (v * 1000.0f)) + " ms" : fixed (v, 2) + " s";

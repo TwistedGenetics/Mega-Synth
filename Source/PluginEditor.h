@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "UI/PatchBrowser.h"
 #include "UI/MidiMonitor.h"
+#include "UI/MasterFilterView.h"
 
 namespace tgui
 {

@@ -1627,12 +1627,19 @@ void MegaSynthEditor::buildPages()
         w->addInfo ("Warmth: softer, rounder filter Drive saturation, plus a gentle low lift and smoother top.  "
                                            "Bass Keep: holds onto low end in the classic models with high-pass or band-pass stages.  "
                                            "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
-        page->onResize = [page, lv, rt, w]
+        auto* outS = sec (page, "Output", col::master);
+        outS->addInfo ("The end of the chain: the Master Filter (Filters tab), then the Output level. Master Volume (Oscillator Levels) "
+                       "comes before the effects, as it always has.");
+        outS->add (new ParamToggle (proc, P_mfOn, "Master Filter", col::filter), 130, 40);
+        outS->knob (P_mfCutoff, "Filter Cutoff", 80);
+        outS->knob (P_outGain, "Output", 72);
+        page->onResize = [page, lv, rt, w, outS]
         {
             const int W = page->getWidth(), g = 10, w2 = (W - g * 3) / 2;
             lv->setBounds (g, g, w2, 136);
             rt->setBounds (g * 2 + w2, g, w2, 136);
-            w->setBounds (g, 156, 840, 130);
+            w->setBounds (g, 156, w2, 130);
+            outS->setBounds (g * 2 + w2, 156, w2, 130);
         };
         pageFm->onResize = [pageFm, fmS, rg]
         {
@@ -1887,10 +1894,29 @@ void MegaSynthEditor::buildPages()
         auto* fe = sec (pageEnv, "Filter Envelope", col::env);
         for (auto [idx, n] : { std::pair<int, const char*> { P_fEnvA, "Attack" }, { P_fEnvD, "Decay" }, { P_fEnvS, "Sustain" }, { P_fEnvR, "Release" } })
             fe->knob (idx, n);
-        page->onResize = [page, f]
+        // the Master Filter: after every effect, before the Output trim
+        auto* mfs = sec (page, "Master Filter", col::filter);
+        mfs->addInfo ("A stereo filter at the very end: everything the synth makes, every effect included, passes through it, "
+                      "then the Output level. Off, the sound passes straight through. Cutoff, Resonance, Drive and Mix can be modulated "
+                      "by anything shared by all notes (LFOs, macros, the mod wheel, the sidechain...): routes follow the newest note's "
+                      "sources. (Master Volume, on the Mixer, stays before the effects as it always has, so older patches sound the same.)");
+        mfs->add (new ParamToggle (proc, P_mfOn, "On", col::filter), 60, 40);
+        mfs->choice (P_mfType, "Type", 120);
+        mfs->choice (P_mfSlope, "Slope", 110);
+        mfs->newRow();
+        mfs->knob (P_mfCutoff, "Cutoff");
+        mfs->knob (P_mfRes, "Resonance");
+        mfs->knob (P_mfDrive, "Drive");
+        mfs->knob (P_mfMix, "Mix");
+        mfs->knob (P_outGain, "Output");
+        auto* mfv = page->own (new MasterFilterView (proc));
+        page->onResize = [page, f, mfs, mfv]
         {
             const int g = 10, W = page->getWidth();
             f->setBounds (g, g, W - 2 * g, 262);
+            mfs->setBounds (g, 282, W - 2 * g, 170);
+            mfv->setBounds (g + 420, 282 + 34, W - 2 * g - 432, 126);
+            mfv->toFront (false);
         };
         pageEnv->onResize = [pageEnv, a, fe]
         {

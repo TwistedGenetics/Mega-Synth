@@ -1263,6 +1263,7 @@ void Engine::prepare (double sampleRate, int maxBlock)
     sr = sampleRate;
     for (auto& v : voices) v.prepare (sr);
     fxBus.prepare (sr, maxBlock);
+    masterFilter.prepare (sr); outTrim.prepare (sr);
     gran.prepare (sr);
     spec.prepare (sr);
     fbm.prepare (sr, maxBlock);
@@ -1277,6 +1278,7 @@ void Engine::reset()
 {
     for (auto& v : voices) v.kill();
     fxBus.reset();
+    masterFilter.reset();
     gran.reset();
     spec.reset();
     fbm.clear();
@@ -1527,6 +1529,13 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             fbm.end (L, R);
         }
         else fxBus.process (L, R, numSamples, *fs, globalMod);
+
+        // ---- the Master Filter (everything passes through it), then the Output trim
+        MasterFilter::Settings mf;
+        mf.on = fs->f (P_mfOn) > 0.5f; mf.type = clampv (fs->i (P_mfType), 0, 3); mf.steep = fs->i (P_mfSlope) == 1;
+        mf.cutoff = fs->f (P_mfCutoff); mf.res = fs->f (P_mfRes); mf.driveDb = fs->f (P_mfDrive); mf.mix = fs->f (P_mfMix);
+        masterFilter.process (L, R, numSamples, mf);
+        outTrim.process (L, R, numSamples, fs->f (P_outGain));
     }
 
     for (int i = 0; i < P_COUNT; ++i) liveOffset[(size_t) i].store (liveScratch[i], std::memory_order_relaxed);

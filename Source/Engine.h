@@ -9,6 +9,7 @@
 #include "Mut/AudioRate.h"
 #include "Mut/DnaSplice.h"
 #include "Mut/Resonator.h"
+#include "Fx/MasterFilter.h"
 #include "Mut/Granular.h"
 #include "Mut/Spectral.h"
 #include "Mut/FeedbackMatrix.h"
@@ -295,6 +296,8 @@ private:
     double lfoFreePh[4] {};
     Voice voices[kMaxVoices];
     FxBus fxBus;
+    MasterFilter masterFilter;   // after every effect
+    OutputTrim outTrim;          // the very last stage
     Granular gran;           // bus stages: summed voices -> granular / spectral -> effects
     Spectral spec;
     FeedbackMatrix fbm;

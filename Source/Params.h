@@ -125,6 +125,10 @@ inline const char* const kUniCurveKeys[]   = { "linear","supersaw" };
 inline const char* const kUniCurveLabels[] = { "Linear","SuperSaw (outer voices wider)" };
 inline const char* const kPEnvTargetKeys[]   = { "all","osc1","osc2","osc3","sub","wt1","wt2","complex","supersaw" };
 inline const char* const kPEnvTargetLabels[] = { "All oscillators","Osc 1","Osc 2","Osc 3","Sub","Wavetable 1","Wavetable 2","Complex","SuperSaw" };
+inline const char* const kMfTypeKeys[]   = { "lp","hp","bp","notch" };
+inline const char* const kMfTypeLabels[] = { "Low Pass","High Pass","Band Pass","Notch" };
+inline const char* const kMfSlopeKeys[]   = { "12","24" };
+inline const char* const kMfSlopeLabels[] = { "12 dB/oct","24 dB/oct" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -271,6 +275,8 @@ inline const ChoiceList kListArpVel      = TG_LIST(kArpVel);
 inline const ChoiceList kListArpRestart  = TG_LIST(kArpRestart);
 inline const ChoiceList kListUniCurve    = TG_LIST(kUniCurve);
 inline const ChoiceList kListPEnvTarget  = TG_LIST(kPEnvTarget);
+inline const ChoiceList kListMfType  = TG_LIST(kMfType);
+inline const ChoiceList kListMfSlope = TG_LIST(kMfSlope);
 
 // LFO extras (state version 7): 8 parameters per LFO, LFO k at P_lfo1Sync + kLfoXStride * k
 constexpr int kLfoXStride = 8;
@@ -852,7 +858,15 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(mseg2Sync,   "MSEG 2 Sync", false) \
     F(mseg2Scale,  "MSEG 2 Time Scale", 0.25, 4, 1, 0.01, 1) \
     B(wheelLfo1,   "Mod Wheel to LFO 1 Depth", true) \
-    B(sustainPedal, "Sustain Pedal", true)
+    B(sustainPedal, "Sustain Pedal", true) \
+    B(mfOn,        "Master Filter On", false) \
+    C(mfType,      "Master Filter Type", kListMfType, 0) \
+    C(mfSlope,     "Master Filter Slope", kListMfSlope, 0) \
+    F(mfCutoff,    "Master Filter Cutoff", 20, 20000, 1000, 0.1, 1000) \
+    F(mfRes,       "Master Filter Resonance", 0, 1, 0.1, 0.01, 0) \
+    F(mfDrive,     "Master Filter Drive", 0, 24, 0, 0.1, 0) \
+    F(mfMix,       "Master Filter Mix", 0, 1, 1, 0.01, 0) \
+    F(outGain,     "Output", -24, 12, 0, 0.1, 0)
 
 enum ParamIndex
 {

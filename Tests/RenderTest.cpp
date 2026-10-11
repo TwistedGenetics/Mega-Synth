@@ -1492,7 +1492,7 @@ int main()
             r->importBrowserPatch (juce::JSON::toString (obj));
             CHECK (r->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f && r->param (P_lfo1Custom + 2 * X)->getValue() < 0.5f, "old patches load with the original LFOs");
             // an old project: state version 6
-            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"11\"", "stateVersion=\"6\"");
+            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"6\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (xml), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (o->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f, "old projects load with the original LFOs");
@@ -1713,7 +1713,7 @@ int main()
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->arpStore.toJson() == p->arpStore.toJson() && r->param (P_chdPreset)->getValue() == p->param (P_chdPreset)->getValue(), "arp and chord saved in patches");
             setP (*p, P_arpOn, 1.0f); juce::MemoryBlock mb2; p->getStateInformation (mb2);
-            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"11\"", "stateVersion=\"7\"");
+            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"12\"", "stateVersion=\"7\"");
             {   // a version 7 project has no arpeggiator data at all
                 const int a0 = x2.indexOf (" arp=\"");
                 if (a0 >= 0) { const int a1 = x2.indexOfChar (a0 + 6, '"'); x2 = x2.substring (0, a0) + x2.substring (a1 + 1); }
@@ -1836,7 +1836,7 @@ int main()
             CHECK (p->getEngine().liveSrc[MS_Sidechain].load() > 0.3f, "Sidechain Envelope mod source");
             setP (*p, P_vshSidechain, 1.0f); setP (*p, P_schThresh, -10.0f);
             juce::MemoryBlock mb; p->getStateInformation (mb);
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"11\"", "stateVersion=\"8\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"8\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (q->param (P_vshSidechain)->getValue() < 0.5f && std::abs (q->param (P_schThresh)->convertFrom0to1 (q->param (P_schThresh)->getValue()) + 24.0f) < 0.1f, "old projects: sidechain off");
@@ -1956,7 +1956,7 @@ int main()
         {
             auto p = make(); setP (*p, P_uni2Voices, 6.0f);
             juce::MemoryBlock mb; p->getStateInformation (mb);
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"11\"", "stateVersion=\"9\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"9\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (juce::roundToInt (q->param (P_uni2Voices)->convertFrom0to1 (q->param (P_uni2Voices)->getValue())) == 1, "old projects: no unison");
@@ -2091,7 +2091,7 @@ int main()
             CHECK (q->msegs.toJson() == p->msegs.toJson() && std::abs (q->param (P_pEnvAmt)->convertFrom0to1 (q->param (P_pEnvAmt)->getValue()) - 7.0f) < 0.01f, "pitch env and MSEGs saved in the project");
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->msegs.toJson() == p->msegs.toJson(), "MSEGs saved in patches");
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"11\"", "stateVersion=\"10\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"10\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (std::abs (o->param (P_pEnvAmt)->convertFrom0to1 (o->param (P_pEnvAmt)->getValue())) < 1e-4f, "old projects: no pitch envelope");
@@ -2270,6 +2270,7 @@ int main()
         // a snapshot of every tab and sub-tab (renders/page_<name>.png)
         auto p = make();
         setP (*p, P_arpOn, 1.0f); setP (*p, P_pEnvAmt, 12.0f);
+        setP (*p, P_mfOn, 1.0f); setP (*p, P_mfCutoff, 2500.0f); setP (*p, P_mfRes, 0.6f); setP (*p, P_mfSlope, 1.0f);
         p->msegs.setPreset (1, 2);
         render (*p, 0.3, chord (0.0, 1.0, { 48 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
@@ -2944,6 +2945,165 @@ int main()
         }
         initFile.deleteFile();
     };
+    // ---- Master Filter and Output trim (state version 12)
+    auto masterTests = [&]
+    {
+        std::cout << "Master Filter / Output" << std::endl;
+        // the filter on its own: gain of a steady sine after it settles
+        auto gainDb = [&] (tg::MasterFilter::Settings st, double f)
+        {
+            tg::MasterFilter mf; mf.prepare (sr);
+            const int n = (int) (0.5 * sr);
+            std::vector<float> l ((size_t) n), r ((size_t) n);
+            for (int i = 0; i < n; ++i) l[(size_t) i] = r[(size_t) i] = (float) (0.25 * std::sin (2.0 * kPi * f * i / sr));
+            for (int pos = 0; pos < n; pos += 256) mf.process (l.data() + pos, r.data() + pos, std::min (256, n - pos), st);
+            double ei = 0, eo = 0;
+            for (int i = n / 2; i < n; ++i) { const double x = 0.25 * std::sin (2.0 * kPi * f * i / sr); ei += x * x; eo += (double) l[(size_t) i] * l[(size_t) i]; }
+            return 10.0 * std::log10 (eo / ei);
+        };
+        tg::MasterFilter::Settings st; st.on = true; st.cutoff = 1000.0f; st.res = 0.0f;
+        st.type = tg::MasterFilter::LP;
+        const double lpPass = gainDb (st, 100.0), lpStop = gainDb (st, 10000.0), lpAt = gainDb (st, 1000.0);
+        st.steep = true; const double lp24 = gainDb (st, 10000.0); st.steep = false;
+        std::cout << "  LP 1 kHz: 100 Hz " << juce::String (lpPass, 1) << " dB, 1 kHz " << juce::String (lpAt, 1) << " dB, 10 kHz "
+                  << juce::String (lpStop, 1) << " dB (12) / " << juce::String (lp24, 1) << " dB (24)" << std::endl;
+        CHECK (std::abs (lpPass) < 0.3 && std::abs (lpAt + 3.0) < 0.7 && lpStop < -36.0 && lpStop > -44.0 && lp24 < -72.0, "low pass: 12 and 24 dB/oct");
+        st.type = tg::MasterFilter::HP;
+        const double hpPass = gainDb (st, 10000.0), hpStop = gainDb (st, 100.0);
+        CHECK (std::abs (hpPass) < 0.3 && hpStop < -36.0, "high pass");
+        st.type = tg::MasterFilter::BP;
+        const double bpC = gainDb (st, 1000.0), bpOff = gainDb (st, 100.0);
+        CHECK (std::abs (bpC) < 0.5 && bpOff < -15.0, "band pass: unity at the centre");
+        st.type = tg::MasterFilter::Notch;
+        const double nC = gainDb (st, 1000.0), nOff = gainDb (st, 100.0);
+        CHECK (nC < -30.0 && std::abs (nOff) < 0.5, "notch");
+        st.type = tg::MasterFilter::LP; st.res = 1.0f;
+        CHECK (gainDb (st, 1000.0) > 15.0, "resonance peaks at the cutoff");
+        st.res = 0.0f;
+        // the drawn curve matches what the audio does
+        for (auto [t, f] : { std::pair<int, double> { 0, 3000.0 }, { 1, 300.0 }, { 2, 2000.0 } })
+        {
+            st.type = t;
+            CHECK (std::abs (tg::MasterFilter::magnitudeDb ((float) f, st, sr) - gainDb (st, f)) < 0.5, "curve matches the sound (type " + juce::String (t) + ")");
+        }
+        st.type = tg::MasterFilter::LP;
+        // Mix 0: the dry signal exactly; Off: untouched
+        {
+            tg::MasterFilter mf; mf.prepare (sr);
+            auto s0 = st; s0.mix = 0.0f; s0.cutoff = 200.0f;
+            std::vector<float> l (2048), r (2048), l0, r0;
+            for (int i = 0; i < 2048; ++i) l[(size_t) i] = r[(size_t) i] = (float) std::sin (0.01 * i * i);
+            l0 = l; r0 = r;
+            mf.process (l.data(), r.data(), 2048, s0);
+            CHECK (l == l0 && r == r0, "Mix 0: bit for bit the dry signal");
+            tg::MasterFilter::Settings off;
+            mf.process (l.data(), r.data(), 2048, off);
+            CHECK (l == l0, "off: untouched");
+        }
+        // a fast sweep doesn't click or blow up
+        {
+            tg::MasterFilter mf; mf.prepare (sr);
+            auto sw = st; sw.res = 0.9f; sw.steep = true;
+            std::vector<float> l (512), r (512);
+            float worst = 0, prev = 0; bool finite = true;
+            for (int b = 0; b < 400; ++b)
+            {
+                sw.cutoff = (b / 10) % 2 == 0 ? 80.0f : 12000.0f;   // jumps every 10 blocks
+                for (int i = 0; i < 512; ++i) l[(size_t) i] = r[(size_t) i] = (float) (0.3 * std::sin (2.0 * kPi * 220.0 * (b * 512 + i) / sr));
+                mf.process (l.data(), r.data(), 512, sw);
+                for (float v : l) { finite &= std::isfinite (v); worst = std::max (worst, std::abs (v - prev)); prev = v; }
+            }
+            CHECK (finite && worst < 0.5f, "cutoff jumps are smoothed (largest step " + juce::String (worst, 3) + ")");
+        }
+        // Output trim
+        {
+            tg::OutputTrim t; t.prepare (sr);
+            std::vector<float> l (4800, 0.5f), r (4800, 0.5f);
+            t.process (l.data(), r.data(), 4800, 0.0f);
+            CHECK (l[4799] == 0.5f, "Output at 0 dB: untouched");
+            tg::OutputTrim t2; t2.prepare (sr);
+            for (int k = 0; k < 4; ++k) { std::fill (l.begin(), l.end(), 0.5f); std::fill (r.begin(), r.end(), 0.5f); t2.process (l.data(), r.data(), 4800, -6.0f); }
+            CHECK (std::abs (l[4799] - 0.5f * std::pow (10.0f, -6.0f / 20.0f)) < 1e-4f, "Output trim -6 dB");
+        }
+        // every parameter can be a route destination (the route store once held only the first 511)
+        {
+            tg::RouteStore rs; int bad = -1;
+            for (int i = 0; i < P_COUNT && bad < 0; ++i)
+                for (int src : { 1, MS_COUNT - 1 })
+                {
+                    RouteConfig c; c.on = true; c.src = src; c.dst = i; c.via = MS_COUNT - 1; c.curve = 3; c.unipolar = true;
+                    rs.set (0, c); const auto g = rs.get (0);
+                    if (g.dst != i || g.src != src || g.via != MS_COUNT - 1 || g.curve != 3 || ! g.unipolar || ! g.on) bad = i;
+                }
+            CHECK (bad < 0, "every parameter round-trips as a route destination" + (bad >= 0 ? juce::String (": ") + kParamIds[bad] : juce::String()));
+            auto q = make(); const int slot = q->addRoute (MS_Macro1, P_pEnvAmt, 0.5f);
+            CHECK (q->routes.get (slot).dst == P_pEnvAmt, "a route to the pitch envelope lands on the pitch envelope");
+        }
+        // in the synth: after everything, on every voice together; modulated by a macro; saved
+        {
+            auto run = [&] (std::function<void (MegaSynthProcessor&)> setup)
+            {
+                auto p = make();
+                for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix }) setP (*p, i, 0.0f);
+                setup (*p);
+                juce::AudioBuffer<float> c; tg::resetVoiceRandom(); render (*p, 0.6, chord (0.0, 0.5, { 48, 55, 64 }), &c);
+                double hf = 0, e = 0; float prev = 0;
+                for (int i = (int) (0.2 * sr); i < (int) (0.45 * sr); ++i) { const float x = c.getSample (0, i); hf += (x - prev) * (x - prev); e += x * x; prev = x; }
+                return std::make_pair (hf / std::max (1e-12, e), std::sqrt (e / (0.25 * sr)));
+            };
+            const auto plainR = run ([] (MegaSynthProcessor&) {});
+            const auto lp = run ([&] (MegaSynthProcessor& q) { setP (q, P_mfOn, 1.0f); setP (q, P_mfCutoff, 300.0f); });
+            const auto lpMacro = run ([&] (MegaSynthProcessor& q) { setP (q, P_mfOn, 1.0f); setP (q, P_mfCutoff, 300.0f); q.addRoute (MS_Macro1, P_mfCutoff, 0.8f); setP (q, P_macro1, 1.0f); });
+            const auto quiet = run ([&] (MegaSynthProcessor& q) { setP (q, P_outGain, -12.0f); });
+            std::cout << "  in the synth: brightness " << plainR.first << " -> " << lp.first << " (LP 300 Hz) -> " << lpMacro.first << " (macro opens it)" << std::endl;
+            CHECK (lp.first < plainR.first * 0.2 && lpMacro.first > lp.first * 3.0, "the Master Filter darkens the whole synth; a macro route moves it");
+            CHECK (std::abs (20.0 * std::log10 (quiet.second / plainR.second) + 12.0) < 0.5, "Output -12 dB");
+            CHECK (tg::meta (P_mfCutoff).modulatable && tg::meta (P_outGain).modulatable && tg::meta (P_mfCutoff).group == MutGroup::None, "Mod Matrix destinations, not mutated");
+            auto p = make(); setP (*p, P_mfOn, 1.0f); setP (*p, P_mfType, 1.0f); setP (*p, P_mfCutoff, 640.0f); setP (*p, P_outGain, -3.0f);
+            auto plain = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+            auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
+            CHECK (plain (*r, P_mfOn) > 0.5f && std::abs (plain (*r, P_mfCutoff) - 640.0f) < 1.0f && std::abs (plain (*r, P_outGain) + 3.0f) < 0.05f, "saved in patches");
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (plain (*q, P_mfOn) > 0.5f && std::abs (plain (*q, P_mfCutoff) - 640.0f) < 1.0f, "saved in projects");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"12\"", "stateVersion=\"11\"");
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
+            auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
+            CHECK (plain (*o, P_mfOn) < 0.5f && std::abs (plain (*o, P_outGain)) < 1e-4f, "old projects: no Master Filter, Output 0 dB");
+            // an old patch file loaded into an Init instance gets the old wheel behaviour and no Master Filter
+            auto patchJson = juce::JSON::parse (p->exportBrowserPatch());
+            if (auto* extra = patchJson["plugin"].getDynamicObject())
+                for (auto id : { "mfOn", "mfType", "mfSlope", "mfCutoff", "mfRes", "mfDrive", "mfMix", "outGain", "wheelLfo1", "sustainPedal" }) extra->removeProperty (id);
+            auto n2 = make(); setP (*n2, P_wheelLfo1, 0.0f); setP (*n2, P_mfOn, 1.0f);
+            n2->importBrowserPatch (juce::JSON::toString (patchJson));
+            CHECK (plain (*n2, P_wheelLfo1) > 0.5f && plain (*n2, P_mfOn) < 0.5f, "old patches: wheel to LFO 1 on, Master Filter off");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_MFCPU", {}).isNotEmpty())
+    {
+        auto cost = [&] (bool on)
+        {
+            double best = 1e9;
+            for (int run = 0; run < 5; ++run)
+            {
+                auto p = make(); for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix }) setP (*p, i, 0.0f);
+                if (on) { setP (*p, P_mfOn, 1.0f); setP (*p, P_mfSlope, 1.0f); setP (*p, P_mfDrive, 6.0f); setP (*p, P_outGain, -3.0f); }
+                double cpu = 0; render (*p, 3.0, chord (0.0, 2.9, { 48, 55, 60, 63, 67, 70 }), nullptr, &cpu);
+                best = std::min (best, cpu / 3.0 * 100.0);
+            }
+            return best;
+        };
+        const double off = cost (false), on = cost (true);
+        std::cout << "MFCPU off " << off << "% on (24 dB + drive + output) " << on << "% -> " << (on - off) << "% of a core" << std::endl;
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_MASTERONLY", {}).isNotEmpty())
+    {
+        masterTests();
+        std::cout << (failures == 0 ? "MASTER TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
     // ---- the tab layout: every control kept, pages found by name (old names too), Overview links
     auto layoutTests = [&]
     {
@@ -3283,9 +3443,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 11"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 12"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"11\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"12\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -4379,6 +4539,7 @@ int main()
     playTests();
     midiTests();
     layoutTests();
+    masterTests();
     hardTests();
     lfoTests();
     arpTests();

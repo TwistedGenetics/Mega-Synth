@@ -111,6 +111,15 @@ Moved from earlier versions:
 - Patches and projects from before this version load as they were: the classic model at its own slope, Low Pass, fully wet, no key tracking or filter LFO.
 - **Filter 2**: a second, identical filter. **Filter 1 | Filter 2** in the panel header picks which one the controls show; **Filter 2 On** switches it in (off, it costs nothing and the sound is Filter 1 alone). **Serial** runs Filter 1 then Filter 2; **Parallel** feeds both the same sound and adds them, with **Balance** going from Filter 1 only, through both at full level in the middle, to Filter 2 only. **Stereo Split** (parallel only) puts Filter 1 on the left and Filter 2 on the right. **Copy 1 > 2** gives Filter 2 all of Filter 1's settings. Both filters share the Filter Envelope but each has its own Env Amt, LFO Amt and Key Track. Routing changes crossfade, the response curve shows both filters and the combined result, all of Filter 2's knobs and Balance are Mod Matrix destinations (cutoff and resonance at audio rate too), and the DNA Sequencer's Filter step, Cell Instability, Mutate and scenes cover both. Patches and projects from before Filter 2 load with it off.
 
+## Master Filter and Output (Filters tab, and the Mixer's Output section)
+
+- A stereo filter at the very end of the chain: everything the synth makes, every effect included, passes through it, then the **Output** level.
+- **On** (off by default: the sound passes straight through, untouched), **Type** (Low Pass, High Pass, Band Pass, Notch), **Slope** (12 or 24 dB/oct), **Cutoff**, **Resonance**, **Drive** and **Mix** (dry / wet). Its response is drawn next to the controls.
+- Cutoff, Resonance, Drive, Mix and Output are Mod Matrix destinations. Because the filter comes after all the notes are mixed, routes onto it follow the newest note's sources, or the mod wheel, macros, aftertouch, CCs and the sidechain when no note is held.
+- **Output** (-24 to +12 dB, 0 dB = untouched) is the last thing before the plug-in's output. **Master Volume** stays where it has always been, before the effects, so older patches with drive or clipping effects sound exactly the same.
+- Not part of Mutate or the scenes' Output level; saved in patches, projects, undo and A/B. Older patches load with the filter off and Output at 0 dB.
+- CPU: nothing when off; about 0.7% of one core at 24 dB with Drive on.
+
 ## Note Mutation (FX & Mutation > Note Mutation)
 
 Three per-note modules sit between the oscillator mix and the filter, in this order. Each has its own mix, and at 0 it's switched out completely.

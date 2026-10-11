@@ -66,6 +66,8 @@ namespace
         if (id.startsWith ("ds")) return "DNA Sequencer";
         if (id.startsWith ("arp")) return "Arpeggiator";
         if (id.startsWith ("uni")) return "Unison";
+        if (id.startsWith ("mf")) return "Master Filter";
+        if (id == "outGain") return "Output";
         if (id.startsWith ("pEnv")) return "Pitch Envelope";
         if (id.startsWith ("mseg")) return "MSEG";
         if (id.startsWith ("chd")) return "Chord Memory";
@@ -177,7 +179,12 @@ namespace
                 { m.category = Category::Seq; m.group = MutGroup::Rhythm; }
 
             m.module = moduleFor (id, m.category);
+            // the Master Filter and the Output trim: on the bus, after everything; not part of Mutate
+            if (id.startsWith ("mf")) { m.category = Category::Filter; m.group = MutGroup::None; }
+            if (id == "outGain") { m.category = Category::Performance; m.group = MutGroup::None; }
             m.unit = unitFor (id);
+            if (id == "mfCutoff") m.unit = "Hz";
+            if (id == "mfDrive" || id == "outGain") m.unit = "dB";
             m.path = juce::String (categoryName (m.category)).toLowerCase() + "." + id;
 
             // ---- modulation capability: continuous sound parameters yes; administrative ones no

@@ -46,6 +46,12 @@ inline juce::String formatParam (int idx, float v)
         if (id == "flpFeedback") { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
         if (id == "sttHaas") return v < 0.05f ? juce::String ("off") : fixed (v, 1) + " ms";
     }
+    // ---- pitch envelope / MSEG
+    if (id == "pEnvAmt") return (v > 0.05f ? "+" : "") + fixed (v, 1) + " st";
+    if (id == "pEnvA" || id == "pEnvD") return v < 1.0f ? juce::String (juce::roundToInt (v * 1000.0f)) + " ms" : fixed (v, 2) + " s";
+    if (id == "pEnvCurve") return std::abs (v) < 0.01f ? juce::String ("straight") : (v > 0 ? "fast drop " : "slow drop ") + juce::String (juce::roundToInt (std::abs (v) * 100.0f)) + "%";
+    if (id == "pEnvVel") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    if (id.startsWith ("mseg") && id.endsWith ("Scale")) return "x" + fixed (v, 2);
     // ---- unison
     if (id.startsWith ("uni") && id.endsWith ("Voices")) { const int n = juce::roundToInt (v); return n <= 1 ? juce::String ("off") : juce::String (n) + " voices"; }
     if (id.startsWith ("uni") && id.endsWith ("Detune")) return fixed (v, 1) + " cents";
@@ -133,6 +139,7 @@ inline float parseParam (int idx, const juce::String& text)
     if (text.containsIgnoreCase ("khz") || text.trim().endsWithIgnoreCase ("k")) return v * 1000.0f;
     if (text.contains ("%")) v /= 100.0f;
     else if (id.startsWith ("sch")) {}   // sidechain attack / release are in ms already
+    else if ((id == "pEnvA" || id == "pEnvD") && text.contains ("ms")) v /= 1000.0f;
     else if (text.contains ("ms") || ((id == "chorusDepth" || id == "tapeFlutter" || id == "reversePitch") && v > 0.5f)) v /= 1000.0f;
     return v;
 }

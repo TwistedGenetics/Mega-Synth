@@ -327,3 +327,201 @@ void LfoPanel::resized()
 }
 
 } // namespace tgui
+
+namespace tgui
+{
+MsegEditor::MsegEditor (MegaSynthProcessor& p, int e) : proc (p), env (e)
+{
+    shape = proc.msegs.get (env);
+    scaleT = std::max (0.5f, totalTime() * 1.25f);
+    setTooltip ("Drag points (left-right: stage time, up-down: level). Double-click to add a stage, right-click a point for "
+                "sustain, loop or delete, shift-drag a stage to curve it.");
+    startTimerHz (30);
+}
+
+float MsegEditor::totalTime() const { float t = 0; for (int i = 0; i < shape.n; ++i) t += shape.st[(size_t) i].time; return t; }
+
+juce::Point<float> MsegEditor::pt (int i) const
+{
+    auto a = getLocalBounds().toFloat().reduced (10.0f, 12.0f);
+    float t = 0; float lv = shape.start;
+    for (int k = 0; k <= i && k < shape.n; ++k) { t += shape.st[(size_t) k].time; lv = shape.st[(size_t) k].level; }
+    return { a.getX() + a.getWidth() * t / scaleT, a.getBottom() - a.getHeight() * lv };
+}
+
+int MsegEditor::pointAt (juce::Point<float> m) const
+{
+    for (int i = shape.n - 1; i >= -1; --i) if (pt (i).getDistanceFrom (m) < 9.0f) return i;
+    return -2;
+}
+
+void MsegEditor::commit()
+{
+    proc.msegs.set (env, shape);
+    lastVersion = proc.msegs.getVersion();
+    repaint();
+}
+
+void MsegEditor::timerCallback()
+{
+    if (! isShowing()) return;
+    bool dirty = false;
+    if (proc.msegs.getVersion() != lastVersion && drag < -1 && bend < 0)
+    {
+        lastVersion = proc.msegs.getVersion(); shape = proc.msegs.get (env);
+        scaleT = std::max (0.5f, totalTime() * 1.25f); dirty = true;
+    }
+    const float ph = proc.getEngine().msegPlayhead[env].load();
+    if (std::abs (ph - lastPlay) > 1.0e-4f) { lastPlay = ph; dirty = true; }
+    if (dirty) repaint();
+}
+
+void MsegEditor::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (col::panel2);
+    g.fillRoundedRectangle (r, 8.0f);
+    auto a = r.reduced (10.0f, 12.0f);
+    if (shape.loopStart >= 0)
+    {
+        const float x0 = pt (shape.loopStart - 1).x, x1 = pt (shape.loopEnd).x;
+        g.setColour (col::env.withAlpha (0.12f));
+        g.fillRect (x0, a.getY(), x1 - x0, a.getHeight());
+        g.setColour (col::env);
+        g.setFont (juce::Font (juce::FontOptions (10.0f)));
+        g.drawText ("loop", (int) x0 + 3, (int) a.getY(), 40, 12, juce::Justification::left);
+    }
+    juce::Path path;
+    path.startNewSubPath (pt (-1));
+    float from = shape.start;
+    for (int i = 0; i < shape.n; ++i)
+    {
+        const auto p0 = pt (i - 1), p1 = pt (i);
+        const auto& st = shape.st[(size_t) i];
+        for (int k = 1; k <= 24; ++k)
+        {
+            const float u = k / 24.0f;
+            const float lv = from + (st.level - from) * tg::MsegStore::curveAt (u, st.curve);
+            path.lineTo (p0.x + (p1.x - p0.x) * u, a.getBottom() - a.getHeight() * lv);
+        }
+        from = st.level;
+    }
+    g.setColour (col::env);
+    g.strokePath (path, juce::PathStrokeType (2.0f));
+    for (int i = -1; i < shape.n; ++i)
+    {
+        const auto p = pt (i);
+        const bool sus = i >= 0 && i == shape.sustain;
+        g.setColour (sus ? col::fx : col::text);
+        g.fillEllipse (p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f);
+        if (sus) { g.setFont (juce::Font (juce::FontOptions (10.0f))); g.drawText ("sustain", (int) p.x - 20, (int) p.y - 18, 40, 12, juce::Justification::centred); }
+    }
+    const float ph = proc.getEngine().msegPlayhead[env].load();
+    if (ph >= 0.0f)
+    {
+        const float x = a.getX() + a.getWidth() * std::min (ph, scaleT) / scaleT;
+        g.setColour (col::text.withAlpha (0.5f));
+        g.drawVerticalLine ((int) x, a.getY(), a.getBottom());
+        const float lv = proc.getEngine().msegLevelShown[env].load();
+        g.fillEllipse (x - 3.5f, a.getBottom() - a.getHeight() * lv - 3.5f, 7.0f, 7.0f);
+    }
+    g.setColour (col::muted);
+    g.setFont (juce::Font (juce::FontOptions (10.5f)));
+    const bool sync = proc.param (P_mseg1Sync + 2 * env)->getValue() > 0.5f;
+    g.drawText (juce::String (totalTime(), 2) + (sync ? " beats" : " s"), r.reduced (8.0f, 2.0f), juce::Justification::bottomRight);
+}
+
+void MsegEditor::mouseDown (const juce::MouseEvent& e)
+{
+    const int i = pointAt (e.position);
+    if (e.mods.isPopupMenu())
+    {
+        if (i < 0) return;
+        juce::PopupMenu m;
+        m.addItem (1, "Sustain here", true, shape.sustain == i);
+        m.addItem (2, "Loop starts at this stage", true, shape.loopStart == i);
+        m.addItem (3, "Loop ends at this stage", true, shape.loopEnd == i);
+        m.addItem (4, "No loop", shape.loopStart >= 0);
+        m.addItem (5, "No sustain", shape.sustain >= 0);
+        m.addItem (6, "Straight (no curve)", shape.st[(size_t) i].curve != 0.0f);
+        m.addSeparator();
+        m.addItem (7, "Delete stage", shape.n > 1);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ e.getScreenX(), e.getScreenY(), 1, 1 }),
+                         [safe = juce::Component::SafePointer<MsegEditor> (this), i] (int r)
+                         {
+                             if (safe == nullptr || r <= 0) return;
+                             auto& s = safe->shape;
+                             switch (r)
+                             {
+                                 case 1: s.sustain = (s.sustain == i ? -1 : i); s.loopStart = s.loopEnd = -1; break;
+                                 case 2: s.loopStart = i; if (s.loopEnd < i) s.loopEnd = s.n - 1; s.sustain = -1; break;
+                                 case 3: s.loopEnd = i; if (s.loopStart < 0 || s.loopStart > i) s.loopStart = 0; s.sustain = -1; break;
+                                 case 4: s.loopStart = s.loopEnd = -1; break;
+                                 case 5: s.sustain = -1; break;
+                                 case 6: s.st[(size_t) i].curve = 0.0f; break;
+                                 case 7:
+                                     for (int k = i; k + 1 < s.n; ++k) s.st[(size_t) k] = s.st[(size_t) k + 1];
+                                     --s.n;
+                                     if (s.sustain >= s.n) s.sustain = -1;
+                                     if (s.loopEnd >= s.n) s.loopStart = s.loopEnd = -1;
+                                     break;
+                                 default: break;
+                             }
+                             safe->commit();
+                             safe->proc.pushHistory ("MSEG");
+                         });
+        return;
+    }
+    if (e.mods.isShiftDown())
+    {
+        bend = -1;
+        for (int k = 0; k < shape.n; ++k) if (e.position.x >= pt (k - 1).x && e.position.x <= pt (k).x) bend = k;
+        if (bend >= 0) { bendStart = shape.st[(size_t) bend].curve; bendY = e.position.y; }
+        return;
+    }
+    drag = i;
+}
+
+void MsegEditor::mouseDrag (const juce::MouseEvent& e)
+{
+    const auto a = getLocalBounds().toFloat().reduced (10.0f, 12.0f);
+    if (bend >= 0)
+    {
+        shape.st[(size_t) bend].curve = juce::jlimit (-1.0f, 1.0f, bendStart - (bendY - e.position.y) / 80.0f);
+        commit();
+        return;
+    }
+    if (drag < -1) return;
+    const float lv = juce::jlimit (0.0f, 1.0f, (a.getBottom() - e.position.y) / a.getHeight());
+    if (drag == -1) { shape.start = lv; commit(); return; }
+    const float prevX = pt (drag - 1).x;
+    const float t = juce::jlimit (0.0f, 16.0f, (e.position.x - prevX) / a.getWidth() * scaleT);
+    shape.st[(size_t) drag].time = std::round (t * 1000.0f) / 1000.0f;
+    shape.st[(size_t) drag].level = lv;
+    commit();
+}
+
+void MsegEditor::mouseUp (const juce::MouseEvent&)
+{
+    if (drag >= -1 || bend >= 0) { proc.pushHistory ("MSEG"); scaleT = std::max (0.5f, totalTime() * 1.25f); repaint(); }
+    drag = -2; bend = -1;
+}
+
+void MsegEditor::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (pointAt (e.position) >= -1 || shape.n >= tg::MsegShape::kMaxStages) return;
+    const auto a = getLocalBounds().toFloat().reduced (10.0f, 12.0f);
+    const float tClick = (e.position.x - a.getX()) / a.getWidth() * scaleT;
+    const float lv = juce::jlimit (0.0f, 1.0f, (a.getBottom() - e.position.y) / a.getHeight());
+    float t0 = 0; int at = shape.n;
+    for (int k = 0; k < shape.n; ++k) { const float t1 = t0 + shape.st[(size_t) k].time; if (tClick < t1) { at = k; break; } t0 = t1; }
+    for (int k = shape.n; k > at; --k) shape.st[(size_t) k] = shape.st[(size_t) k - 1];
+    if (at < shape.n) { const float rest = shape.st[(size_t) at + 1].time - (tClick - t0); shape.st[(size_t) at + 1].time = std::max (0.001f, rest); }
+    shape.st[(size_t) at] = { std::max (0.001f, tClick - t0), lv, 0.0f };
+    ++shape.n;
+    if (shape.sustain >= at) ++shape.sustain;
+    if (shape.loopStart >= at) { ++shape.loopStart; ++shape.loopEnd; } else if (shape.loopEnd >= at) ++shape.loopEnd;
+    commit();
+    proc.pushHistory ("MSEG");
+}
+} // namespace tgui

@@ -20,6 +20,7 @@
 #include "Fx/RackFx.h"
 #include "Fx/FxBus.h"
 #include "LfoShapes.h"
+#include "Mseg.h"
 
 namespace tg
 {
@@ -41,6 +42,7 @@ struct ModContext
     float dnaSeq = 0.0f, dnaSeq2 = 0.0f, dnaGate = 0.0f;   // the DNA Sequencer's lanes and step gate (Mod Matrix sources)
     const LfoShapeStore* lfoShapes = nullptr;   // custom LFO shapes
     const double* lfoFree = nullptr;            // shared "Free" LFO phases (Hz mode) at the start of this render call
+    const MsegStore* msegs = nullptr;           // multi-stage envelope shapes
     bool any() const { return routes != nullptr && routes->n > 0; }
 };
 
@@ -83,6 +85,8 @@ public:
 
     float currentLevel() const { return (float) ampEnv.eval (t); }
     float lfoPhaseShown (int k) const { return (float) lfoPhNow[k & 3]; }
+    float msegShown (int k) const { return mseg[k & 1].position(); }
+    float msegLevel (int k) const { return mseg[k & 1].level; }
 
 private:
     void computeSources (const Snapshot&, const GlobalModInputs*, float dt);
@@ -204,6 +208,9 @@ private:
     float lfoOut[4] {};          // shaped output (before depth) this control step
     float lfoSm[4] {};           // smoothing state
     bool lfoSmInit[4] {};
+    MsegRun mseg[2];             // the two multi-stage envelopes
+    float peRatio[8] { 1, 1, 1, 1, 1, 1, 1, 1 };   // pitch envelope as a frequency ratio: osc 1-3, sub, WT 1, WT 2, complex, supersaw
+    void updatePitchEnv (const Snapshot&);
     float lfoXMod[4][3] {};      // Phase, Smooth and Fade In as modulated last step (they shape this step's output)
     uint32_t rng = 1;
     float randNote = 0.0f;
@@ -272,14 +279,17 @@ public:
     const float* preFx (int ch) const { return preFxBuf[ch].data(); }
     int activeVoiceCount() const;
     void setLfoShapes (const LfoShapeStore* st) { lfoShapes = st; }
+    void setMsegs (const MsegStore* st) { msegStore = st; }
     void setSidechain (const float* l, const float* r) { fxBus.setSidechain (l, r); }   // for the next render call
     int polyFloor = 0;   // chord memory: a chord's notes always get their own voices, even in mono
     // Arpeggiator Swing / Gate as moved by the Mod Matrix last block (offsets; 0 when unmodulated)
     float arpModOffset (int which) const { return arpMod[juce::jlimit (0, 1, which)]; }
     std::atomic<float> lfoPlayhead[4] { -1.0f, -1.0f, -1.0f, -1.0f };   // newest voice's LFO phases (-1: no voice)
+    std::atomic<float> msegPlayhead[2] { -1.0f, -1.0f }, msegLevelShown[2] { 0.0f, 0.0f };
 
 private:
     const LfoShapeStore* lfoShapes = nullptr;
+    const MsegStore* msegStore = nullptr;
     double lfoFreePh[4] {};
     Voice voices[kMaxVoices];
     FxBus fxBus;

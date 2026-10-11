@@ -71,7 +71,9 @@ enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_
     X(SubAudio,    "Sub (audio rate)",  K_AUDIO,  true)  \
     X(ArpPos,      "Arp Position",      K_SEQ,    false) \
     X(ArpGate,     "Arp Step Gate",     K_SEQ,    false) \
-    X(Sidechain,   "Sidechain Envelope", K_FOLLOW, false)
+    X(Sidechain,   "Sidechain Envelope", K_FOLLOW, false) \
+    X(Mseg1,       "MSEG 1",            K_ENV,    false) \
+    X(Mseg2,       "MSEG 2",            K_ENV,    false)
 
 enum ModSource
 {

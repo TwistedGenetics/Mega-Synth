@@ -137,15 +137,15 @@ void Look::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce:
 
 void Look::drawTabButton (juce::TabBarButton& b, juce::Graphics& g, bool over, bool)
 {
-    auto r = b.getLocalBounds().toFloat().reduced (3.0f, 3.0f);
+    auto r = b.getLocalBounds().toFloat().reduced (1.5f, 3.0f);
     const bool front = b.isFrontTab();
     g.setColour (front ? col::panel3 : (over ? col::panel2.brighter (0.05f) : col::panel2));
     g.fillRoundedRectangle (r, 7.0f);
     g.setColour (front ? col::accent : col::border);
     g.drawRoundedRectangle (r, 7.0f, front ? 2.0f : 1.0f);
     g.setColour (front ? col::text : col::muted);
-    g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
-    g.drawText (b.getButtonText(), r, juce::Justification::centred);
+    g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+    g.drawFittedText (b.getButtonText(), r.toNearestInt(), juce::Justification::centred, 1, 0.7f);
 }
 
 //==============================================================================
@@ -1871,6 +1871,54 @@ void MegaSynthEditor::buildPages()
             }
             mw->setBounds (g + 4, 450, W - 2 * g, 16);
             ci->setBounds (g, 470, W - 2 * g, 126);
+        };
+    }
+
+    // ---------------------------------------------------------------- Pitch envelope and MSEGs
+    {
+        auto* page = addPage ("Env+");
+        auto* pe = sec (page, "Pitch Envelope  (808 drops, hoover scoops)", col::env);
+        pe->knob (P_pEnvAmt, "Amount");
+        pe->knob (P_pEnvA, "Attack");
+        pe->knob (P_pEnvD, "Decay");
+        pe->knob (P_pEnvCurve, "Curve");
+        pe->knob (P_pEnvVel, "Velocity");
+        pe->choice (P_pEnvTarget, "Target", 150);
+        Section* ms[2]; MsegEditor* ed[2];
+        for (int k = 0; k < 2; ++k)
+        {
+            ms[k] = sec (page, "MSEG " + juce::String (k + 1) + "  (multi-stage envelope: a Mod Matrix source)", col::env);
+            ms[k]->add (new ParamToggle (proc, P_mseg1Sync + 2 * k, "Sync (beats)", col::env), 120, 30);
+            ms[k]->knob (P_mseg1Scale + 2 * k, "Time Scale", 70);
+            ms[k]->newRow();
+            auto* pr = new juce::TextButton ("Presets");
+            pr->onClick = [this, k, pr]
+            {
+                juce::PopupMenu m;
+                for (int i = 0; i < 4; ++i) m.addItem (i + 1, MsegStore::presetName (i));
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (pr), [this, k] (int r) { if (r > 0) { proc.msegs.setPreset (k, r - 1); proc.pushHistory ("MSEG preset"); } });
+            };
+            ms[k]->add (pr, 80, 28);
+            ed[k] = page->own (new MsegEditor (proc, k));
+        }
+        auto* help = page->own (new juce::Label ({}, "Route MSEG 1 / 2 in the Mod Matrix (or right-click a knob). Sustain holds while the key is down; "
+                                                     "a loop repeats while the key is down; after the key is let go the stages after the sustain / loop play. "
+                                                     "Sync measures stage times in beats instead of seconds."));
+        help->setColour (juce::Label::textColourId, col::muted);
+        help->setFont (juce::Font (juce::FontOptions (12.0f)));
+        help->setJustificationType (juce::Justification::topLeft);
+        page->onResize = [page, pe, ms, ed, help]
+        {
+            const int g = 10, W = page->getWidth();
+            pe->setBounds (g, g, W - 2 * g, 120);
+            for (int k = 0; k < 2; ++k)
+            {
+                const int y = 140 + k * 220;
+                ms[k]->setBounds (g, y, W - 2 * g, 210);
+                ed[k]->setBounds (g + 230, y + 34, W - 2 * g - 242, 166);
+                ed[k]->toFront (false);
+            }
+            help->setBounds (g, 580, W - 2 * g, 40);
         };
     }
 

@@ -37,7 +37,7 @@ namespace
     {
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
-            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni");
+            || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni") || id.startsWith ("pEnv") || id.startsWith ("mseg");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -146,6 +146,7 @@ MegaSynthProcessor::MegaSynthProcessor()
     engine.setDnaSequencer (&dnaSteps);
     engine.fx().setRack (&fxRack);
     engine.setLfoShapes (&lfoShapes);
+    engine.setMsegs (&msegs);
     for (auto& c : ccMap) c.store (-1);
     normTable();
     addListener (this);
@@ -765,6 +766,8 @@ void MegaSynthProcessor::timerCallback()
         if (fv != lastRackVersion) { lastRackVersion = fv; snapshotPending = true; snapshotDelay = 0; }
         const auto lv = lfoShapes.getVersion();
         if (lv != lastLfoShapeVersion) { lastLfoShapeVersion = lv; snapshotPending = true; snapshotDelay = 0; }
+        const auto mv = msegs.getVersion();
+        if (mv != lastMsegVersion) { lastMsegVersion = mv; snapshotPending = true; snapshotDelay = 0; }
         const auto av = arpStore.getVersion();
         if (av != lastArpVersion) { lastArpVersion = av; snapshotPending = true; snapshotDelay = 0; }
         const auto rv = routes.getVersion();
@@ -882,6 +885,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("fxRack", juce::JSON::toString (fxRack.toVar(), true), nullptr);
     state.setProperty ("lfoShapes", lfoShapes.toJson(), nullptr);
     state.setProperty ("arp", arpStore.toJson(), nullptr);
+    state.setProperty ("msegs", msegs.toJson(), nullptr);
     state.setProperty ("midiMap", midiMapToString(), nullptr);        // MIDI learn belongs to the project, not the patch
     state.setProperty ("uiWidth", uiWidth.load(), nullptr);
     state.setProperty ("program", curProgram.load(), nullptr);
@@ -923,9 +927,11 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 8) setArpDefaultsForOldPatch();
     if (version < 9) setSidechainDefaultsForOldPatch();
     if (version < 10) setUnisonDefaultsForOldPatch();
+    if (version < 11) setEnvDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
+    msegs.fromVar (juce::JSON::parse (tree.getProperty ("msegs").toString()));
     midiMapFromString (tree.getProperty ("midiMap").toString());
     if (tree.hasProperty ("uiWidth")) uiWidth.store ((int) tree.getProperty ("uiWidth"));
     pendingProgram.store (-1);   // a program change still waiting must not replace the restored state
@@ -1007,6 +1013,7 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
     root->setProperty ("fxRack", fxRack.toVar());
     root->setProperty ("lfoShapes", lfoShapes.toVar());
     root->setProperty ("arp", arpStore.toVar());
+    root->setProperty ("msegs", msegs.toVar());
     root->setProperty ("scenes", scenes.toVar());
     root->setProperty ("sceneEdit", getEditScene());
     root->setProperty ("capture", captureToVar());
@@ -1134,6 +1141,8 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         lfoShapes.fromVar (patch["lfoShapes"]);
         if (extra == nullptr || ! extra->hasProperty ("arpOn")) setArpDefaultsForOldPatch();
         arpStore.fromVar (patch["arp"]);
+        if (extra == nullptr || ! extra->hasProperty ("pEnvAmt")) setEnvDefaultsForOldPatch();
+        msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
         const juce::var names = patch["macroNames"];
@@ -1228,6 +1237,7 @@ void MegaSynthProcessor::resetPatchState()
     fxRack.fromVar ({});
     lfoShapes.fromVar ({});
     arpStore.fromVar ({});
+    msegs.fromVar ({});
     scenes.clear();
     sceneEditIndex = 0;
     for (int k = 0; k < 8; ++k) setMacroName (k, {});
@@ -1235,6 +1245,21 @@ void MegaSynthProcessor::resetPatchState()
     clearSample (0);
     clearSample (1);
     lastEuclid[0] = -1;
+}
+
+void MegaSynthProcessor::setEnvDefaultsForOldPatch()
+{
+    // Before the pitch envelope and the MSEGs: no pitch envelope, default MSEG shapes
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        const juce::String id (kParamIds[i]);
+        if (! (id.startsWith ("pEnv") || id.startsWith ("mseg"))) continue;
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
+    msegs.fromVar ({});
 }
 
 void MegaSynthProcessor::setUnisonDefaultsForOldPatch()
@@ -1491,6 +1516,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
     s.fxRack = juce::JSON::toString (fxRack.toVar(), true);
     s.lfoShapes = lfoShapes.toJson();
     s.arpStore = arpStore.toJson();
+    s.msegs = msegs.toJson();
     s.scenes = juce::JSON::toString (scenes.toVar(), true);
     s.sceneEdit = getEditScene();
     s.macroNames = macroNamesJoined();
@@ -1503,7 +1529,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
 
 bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
 {
-    return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.lfoShapes == b.lfoShapes && a.arpStore == b.arpStore && a.scenes == b.scenes && a.macroNames == b.macroNames
+    return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.lfoShapes == b.lfoShapes && a.arpStore == b.arpStore && a.msegs == b.msegs && a.scenes == b.scenes && a.macroNames == b.macroNames
         && a.sceneEdit == b.sceneEdit && a.patchName == b.patchName
         && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1]
         && a.params.isEquivalentTo (b.params);
@@ -1524,6 +1550,8 @@ void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
     lastLfoShapeVersion = lfoShapes.getVersion();
     arpStore.fromVar (juce::JSON::parse (s.arpStore));
     lastArpVersion = arpStore.getVersion();
+    msegs.fromVar (juce::JSON::parse (s.msegs));
+    lastMsegVersion = msegs.getVersion();
     scenes.fromVar (juce::JSON::parse (s.scenes));
     lastScenesVersion = scenes.version.load();
     sceneEditIndex = s.sceneEdit;

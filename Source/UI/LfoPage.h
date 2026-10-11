@@ -67,3 +67,33 @@ private:
 };
 
 } // namespace tgui
+
+namespace tgui
+{
+// MSEG editor: stages as points along time (x) and level (y).
+//   drag a point (time and level), double-click to add a stage, right-click a point for sustain / loop / delete,
+//   shift-drag a stage to bend its curve.
+class MsegEditor : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
+{
+public:
+    MsegEditor (MegaSynthProcessor&, int env);
+    ~MsegEditor() override { stopTimer(); }
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+private:
+    void timerCallback() override;
+    float totalTime() const;
+    juce::Point<float> pt (int i) const;   // i = -1: start level
+    int pointAt (juce::Point<float>) const;
+    void commit();
+    MegaSynthProcessor& proc;
+    const int env;
+    tg::MsegShape shape;
+    float scaleT = 1.0f;   // seconds shown across the width (fixed while dragging)
+    int drag = -2, bend = -1; float bendStart = 0, bendY = 0;
+    uint32_t lastVersion = ~0u; float lastPlay = -2.0f;
+};
+} // namespace tgui

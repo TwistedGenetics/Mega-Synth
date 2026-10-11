@@ -621,6 +621,8 @@ int main()
         p->lfoShapes.setPreset (1, LfoShapeStore::PR_Wub); setP (*p, P_lfo1Custom + kLfoXStride, 1);
         setP (*p, P_lfo1Sync + kLfoXStride, 9); setP (*p, P_lfo1Retrig + 2 * kLfoXStride, 2);
         p->lfoShapes.setPreset (3, LfoShapeStore::PR_Stairs); setP (*p, P_lfo1Custom + 3 * kLfoXStride, 1);
+        p->msegs.setPreset (1, 2); p->msegs.setPreset (0, 3); setP (*p, P_pEnvAmt, 12.0f);
+        for (int k : { 0, 1, 3 }) setP (*p, P_uni1Voices + kUniStride * k, 5.0f);
         render (*p, 0.3, chord (0.0, 1.0, { 48 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
         ed->setSize (1200, 860);
@@ -1484,7 +1486,7 @@ int main()
             r->importBrowserPatch (juce::JSON::toString (obj));
             CHECK (r->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f && r->param (P_lfo1Custom + 2 * X)->getValue() < 0.5f, "old patches load with the original LFOs");
             // an old project: state version 6
-            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"10\"", "stateVersion=\"6\"");
+            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"11\"", "stateVersion=\"6\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (xml), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (o->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f, "old projects load with the original LFOs");
@@ -1705,7 +1707,7 @@ int main()
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->arpStore.toJson() == p->arpStore.toJson() && r->param (P_chdPreset)->getValue() == p->param (P_chdPreset)->getValue(), "arp and chord saved in patches");
             setP (*p, P_arpOn, 1.0f); juce::MemoryBlock mb2; p->getStateInformation (mb2);
-            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"10\"", "stateVersion=\"7\"");
+            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"11\"", "stateVersion=\"7\"");
             {   // a version 7 project has no arpeggiator data at all
                 const int a0 = x2.indexOf (" arp=\"");
                 if (a0 >= 0) { const int a1 = x2.indexOfChar (a0 + 6, '"'); x2 = x2.substring (0, a0) + x2.substring (a1 + 1); }
@@ -1828,7 +1830,7 @@ int main()
             CHECK (p->getEngine().liveSrc[MS_Sidechain].load() > 0.3f, "Sidechain Envelope mod source");
             setP (*p, P_vshSidechain, 1.0f); setP (*p, P_schThresh, -10.0f);
             juce::MemoryBlock mb; p->getStateInformation (mb);
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"10\"", "stateVersion=\"8\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"11\"", "stateVersion=\"8\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (q->param (P_vshSidechain)->getValue() < 0.5f && std::abs (q->param (P_schThresh)->convertFrom0to1 (q->param (P_schThresh)->getValue()) + 24.0f) < 0.1f, "old projects: sidechain off");
@@ -1948,7 +1950,7 @@ int main()
         {
             auto p = make(); setP (*p, P_uni2Voices, 6.0f);
             juce::MemoryBlock mb; p->getStateInformation (mb);
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"10\"", "stateVersion=\"9\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"11\"", "stateVersion=\"9\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (juce::roundToInt (q->param (P_uni2Voices)->convertFrom0to1 (q->param (P_uni2Voices)->getValue())) == 1, "old projects: no unison");
@@ -1960,6 +1962,139 @@ int main()
     {
         uniTests();
         std::cout << (failures == 0 ? "UNI TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
+    // ---- Pitch envelope and MSEGs (state version 11)
+    auto envTests = [&]
+    {
+        std::cout << "Pitch envelope / MSEG" << std::endl;
+        // the envelope runner on its own
+        {
+            MsegStore st; st.setPreset (0, 3);   // ADSR: 0.01 up, 0.3 to 0.6 (sustain), 0.5 to 0
+            MsegRun r; r.start (st.get (0));
+            float lv = 0; for (int i = 0; i < 10; ++i) lv = r.advance (0.001, 1.0f);
+            CHECK (std::abs (lv - 1.0f) < 1e-4f, "MSEG reaches stage 1's level");
+            for (int i = 0; i < 1000; ++i) lv = r.advance (0.001, 1.0f);
+            CHECK (std::abs (lv - 0.6f) < 1e-4f && ! r.done, "MSEG holds at the sustain stage");
+            r.release(); for (int i = 0; i < 250; ++i) lv = r.advance (0.001, 1.0f);
+            CHECK (lv > 0.0f && lv < 0.6f, "release moves on from the sustain");
+            for (int i = 0; i < 300; ++i) lv = r.advance (0.001, 1.0f);
+            CHECK (lv < 1e-4f && r.done, "MSEG ends at the last stage");
+        }
+        {
+            MsegStore st; st.setPreset (0, 2);   // rhythmic loop, 0.5 s per pass
+            MsegRun r; r.start (st.get (0));
+            int peaks = 0; float prev = 0, prev2 = 0;
+            for (int i = 0; i < 1000; ++i) { const float v = r.advance (0.001, 1.0f); if (prev > 0.95f && prev >= v && prev > prev2) ++peaks; prev2 = prev; prev = v; }
+            CHECK (peaks >= 2 && ! r.done, "loop keeps going while held (" + juce::String (peaks) + " full peaks in 1 s)");
+            r.release(); float v = 0; for (int i = 0; i < 2000; ++i) v = r.advance (0.001, 1.0f);
+            CHECK (r.done && v < 1e-4f, "release leaves the loop and finishes");
+            MsegRun h; h.start (st.get (0)); for (int i = 0; i < 300; ++i) h.advance (0.001, 2.0f);
+            CHECK (h.position() < 0.2f, "time scale 2: half as far along (" + juce::String (h.position(), 3) + ")");
+            MsegRun q; q.start (st.get (0)); for (int i = 0; i < 300; ++i) q.advance (0.001, 1.0f);
+            CHECK (q.position() > 0.2f && q.position() < 0.45f, "position follows time");
+        }
+        CHECK (std::abs (MsegStore::curveAt (0.5f, 0.0f) - 0.5f) < 1e-6f && MsegStore::curveAt (0.5f, 1.0f) < 0.1f && MsegStore::curveAt (0.5f, -1.0f) > 0.9f, "stage curves");
+        {
+            // store: clamps and round trip
+            MsegStore st; MsegShape s; s.n = 3; s.st[0] = { 0.1f, 2.0f, 0.0f }; s.st[1] = { 99.0f, 0.5f, 5.0f }; s.st[2] = { 0.2f, 0.0f, 0.0f }; s.sustain = 7; s.loopStart = 2; s.loopEnd = 1;
+            st.set (1, s);
+            const auto g = st.get (1);
+            CHECK (g.st[0].level == 1.0f && g.st[1].time == 16.0f && g.st[1].curve == 1.0f && g.sustain == -1 && g.loopStart == -1, "MSEG edits are kept in range");
+            MsegStore t; t.fromVar (st.toVar());
+            CHECK (t.toJson() == st.toJson(), "MSEG round trip");
+        }
+        // in the synth
+        auto clean = [&]
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain, P_osc2Gain, P_osc3Gain, P_subGain }) setP (*p, i, 0.0f);
+            setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_lfoAssignAmt0, 0.0f); setP (*p, P_osc1Wave, 3.0f);
+            return p;
+        };
+        auto freqIn = [&] (const juce::AudioBuffer<float>& c, int ch, double t0, double t1)
+        {
+            double first = -1, last = -1; int n = 0;
+            for (int i = (int) (t0 * sr) + 1; i < (int) (t1 * sr); ++i)
+            {
+                const float a = c.getSample (ch, i - 1), b = c.getSample (ch, i);
+                if (a < 0.0f && b >= 0.0f) { const double x = (i - 1 + a / (a - b)) / sr; if (first < 0) first = x; last = x; ++n; }
+            }
+            return n > 1 ? (n - 1) / (last - first) : 0.0;
+        };
+        {
+            auto off = clean(), on = clean();
+            setP (*on, P_pEnvAmt, 12.0f); setP (*on, P_pEnvD, 0.15f);
+            juce::AudioBuffer<float> a, b; render (*off, 1.0, chord (0.0, 0.9, { 57 }), &a); render (*on, 1.0, chord (0.0, 0.9, { 57 }), &b);
+            const double early = freqIn (b, 0, 0.002, 0.012), late = freqIn (b, 0, 0.5, 0.8), plain = freqIn (a, 0, 0.002, 0.012);
+            std::cout << "  +12 st: " << juce::String (early, 1) << " Hz at the start, " << juce::String (late, 1) << " Hz later (off: " << juce::String (plain, 1) << " Hz)" << std::endl;
+            CHECK (early > 400.0 && std::abs (late - 220.0) < 1.0 && std::abs (plain - 220.0) < 3.0, "pitch envelope sweeps down to the note");
+            // target: Osc 2 only leaves Osc 1 alone
+            auto t = clean(); setP (*t, P_pEnvAmt, 12.0f); setP (*t, P_pEnvTarget, 2.0f);
+            juce::AudioBuffer<float> c; render (*t, 1.0, chord (0.0, 0.9, { 57 }), &c);
+            double d = 0; for (int i = 0; i < c.getNumSamples(); ++i) d = std::max (d, (double) std::abs (c.getSample (0, i) - a.getSample (0, i)));
+            CHECK (d == 0.0, "target Osc 2: Osc 1 untouched");
+            // velocity: a soft note sweeps less
+            auto v = clean(); setP (*v, P_pEnvAmt, 12.0f); setP (*v, P_pEnvVel, 1.0f);
+            juce::AudioBuffer<float> s; render (*v, 1.0, { { 0.0, juce::MidiMessage::noteOn (1, 57, (juce::uint8) 40) }, { 0.9, juce::MidiMessage::noteOff (1, 57) } }, &s);
+            const double soft = freqIn (s, 0, 0.002, 0.012);
+            CHECK (soft > 225.0 && soft < early - 60.0, "velocity scales the sweep (" + juce::String (soft, 1) + " Hz)");
+            // negative: a scoop up from below
+            auto n = clean(); setP (*n, P_pEnvAmt, -12.0f);
+            juce::AudioBuffer<float> u; render (*n, 1.0, chord (0.0, 0.9, { 57 }), &u);
+            CHECK (freqIn (u, 0, 0.002, 0.02) < 150.0, "negative amount scoops up");
+            // attack: rises to the peak first
+            auto at = clean(); setP (*at, P_pEnvAmt, 12.0f); setP (*at, P_pEnvA, 0.1f);
+            juce::AudioBuffer<float> w; render (*at, 1.0, chord (0.0, 0.9, { 57 }), &w);
+            CHECK (freqIn (w, 0, 0.002, 0.012) < freqIn (w, 0, 0.09, 0.11), "attack rises to the peak");
+        }
+        {
+            // MSEG through the mod matrix, synced to the song: 1 beat per stage at 120 BPM
+            struct FakeHead : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+            for (double bpm : { 90.0, 140.0, 174.0 })
+            {
+                FakeHead head;
+                auto p = std::make_unique<MegaSynthProcessor>();
+                p->setPlayConfigDetails (0, 2, sr, 512); p->prepareToPlay (sr, 512); p->setPlayHead (&head);
+                MsegShape s; s.n = 1; s.start = 0.0f; s.st[0] = { 1.0f, 1.0f, 0.0f };
+                p->msegs.set (1, s);
+                setP (*p, P_mseg2Sync, 1.0f);
+                p->addRoute (MS_Mseg2, P_filterRes, 0.0f);
+                const double inc = bpm / 60.0 / sr; double ppq = 7.31;   // play pressed mid-bar
+                juce::AudioBuffer<float> buf (2, 64);
+                float at = -1;
+                const int stopAt = (int) std::lround (0.5 / inc);   // half a beat
+                for (int pos = 0; pos < stopAt; pos += 64)
+                {
+                    head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+                    head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+                    juce::MidiBuffer m; if (pos == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                    buf.clear(); p->processBlock (buf, m); ppq += 64 * inc;
+                    at = p->getEngine().msegLevelShown[1].load();
+                }
+                p->setPlayHead (nullptr);
+                CHECK (std::abs (at - 0.5f) < 0.03f, "synced MSEG: half way after half a beat at " + juce::String (bpm) + " BPM (" + juce::String (at, 3) + ")");
+            }
+        }
+        {
+            // saved with the project, the patch and undo; old projects have no pitch envelope
+            auto p = make(); setP (*p, P_pEnvAmt, 7.0f); p->msegs.setPreset (0, 2); setP (*p, P_mseg1Scale, 2.0f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (q->msegs.toJson() == p->msegs.toJson() && std::abs (q->param (P_pEnvAmt)->convertFrom0to1 (q->param (P_pEnvAmt)->getValue()) - 7.0f) < 0.01f, "pitch env and MSEGs saved in the project");
+            auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
+            CHECK (r->msegs.toJson() == p->msegs.toJson(), "MSEGs saved in patches");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"11\"", "stateVersion=\"10\"");
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
+            auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
+            CHECK (std::abs (o->param (P_pEnvAmt)->convertFrom0to1 (o->param (P_pEnvAmt)->getValue())) < 1e-4f, "old projects: no pitch envelope");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ENVONLY", {}).isNotEmpty())
+    {
+        envTests();
+        std::cout << (failures == 0 ? "ENV TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
 
@@ -2520,9 +2655,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 10"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 11"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"10\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"11\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -3619,6 +3754,7 @@ int main()
     arpTests();
     scTests();
     uniTests();
+    envTests();
 
     // ---- Stage 17: factory presets, quality setting, CPU budget
     {

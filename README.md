@@ -176,6 +176,24 @@ Each of the four LFOs has, on top of Wave, Rate and Depth:
 - Only notes you play are arpeggiated, not the step sequencer's.
 - Old patches and projects load with both off.
 
+## Env+ tab (pitch envelope and MSEGs)
+
+- **Pitch Envelope**: a quick pitch sweep at the start of each note, for kick-like basses, zaps, laser stabs and scoops.
+  - **Amount** (-48 to +48 semitones; negative scoops up from below).
+  - **Attack** (rise to the peak; 0 starts at the peak) and **Decay** (back to the note).
+  - **Curve** (how the decay bends) and **Velocity** (how much harder notes sweep further).
+  - **Target**: every oscillator, or just one of Osc 1, Osc 2, Osc 3, Sub, Wavetable 1, Wavetable 2, Complex or SuperSaw.
+  - Amount 0 is off, exactly as before.
+- **MSEG 1 and 2**: drawable multi-stage envelopes, one per note, used as Mod Matrix sources.
+  - Each has a start level and up to 8 stages, each with its own time, level and curve.
+  - Editing: drag a point to move it, double-click to add one, and shift-drag a segment to bend it. Right-click a point to make it the sustain point, start or end a loop, or delete it.
+  - While the key is held, the sustain stage holds and a loop repeats. On release, the envelope carries on after them.
+  - **Sync** measures stage times in beats at the DAW's tempo instead of seconds. **Time Scale** (x0.25 to x4) stretches the whole shape.
+  - *Presets*: Pluck, Swell, Rhythmic loop and ADSR.
+  - A playhead shows where the newest note is.
+  - A shape that is being edited while a note plays doesn't change that note; the next note uses the new shape.
+- MSEG shapes are saved in patches, projects, undo history and A/B. Old patches and projects load with the pitch envelope off. Nothing is routed from the MSEGs until you add a route, so old sounds don't change.
+
 ## Factory presets
 
 The patch menu (and *Browse*) starts with 32 built-in presets, followed by your saved patches. The arrows step through both.

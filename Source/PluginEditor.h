@@ -42,7 +42,11 @@ public:
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawTabButton (juce::TabBarButton&, juce::Graphics&, bool over, bool down) override;
-    int getTabButtonBestWidth (juce::TabBarButton&, int) override { return 85; }
+    int getTabButtonBestWidth (juce::TabBarButton& b, int) override
+    {
+        // as wide as the name needs, so 19 tabs fit without cutting names off
+        return 16 + juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)), b.getButtonText());
+    }
 };
 
 // Slider that hands right-clicks to its owner instead of dragging.

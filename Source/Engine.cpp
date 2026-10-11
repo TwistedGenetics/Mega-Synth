@@ -155,6 +155,13 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
 
     // Initialise every smoother at its target. Oscillators start at the glide-from pitch.
     startUnison (s);
+    for (int k = 0; k < 2; ++k)
+    {
+        MsegShape sh;
+        if (mc.msegs != nullptr && mc.msegs->tryGet (k, sh)) mseg[k].start (sh);
+        else mseg[k].start (mseg[k].s);   // (the editor is mid-edit: the shape this voice had)
+    }
+    updatePitchEnv (s);
     baseFreq = glideFrom;
     updateLfoOut (s, 0, mc);
     ModState m;
@@ -172,6 +179,7 @@ void Voice::release()
     ampEnv.release (t);
     filtEnv.release (t);
     for (auto& e : modEnv) e.release (t);
+    for (auto& m : mseg) m.release();
 }
 
 void Voice::computeMod (const Snapshot& s, ModState& mod) const
@@ -206,6 +214,7 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
     v[MS_AmpEnv]    = (float) ampEnv.eval (t);
     v[MS_FilterEnv] = (float) filtEnv.eval (t);
     for (int e = 0; e < 3; ++e) v[MS_ModEnv1 + e] = (float) modEnv[e].eval (t);
+    v[MS_Mseg1] = mseg[0].level; v[MS_Mseg2] = mseg[1].level;
     v[MS_Velocity] = velocity;
     v[MS_Note]     = clampv ((midiNote - 60) / 60.0f, -1.0f, 1.0f);
     v[MS_KeyTrack] = midiNote / 127.0f;
@@ -399,6 +408,28 @@ void Voice::advanceLfos (const Snapshot& s, int n)
         lfoDepthNow[k] = s.f (P_lfo1Depth + 3 * k);
         lfoXMod[k][0] = s.f (xb + 2); lfoXMod[k][1] = s.f (xb + 4); lfoXMod[k][2] = s.f (xb + 6);
     }
+    for (int k = 0; k < 2; ++k)
+    {
+        const bool synced = s.v[P_mseg1Sync + 2 * k] > 0.5f;
+        mseg[k].advance (synced ? s.fxBeatInc * n : secs, clampv (s.f (P_mseg1Scale + 2 * k), 0.25f, 4.0f));
+    }
+}
+
+// Pitch envelope: up to the amount over Attack, back to 0 over Decay (Curve > 0: a fast drop like an 808)
+void Voice::updatePitchEnv (const Snapshot& s)
+{
+    const float amt = s.f (P_pEnvAmt);
+    if (std::abs (amt) < 1.0e-4f) { for (auto& r : peRatio) r = 1.0f; return; }
+    const double A = std::max (0.0, (double) s.f (P_pEnvA)), D = std::max (0.001, (double) s.f (P_pEnvD));
+    const float e = std::exp2 (2.0f * clampv (s.f (P_pEnvCurve), -1.0f, 1.0f));
+    double env;
+    if (t < A) env = std::pow (t / A, 1.0 / e);
+    else env = t - A < D ? std::pow (1.0 - (t - A) / D, (double) e) : 0.0;
+    const float vel = clampv (s.f (P_pEnvVel), 0.0f, 1.0f);
+    const float semis = amt * (float) env * (1.0f - vel + vel * velocity);
+    const float r = (float) std::exp2 (semis / 12.0);
+    const int tgt = clampv (s.i (P_pEnvTarget), 0, 8);
+    for (int i = 0; i < 8; ++i) peRatio[i] = (tgt == 0 || tgt == i + 1) ? r : 1.0f;
 }
 
 void Voice::updateLfoOut (const Snapshot& s, int offset, const ModContext& mc)
@@ -774,6 +805,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         ModState mod;
         computeMod (ps, mod);
         updateControl (ps, wavs, mod, false);
+        updatePitchEnv (ps);
         modOut = mod;
 
         // ---- audio-rate routes: an oscillator's raw output driving a destination per sample
@@ -953,7 +985,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             auto pm = [&] (int a) { return ! ARType::value ? 1.0 : pow2 (ad[a]) * (fmT[a] ? fmMul : 1.0); };
 
             // Osc 2 and 3 first so Osc 1's legacy FM uses this sample's Osc 2 (as in Web Audio)
-            double fr = ! ARType::value ? (double) (f2.v + fmIn (1)) : f2.v * pm (AD_P2) + fmIn (1);
+            double fr = ! ARType::value ? (double) (f2.v * peRatio[1] + fmIn (1)) : f2.v * peRatio[1] * pm (AD_P2) + fmIn (1);
             const float o2 = bank.sample (wave2, ph2, (float) std::abs (fr) * fisr);
             ph2 = wrap01 (ph2 + fr * isr); srcVals[1] = o2;
             float uL[kUniOscs] {}, uR[kUniOscs] {};
@@ -969,12 +1001,12 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             };
             if (uniN[1] > 1) uniOsc (1, wave2, fr);
 
-            fr = ! ARType::value ? (double) (f3.v + fmIn (2)) : f3.v * pm (AD_P3) + fmIn (2);
+            fr = ! ARType::value ? (double) (f3.v * peRatio[2] + fmIn (2)) : f3.v * peRatio[2] * pm (AD_P3) + fmIn (2);
             const float o3 = bank.sample (wave3, ph3, (float) std::abs (fr) * fisr);
             ph3 = wrap01 (ph3 + fr * isr); srcVals[2] = o3;
             if (uniN[2] > 1) uniOsc (2, wave3, fr);
 
-            const double fsub = ! ARType::value ? (double) fSub.v : fSub.v * pm (AD_PSub);
+            const double fsub = ! ARType::value ? (double) (fSub.v * peRatio[3]) : fSub.v * peRatio[3] * pm (AD_PSub);
             const float osub = bank.sample (waveSub, phSub, (float) fsub * fisr);
             phSub = wrap01 (phSub + fsub * isr);
 
@@ -982,13 +1014,13 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             float o4L, o4R, w2L, w2R;
             if (! ARType::value)
             {
-                wt[0].tick (fmIn (3), isr, o4L, o4R);
-                wt[1].tick (0.0, isr, w2L, w2R);
+                wt[0].tick (fmIn (3) + wt[0].rate.v * (peRatio[4] - 1.0f), isr, o4L, o4R);
+                wt[1].tick (wt[1].rate.v * (peRatio[5] - 1.0f), isr, w2L, w2R);
             }
             else
             {
-                wt[0].tick (fmIn (3) + wt[0].rate.v * (pm (AD_PWt1) - 1.0), isr, o4L, o4R);
-                wt[1].tick (wt[1].rate.v * (pm (AD_PWt2) - 1.0), isr, w2L, w2R);
+                wt[0].tick (fmIn (3) + wt[0].rate.v * (peRatio[4] * pm (AD_PWt1) - 1.0), isr, o4L, o4R);
+                wt[1].tick (wt[1].rate.v * (peRatio[5] * pm (AD_PWt2) - 1.0), isr, w2L, w2R);
             }
             const float o4m = 0.5f * (o4L + o4R);
             srcVals[3] = o4m;
@@ -1009,7 +1041,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             float cOut = 0, cRaw = 0;
             if (needComplex)
             {
-                const double cb = ! ARType::value ? (double) cBase.v : cBase.v * pm (AD_PCx);
+                const double cb = ! ARType::value ? (double) (cBase.v * peRatio[6]) : cBase.v * peRatio[6] * pm (AD_PCx);
                 const double mf = cb * cRatio.v;
                 const float om = bank.sample (waveB, phMod, (float) std::abs (mf) * fisr);
                 phMod = wrap01 (phMod + mf * isr);
@@ -1046,12 +1078,12 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             if (ssCount > 0)
             {
                 const float fmS6 = fmIn (5);
-                const double ssm = pm (AD_PSs);
+                const double ssm = pm (AD_PSs) * peRatio[7];
                 for (int u = 0; u < 9; ++u)
                 {
                     const float g = ssGain[u].v;
                     if (g <= 1.0e-7f) continue;
-                    const double f = (! ARType::value ? ssFreq[u] : ssFreq[u] * ssm) + fmS6;
+                    const double f = (! ARType::value ? ssFreq[u] * peRatio[7] : ssFreq[u] * ssm) + fmS6;
                     const float sw = bank.sample (W_SAW, ssPh[u], (float) std::abs (f) * fisr) * g;
                     ssPh[u] = wrap01 (ssPh[u] + f * isr);
                     ssMono += sw; ssL += sw * ssPanL[u]; ssR += sw * ssPanR[u];
@@ -1063,8 +1095,8 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             srcVals[5] = ssMono;
 
             // Osc 1 (with the legacy Osc2 -> Osc1 FM)
-            fr = ! ARType::value ? (double) (f1.v + legacyFm.v * o2 + fmIn (0))
-                          : f1.v * pm (AD_P1) + std::max (0.0f, legacyFm.v + ad[AD_LegFm]) * o2 + fmIn (0);
+            fr = ! ARType::value ? (double) (f1.v * peRatio[0] + legacyFm.v * o2 + fmIn (0))
+                          : f1.v * peRatio[0] * pm (AD_P1) + std::max (0.0f, legacyFm.v + ad[AD_LegFm]) * o2 + fmIn (0);
             const float o1 = bank.sample (wave1, ph1, (float) std::abs (fr) * fisr);
             ph1 = wrap01 (ph1 + fr * isr); srcVals[0] = o1;
             if (uniN[0] > 1) uniOsc (0, wave1, fr);
@@ -1282,7 +1314,7 @@ void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const S
 
     const double glide = (s.f (P_porta) > 0.0005f && lastFreq > 0) ? lastFreq : freq;
     ModContext mc;
-    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh;
+    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh; mc.msegs = msegStore;
     if (routeStore != nullptr)
     {
         routeSet.build (*routeStore);
@@ -1386,7 +1418,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     for (auto& v : voices) if (v.active && (! newest || v.order > newest->order)) newest = &v;
 
     ModContext mc;
-    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh;
+    mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh; mc.msegs = msegStore;
     if (routeStore != nullptr)
     {
         routeSet.build (*routeStore);
@@ -1405,6 +1437,11 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     {
         lfoFreePh[k] = wrap01 (lfoFreePh[k] + (double) s.f (P_lfo1Rate + 3 * k) * numSamples / sr);
         lfoPlayhead[k].store (newest != nullptr && newest->active ? newest->lfoPhaseShown (k) : -1.0f, std::memory_order_relaxed);
+    }
+    for (int k = 0; k < 2; ++k)
+    {
+        msegPlayhead[k].store (newest != nullptr && newest->active ? newest->msegShown (k) : -1.0f, std::memory_order_relaxed);
+        msegLevelShown[k].store (newest != nullptr && newest->active ? newest->msegLevel (k) : 0.0f, std::memory_order_relaxed);
     }
 
     // Global effects are shared by all voices, so routes onto them follow the newest voice's

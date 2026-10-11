@@ -66,6 +66,8 @@ namespace
         if (id.startsWith ("ds")) return "DNA Sequencer";
         if (id.startsWith ("arp")) return "Arpeggiator";
         if (id.startsWith ("uni")) return "Unison";
+        if (id.startsWith ("pEnv")) return "Pitch Envelope";
+        if (id.startsWith ("mseg")) return "MSEG";
         if (id.startsWith ("chd")) return "Chord Memory";
         if (id.startsWith ("ar")) return "Audio-Rate Transform";
         if (id.startsWith ("scene")) return "Scenes";
@@ -155,6 +157,8 @@ namespace
                 { m.category = Category::Performance; m.group = MutGroup::None; }
             else if (id.startsWith ("mod") && id.endsWith ("Amt"))
                 { m.category = Category::Mod; m.group = MutGroup::Modulation; }
+            else if (id.startsWith ("pEnv") || id.startsWith ("mseg"))
+                { m.category = Category::Env; m.group = id == "pEnvAmt" ? MutGroup::Pitch : MutGroup::Envelopes; }
             else if (id.startsWith ("uni"))
                 { m.category = Category::Osc; m.group = MutGroup::Oscillators; }
             else if (id.startsWith ("ds") || id.startsWith ("arp") || id.startsWith ("chd"))

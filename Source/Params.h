@@ -123,6 +123,8 @@ inline const char* const kArpRestartKeys[]   = { "first","bar" };
 inline const char* const kArpRestartLabels[] = { "First note","Each bar" };
 inline const char* const kUniCurveKeys[]   = { "linear","supersaw" };
 inline const char* const kUniCurveLabels[] = { "Linear","SuperSaw (outer voices wider)" };
+inline const char* const kPEnvTargetKeys[]   = { "all","osc1","osc2","osc3","sub","wt1","wt2","complex","supersaw" };
+inline const char* const kPEnvTargetLabels[] = { "All oscillators","Osc 1","Osc 2","Osc 3","Sub","Wavetable 1","Wavetable 2","Complex","SuperSaw" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -268,6 +270,7 @@ inline const ChoiceList kListArpRate     = TG_LIST(kArpRate);
 inline const ChoiceList kListArpVel      = TG_LIST(kArpVel);
 inline const ChoiceList kListArpRestart  = TG_LIST(kArpRestart);
 inline const ChoiceList kListUniCurve    = TG_LIST(kUniCurve);
+inline const ChoiceList kListPEnvTarget  = TG_LIST(kPEnvTarget);
 
 // LFO extras (state version 7): 8 parameters per LFO, LFO k at P_lfo1Sync + kLfoXStride * k
 constexpr int kLfoXStride = 8;
@@ -837,7 +840,17 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(uni6Spread, "Complex Unison Spread", 0, 1, 0.5, 0.01, 0) \
     F(uni6Blend,  "Complex Unison Blend", 0, 1, 0.5, 0.01, 0) \
     C(uni6Curve,  "Complex Unison Detune Curve", kListUniCurve, 0) \
-    B(uniSamePhase, "Unison Same Phase Every Note", false)
+    B(uniSamePhase, "Unison Same Phase Every Note", false) \
+    F(pEnvAmt,     "Pitch Env Amount", -48, 48, 0, 0.1, 0) \
+    F(pEnvA,       "Pitch Env Attack", 0, 2, 0, 0.001, 0.2) \
+    F(pEnvD,       "Pitch Env Decay", 0.001, 3, 0.15, 0.001, 0.3) \
+    F(pEnvCurve,   "Pitch Env Curve", -1, 1, 0.5, 0.01, 0) \
+    C(pEnvTarget,  "Pitch Env Target", kListPEnvTarget, 0) \
+    F(pEnvVel,     "Pitch Env Velocity", 0, 1, 0, 0.01, 0) \
+    B(mseg1Sync,   "MSEG 1 Sync", false) \
+    F(mseg1Scale,  "MSEG 1 Time Scale", 0.25, 4, 1, 0.01, 1) \
+    B(mseg2Sync,   "MSEG 2 Sync", false) \
+    F(mseg2Scale,  "MSEG 2 Time Scale", 0.25, 4, 1, 0.01, 1)
 
 enum ParamIndex
 {

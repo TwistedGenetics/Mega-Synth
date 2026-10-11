@@ -38,7 +38,7 @@ namespace
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
             || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni") || id.startsWith ("pEnv") || id.startsWith ("mseg")
-            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx") || id.startsWith ("flt");
+            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx") || id.startsWith ("flt") || id.startsWith ("pf");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -360,6 +360,23 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
         static const int rptBase[] = { -1, 4, 16, 28 };
         const int rn = rptBase[juce::jlimit (0, 3, snap.i (P_rptMidi))];
         if (rn >= 0 && m.getNoteNumber() == rn) { engine.fx().setStutterHeld (m.isNoteOn()); return; }
+    }
+    // Performance FX: thirteen keys from the chosen note play the pads (and aren't played)
+    if (m.isNoteOnOrOff())
+    {
+        static const int pfBase[] = { -1, 36, 48, 60, 72, 84, 96 };
+        const int pb = pfBase[juce::jlimit (0, 6, snap.i (P_pfKeys))];
+        const int nn = m.getNoteNumber();
+        if (pb >= 0 && nn >= pb && nn < pb + kPfPads)
+        {
+            const int idx = P_pfRoll + (nn - pb);
+            float v;
+            if (snap.i (P_pfLatch) != 0) { if (! m.isNoteOn()) return; v = snap.v[idx] > 0.5f ? 0.0f : 1.0f; }   // latched: each press toggles
+            else v = m.isNoteOn() ? 1.0f : 0.0f;
+            setParamFromAudio (idx, v);
+            snap.v[idx] = v;   // from this sample on, not from the next block
+            return;
+        }
     }
     if (m.isNoteOn())
     {
@@ -967,6 +984,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 11) setEnvDefaultsForOldPatch();
     if (version < 12) { setMasterDefaultsForOldPatch(); setMixerDefaultsForOldPatch(); }
     if (version < 13) setCharDefaultsForOldPatch();
+    if (version < 14) setPerfDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1186,6 +1204,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("mfOn")) setMasterDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("mxOsc1Pan")) setMixerDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("flt1Char")) setCharDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("pfRoll")) setPerfDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -1390,6 +1409,18 @@ void MegaSynthProcessor::setMasterDefaultsForOldPatch()
     {
         const juce::String id (kParamIds[i]);
         if (! (id.startsWith ("mf") || id == "outGain")) continue;
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setPerfDefaultsForOldPatch()
+{
+    // Before Performance FX: every pad off, the settings and XY pads at their defaults
+    for (int i = P_pfRoll; i <= P_pfSpring2; ++i)
+    {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture();
         prm->setValueNotifyingHost (prm->getDefaultValue());

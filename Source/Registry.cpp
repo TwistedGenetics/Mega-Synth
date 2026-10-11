@@ -71,6 +71,7 @@ namespace
         if (id.startsWith ("flt1")) return "Filter";
         if (id.startsWith ("flt2")) return "Filter 2";
         if (id == "outGain") return "Output";
+        if (id.startsWith ("pf")) return "Performance FX";
         if (id.startsWith ("pEnv")) return "Pitch Envelope";
         if (id.startsWith ("mseg")) return "MSEG";
         if (id.startsWith ("chd")) return "Chord Memory";
@@ -187,7 +188,9 @@ namespace
             if (id == "outGain") { m.category = Category::Performance; m.group = MutGroup::None; }
             if (id.startsWith ("mx")) { m.category = Category::Mixer; m.group = MutGroup::None; }   // the mix stays put when mutating
             if (id.startsWith ("flt") || id.startsWith ("mfChar")) { m.category = Category::Filter; m.group = MutGroup::None; }   // character models: chosen, not mutated
+            if (id.startsWith ("pf")) { m.category = Category::Fx; m.group = MutGroup::None; }   // Performance FX: played, not mutated
             m.unit = unitFor (id);
+            if (id.startsWith ("pf")) m.unit = id == "pfCrushRate" ? "Hz" : id == "pfPitchGlide" ? "s" : id == "pfPitchAmt" ? "st" : id == "pfTapeTime" ? "beats" : juce::String();
             if (id == "mfCutoff") m.unit = "Hz";
             if (id == "mfDrive" || id == "outGain") m.unit = "dB";
             m.path = juce::String (categoryName (m.category)).toLowerCase() + "." + id;
@@ -197,7 +200,8 @@ namespace
                                             "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum", "mutSeed", "dsSteps",
                                             "chdSpread", "chdInversion", "arpOctaves", "arpVelFixed", "arpRepeats", "arpSteps",
                                             "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices" });
-            m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin;
+            m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin
+                            && ! isAny (id, { "pfX1", "pfY1", "pfX2", "pfY2" });   // the XY pads are sources, not destinations
             float adScale;
             m.audioRate = m.modulatable && audioDestFor (i, adScale) >= 0;   // what the voice can drive per sample
 

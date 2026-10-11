@@ -10,6 +10,7 @@
 #include "Mut/DnaSplice.h"
 #include "Mut/Resonator.h"
 #include "Fx/MasterFilter.h"
+#include "Fx/PerfFx.h"
 #include "Mut/Granular.h"
 #include "Mut/Spectral.h"
 #include "Mut/FeedbackMatrix.h"
@@ -277,6 +278,8 @@ public:
 
     FxBus& fx() { return fxBus; }
     const FxBus& fx() const { return fxBus; }
+    PerfFx& perf() { return perfFx; }
+    const PerfFx& perf() const { return perfFx; }
     const Granular& granular() const { return gran; }
     // DNA Sequencer: the step store, and its position (in steps) at the middle of the next render call
     void setDnaSequencer (const DnaSeqStore* st) { dnaStore = st; }
@@ -310,6 +313,7 @@ private:
     double lfoFreePh[4] {};
     Voice voices[kMaxVoices];
     FxBus fxBus;
+    PerfFx perfFx;               // Performance FX: after the effects rack, before the Master Filter
     MasterFilter masterFilter;   // after every effect
     OutputTrim outTrim;          // the very last stage
     Granular gran;           // bus stages: summed voices -> granular / spectral -> effects

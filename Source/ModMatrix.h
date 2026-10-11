@@ -73,7 +73,11 @@ enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_
     X(ArpGate,     "Arp Step Gate",     K_SEQ,    false) \
     X(Sidechain,   "Sidechain Envelope", K_FOLLOW, false) \
     X(Mseg1,       "MSEG 1",            K_ENV,    false) \
-    X(Mseg2,       "MSEG 2",            K_ENV,    false)
+    X(Mseg2,       "MSEG 2",            K_ENV,    false) \
+    X(PfX1,        "XY Pad 1 X",        K_MACRO,  true)  \
+    X(PfY1,        "XY Pad 1 Y",        K_MACRO,  true)  \
+    X(PfX2,        "XY Pad 2 X",        K_MACRO,  true)  \
+    X(PfY2,        "XY Pad 2 Y",        K_MACRO,  true)
 
 enum ModSource
 {

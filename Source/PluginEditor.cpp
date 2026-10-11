@@ -8,6 +8,7 @@
 #include "ParamFormat.h"
 #include "Registry.h"
 #include "UI/Overview.h"
+#include "UI/PerfFxPage.h"
 
 using namespace tg;
 using namespace tgui;
@@ -1357,7 +1358,7 @@ void MegaSynthEditor::buildPages()
     // The tabs, in signal-flow order. A tab with sub-tabs is a GroupPage; every page is found by its name.
     struct TabDef { const char* name; juce::StringArray subs; juce::Colour colour; };
     const TabDef layout[] = {
-        { "Perform", {}, col::accent }, { "Overview", {}, col::accent },
+        { "Perform", { "Perform", "Performance FX" }, col::accent }, { "Overview", {}, col::accent },
         { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring" }, col::osc },
         { "Mixer", {}, col::mixer }, { "Filters", {}, col::filter },
         { "Envelopes", { "Amp & Filter", "Mod Envelopes", "Pitch Envelope", "MSEG 1 & 2" }, col::env },
@@ -1379,7 +1380,7 @@ void MegaSynthEditor::buildPages()
             auto* group = new GroupPage (proc, t.subs, t.colour);
             tabs.addTab (t.name, col::bg, group, true);
             for (int i = 0; i < group->numSubs(); ++i) pageIndex[t.subs[i]] = { tabIndex, i, group->sub (i) };
-            pageIndex[t.name] = { tabIndex, -1, group->sub (0) };
+            if (pageIndex.find (t.name) == pageIndex.end()) pageIndex[t.name] = { tabIndex, -1, group->sub (0) };   // (a group can share its first page's name)
         }
     }
     auto addPage = [this] (const juce::String& name) -> Page*
@@ -1474,6 +1475,98 @@ void MegaSynthEditor::buildPages()
             snd->setBounds (660, 180, W - g - 660, 212);
             arpS->setBounds (660, 400, W - g - 660, H - 400 - g - 22);
             help->setBounds (g, H - 28, W - 2 * g, 20);
+        };
+    }
+
+    // ---------------------------------------------------------------- Perform > Performance FX
+    {
+        auto* page = addPage ("Performance FX");
+        auto* padSec = sec (page, "Pads  (Hold a pad to play it; with Latch on, click it on and off. A new pad waits for the next line of the "
+                                  "Quantise grid, then fades in over 4 ms; letting go fades it out at once. Several can play together, "
+                                  "in the order numbered on the pads: 1 the time pads (the last one pressed wins), 2 Pitch Down, 3 Stutter, "
+                                  "4 Trance Gate, 5 DJ Filter, 6 Bitcrush, 7 Vinyl, 8 Echo Throw, 9 Reverb Throw. Echo and Reverb Throw ring on "
+                                  "after you let go. Right-click a pad for MIDI Learn; MIDI Keys plays them from 13 keys.)", col::fx);
+        auto* ticker = page->own (new PerfTicker());
+        juce::Array<PerfPad*> pads;
+        for (int k = 0; k < kPfPads; ++k)
+        {
+            auto* pd = page->own (new PerfPad (proc, k, k < PerfFx::kTimePads ? col::seq : (k >= PerfFx::Echo ? col::mod : col::fx)));
+            pads.add (pd); ticker->pads.add (pd);
+        }
+        auto* latch = page->own (new ParamToggle (proc, P_pfLatch, "Latch", col::fx));
+        auto* quant = page->own (new Choice (proc, P_pfQuant, "Quantise"));
+        auto* keys = page->own (new Choice (proc, P_pfKeys, "MIDI Keys"));
+        auto* order = page->own (new juce::Label ({}, "Order: 1 Time (Repeat / Reverse / Tape Stop / Tape Start / Backspin)  >  2 Pitch Down  >  3 Stutter  >  4 Trance Gate  >  "
+                                                     "5 DJ Filter  >  6 Bitcrush  >  7 Vinyl  >  8 Echo Throw  >  9 Reverb Throw  >  Master Filter"));
+        order->setColour (juce::Label::textColourId, col::muted);
+        order->setFont (juce::Font (juce::FontOptions (11.0f)));
+
+        auto* xySec = sec (page, "XY Pads  (Kaoss-style: X and Y are Mod Matrix sources, so each axis can drive any Performance FX setting or any "
+                                 "Mod Matrix destination. Assign adds a route (you can change its depth in the Mod Matrix). Spring: back to the centre "
+                                 "when you let go; off, it stays where you leave it.)", col::mod);
+        juce::Array<PerfXY*> xys;
+        juce::Array<juce::Component*> xyCtl;
+        for (int k = 0; k < 2; ++k)
+        {
+            auto* xy = page->own (new PerfXY (proc, k));
+            xys.add (xy); ticker->xys.add (xy);
+            auto* ax = page->own (new juce::TextButton ("Assign X"));
+            auto* ay = page->own (new juce::TextButton ("Assign Y"));
+            ax->onClick = [xy, ax] { xy->showAssign (true, ax); };
+            ay->onClick = [xy, ay] { xy->showAssign (false, ay); };
+            auto* sp = page->own (new ParamToggle (proc, P_pfSpring1 + k, "Spring", col::mod));
+            xyCtl.add (ax); xyCtl.add (ay); xyCtl.add (sp);
+        }
+
+        auto* set = sec (page, "Pad Settings", col::fx);
+        set->choice (P_pfRollRate, "Repeat Length", 104);
+        set->knob (P_pfTapeTime, "Tape Time", 66);
+        set->knob (P_pfPitchAmt, "Pitch Amt", 66);
+        set->knob (P_pfPitchGlide, "Glide", 66);
+        set->choice (P_pfStutterRate, "Stutter Rate", 96);
+        set->choice (P_pfGatePattern, "Gate Pattern", 118);
+        set->knob (P_pfGateDepth, "Gate Depth", 66);
+        set->knob (P_pfDjPos, "DJ Filter", 66);
+        set->knob (P_pfDjRes, "DJ Res", 66);
+        set->newRow();
+        set->knob (P_pfCrushBits, "Crush Bits", 66);
+        set->knob (P_pfCrushRate, "Crush Rate", 66);
+        set->knob (P_pfVinylAmt, "Vinyl", 66);
+        set->choice (P_pfEchoTime, "Echo Time", 130);
+        set->knob (P_pfEchoFb, "Echo Fdbk", 66);
+        set->knob (P_pfEchoMix, "Echo Level", 66);
+        set->knob (P_pfVerbSize, "Verb Size", 66);
+        set->knob (P_pfVerbMix, "Verb Level", 66);
+        set->add (new ParamToggle (proc, P_pfVerbFreeze, "Freeze", col::fx), 80, 40);
+
+        page->onResize = [page, padSec, pads, latch, quant, keys, order, xySec, xys, xyCtl, set]
+        {
+            const int g = 10, W = page->getWidth();
+            const int padW = 760;
+            padSec->setBounds (g, g, padW, 300);
+            const int cols = 5, pw = (padW - 20 - (cols - 1) * 8) / cols, ph = 64;
+            for (int k = 0; k < pads.size(); ++k)
+                pads[k]->setBounds (g + 10 + (k % cols) * (pw + 8), g + 34 + (k / cols) * (ph + 8), pw, ph);
+            // the last row: Vinyl, Echo, Reverb, then the switches
+            const int ry = g + 34 + 2 * (ph + 8), cx = g + 10 + 3 * (pw + 8);
+            latch->setBounds (cx, ry + 16, 76, 30);
+            quant->setBounds (cx + 80, ry, pw * 2 + 8 - 80, 44);
+            keys->setBounds (g + 10, ry + ph + 10, 220, 44);
+            order->setBounds (g + 240, ry + ph + 18, padW - 250, 34);
+            order->setMinimumHorizontalScale (0.8f);
+            const int xx = g + padW + g, xw = W - xx - g;
+            xySec->setBounds (xx, g, xw, 300);
+            const int side = juce::jmin ((xw - 30) / 2, 220);
+            for (int k = 0; k < 2; ++k)
+            {
+                const int x0 = xx + 10 + k * (side + 10);
+                xys[k]->setBounds (x0, g + 34, side, side - 2);
+                const int by = g + 34 + side + 4, bw = (side - 8) / 3;
+                xyCtl[k * 3]->setBounds (x0, by, bw, 24);
+                xyCtl[k * 3 + 1]->setBounds (x0 + bw + 4, by, bw, 24);
+                xyCtl[k * 3 + 2]->setBounds (x0 + 2 * (bw + 4), by - 3, bw + 6, 30);
+            }
+            set->setBounds (g, g + 310, W - 2 * g, 216);
         };
     }
 

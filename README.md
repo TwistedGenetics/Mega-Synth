@@ -48,7 +48,7 @@ The tabs follow the signal: the oscillators, the mix, the filters, the envelopes
 
 | Tab | Sub-tabs |
 |---|---|
-| Perform | (one page) |
+| Perform | Perform, Performance FX |
 | Overview | (one page) |
 | Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring |
 | Mixer | (one page) |
@@ -154,6 +154,38 @@ A console, in the order the sound flows:
 - **Effect Returns**: Delay, Reverb, Shimmer, Chorus, Reverse.
 - **Analog**: Warmth, Bass Keep, Drift.
 - **Output**: Master Volume (before the effects, as always), the Master Filter's On and Cutoff, the Output trim, and a stereo meter with the peak held.
+
+## Performance FX (Perform > Performance FX)
+
+Thirteen pads to play live on the whole mix. They sit after the effects rack and before the Master Filter and Output. With no pad engaged, and the echo and reverb tails gone, the stage doesn't touch the audio at all, so patches sound exactly as before.
+
+- **Playing:** hold a pad to play it, and let go to stop. With **Latch** on, a click switches a pad on and the next click switches it off.
+- **Quantise** (Off, 1/16, 1/8, 1/4, 1/2, 1 bar; default 1/16): a pressed pad waits for the next line of that grid, counted from the bar, then fades in over 4 ms. Letting go fades it out at once. The grid follows the DAW's position while it plays (a pad shows an amber outline while it waits), and the synth's own tempo otherwise.
+- **Several pads at once** run in a fixed order, numbered on the pads:
+  1. Time pads (the last one pressed wins): **Beat Repeat** (1/4, 1/8, 1/16, 1/32, 1/8T, 1/16T), **Reverse** (the last bar, backwards), **Tape Stop**, **Tape Start**, **Backspin**. Tape Time sets the stop, start and spin length in beats.
+  2. **Pitch Down**: down by Pitch Amount (an octave by default), gliding over Glide, then gliding back up when released.
+  3. **Stutter**: a hard gate at 1/16, 1/32 or 1/64.
+  4. **Trance Gate**: 8 sixteen-step patterns, with a Depth control.
+  5. **DJ Filter**: one knob, low pass to the left and high pass to the right, with Res.
+  6. **Bitcrush**: Bits and Rate.
+  7. **Vinyl**: wow, crackle, hiss and a duller top.
+  8. **Echo Throw**: what you play while holding goes into a synced ping-pong delay (1/16 to 1/2) that keeps ringing after you let go.
+  9. **Reverb Throw**: the same, into a reverb. With **Freeze** on, holding it fills the reverb for a 1/4 note, then holds the tail still until you let go.
+- **XY Pads (two, Kaoss-style):**
+  - X and Y are Mod Matrix sources ("XY Pad 1 X" and so on), so each axis can drive any Performance FX setting or any Mod Matrix destination.
+  - **Assign X / Assign Y** adds the route; change its depth in the Mod Matrix. The XY sources are also in every knob's "Modulate with" menu.
+  - **Spring:** the pad glides back to the centre when you let go. Switch it off and the pad stays where you leave it.
+- **MIDI:**
+  - **MIDI Keys** plays the 13 pads from 13 keys starting at C1, C2, C3, C4, C5 or C6. The key name is shown on each pad. Those keys play pads, not notes.
+  - Right-click a pad for MIDI Learn (CC 64 and above switches it on).
+  - Every pad and setting is a real, automatable parameter.
+- **What's saved:** everything is saved in patches, projects, undo and A/B. It isn't part of Mutate or the scenes. Older patches and projects load with every pad off.
+- **CPU:** about 0.08% of one core when idle (it keeps 8 s of recent audio for Reverse and Backspin), 0.4% with one pad, and 5.5% with all 13 at once. It's the same at every Quality setting.
+- **Approximations:**
+  - The tape and backspin pads read the recent audio at a changing speed, with linear interpolation (fine for this; not a high-end resampler).
+  - Pitch Down is a two-tap delay-line shifter (50 ms window), so it has a little of that classic "chorusy" pitch-shift sound rather than a clean formant-preserving shift.
+  - The reverb is a small Freeverb-style network (4 combs and 2 all-passes per side).
+  - Echo and reverb tails are cut once they fall below -100 dB.
 
 ## Master Filter and Output (Filters tab, and the Mixer's Output section)
 

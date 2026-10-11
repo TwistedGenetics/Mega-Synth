@@ -9,6 +9,7 @@
 #include "Mut/Mutator.h"
 #include "UI/FilterPanel.h"
 #include "UI/PatchBrowser.h"
+#include "UI/PerfFxPage.h"
 #include "UI/Overview.h"
 
 using namespace tg;
@@ -1492,7 +1493,7 @@ int main()
             r->importBrowserPatch (juce::JSON::toString (obj));
             CHECK (r->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f && r->param (P_lfo1Custom + 2 * X)->getValue() < 0.5f, "old patches load with the original LFOs");
             // an old project: state version 6
-            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"6\"");
+            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"6\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (xml), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (o->param (P_lfo1Sync + 2 * X)->getValue() < 1e-6f, "old projects load with the original LFOs");
@@ -1713,7 +1714,7 @@ int main()
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->arpStore.toJson() == p->arpStore.toJson() && r->param (P_chdPreset)->getValue() == p->param (P_chdPreset)->getValue(), "arp and chord saved in patches");
             setP (*p, P_arpOn, 1.0f); juce::MemoryBlock mb2; p->getStateInformation (mb2);
-            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"13\"", "stateVersion=\"7\"");
+            auto x2 = getXmlFromBinaryForTest (mb2).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"7\"");
             {   // a version 7 project has no arpeggiator data at all
                 const int a0 = x2.indexOf (" arp=\"");
                 if (a0 >= 0) { const int a1 = x2.indexOfChar (a0 + 6, '"'); x2 = x2.substring (0, a0) + x2.substring (a1 + 1); }
@@ -1836,7 +1837,7 @@ int main()
             CHECK (p->getEngine().liveSrc[MS_Sidechain].load() > 0.3f, "Sidechain Envelope mod source");
             setP (*p, P_vshSidechain, 1.0f); setP (*p, P_schThresh, -10.0f);
             juce::MemoryBlock mb; p->getStateInformation (mb);
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"8\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"8\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (q->param (P_vshSidechain)->getValue() < 0.5f && std::abs (q->param (P_schThresh)->convertFrom0to1 (q->param (P_schThresh)->getValue()) + 24.0f) < 0.1f, "old projects: sidechain off");
@@ -1956,7 +1957,7 @@ int main()
         {
             auto p = make(); setP (*p, P_uni2Voices, 6.0f);
             juce::MemoryBlock mb; p->getStateInformation (mb);
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"9\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"9\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto q = make(); q->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (juce::roundToInt (q->param (P_uni2Voices)->convertFrom0to1 (q->param (P_uni2Voices)->getValue())) == 1, "old projects: no unison");
@@ -2091,7 +2092,7 @@ int main()
             CHECK (q->msegs.toJson() == p->msegs.toJson() && std::abs (q->param (P_pEnvAmt)->convertFrom0to1 (q->param (P_pEnvAmt)->getValue()) - 7.0f) < 0.01f, "pitch env and MSEGs saved in the project");
             auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
             CHECK (r->msegs.toJson() == p->msegs.toJson(), "MSEGs saved in patches");
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"10\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"10\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (std::abs (o->param (P_pEnvAmt)->convertFrom0to1 (o->param (P_pEnvAmt)->getValue())) < 1e-4f, "old projects: no pitch envelope");
@@ -2301,6 +2302,7 @@ int main()
             if (auto* k = dynamic_cast<tgui::Knob*> (c)) ids.insert (kParamIds[k->paramIndex]);
             if (auto* sg = dynamic_cast<tgui::Segmented*> (c); sg != nullptr && sg->getParam() >= 0) ids.insert (kParamIds[sg->getParam()]);
             if (c->getProperties().contains ("megaParam")) ids.insert (kParamIds[(int) c->getProperties()["megaParam"]]);
+            if (auto* xy = dynamic_cast<tgui::PerfXY*> (c)) { ids.insert (kParamIds[xy->px()]); ids.insert (kParamIds[xy->py()]); }
             for (auto* ch : c->getChildren()) walk (ch);
         };
         walk (ed.get());
@@ -3068,7 +3070,7 @@ int main()
             juce::MemoryBlock mb; p->getStateInformation (mb);
             auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
             CHECK (plain (*q, P_mfOn) > 0.5f && std::abs (plain (*q, P_mfCutoff) - 640.0f) < 1.0f, "saved in projects");
-            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"13\"", "stateVersion=\"11\"");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"11\"");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
             auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
             CHECK (plain (*o, P_mfOn) < 0.5f && std::abs (plain (*o, P_outGain)) < 1e-4f, "old projects: no Master Filter, Output 0 dB");
@@ -3363,6 +3365,265 @@ int main()
             std::cout << "  CPU per stereo voice (% of a core): " << line << std::endl;
         }
     };
+    // ---- Performance FX
+    auto perfTests = [&]
+    {
+        std::cout << "Performance FX" << std::endl;
+        using PF = tg::PerfFx;
+        auto sine = [&] (std::vector<float>& v, double f, float a, int64_t off = 0)
+        { for (size_t i = 0; i < v.size(); ++i) v[i] = a * (float) std::sin (2.0 * kPi * f * (double) ((int64_t) i + off) / sr); };
+        // a whole run through the stage on its own, block by block; pads: (pad, from sample, to sample)
+        struct Press { int pad; int from, to; };
+        auto runFx = [&] (PF& fx, const std::vector<float>& in, std::vector<float>& outL, std::vector<float>& outR, const std::vector<Press>& presses,
+                          PF::Settings st, PF::Clock ck, int block = 64)
+        {
+            outL = in; outR = in;
+            for (int pos = 0; pos < (int) in.size(); pos += block)
+            {
+                const int n = std::min (block, (int) in.size() - pos);
+                for (int k = 0; k < PF::kPads; ++k) st.pad[k] = false;
+                for (auto& pr : presses) if (pos >= pr.from && pos < pr.to) st.pad[pr.pad] = true;
+                PF::Clock c = ck; c.beat = ck.beat + ck.beatInc * pos;
+                fx.process (outL.data() + pos, outR.data() + pos, n, st, c);
+            }
+        };
+        PF::Clock ck; ck.tempo = 120.0; ck.beatInc = 120.0 / 60.0 / sr; ck.beat = 0.0; ck.barOrigin = 0.0;
+        // 1. nothing engaged: the audio is untouched, bit for bit
+        {
+            PF fx; fx.prepare (sr);
+            std::vector<float> in ((size_t) sr), l, r;
+            juce::Random rnd (7); for (auto& x : in) x = rnd.nextFloat() * 2.0f - 1.0f;
+            PF::Settings st; runFx (fx, in, l, r, {}, st, ck);
+            CHECK (l == in && r == in && ! fx.busy(), "nothing engaged: bit-exact bypass");
+        }
+        // 2. every pad: engaged, released, and the sound returns to the dry signal exactly (no clicks on the way)
+        {
+            juce::StringArray clicky, notBack;
+            for (int k = 0; k < PF::kPads; ++k)
+            {
+                const int N = (int) ((k == PF::Echo || k == PF::Verb ? 14.0 : 3.0) * sr);
+                std::vector<float> in ((size_t) N); sine (in, 220.0, 0.5f);
+                PF fx; fx.prepare (sr);
+                PF::Settings st; st.quant = 0;
+                std::vector<float> l, r;
+                const int from = 4801, to = (int) (1.3 * sr) + 17;
+                runFx (fx, in, l, r, { { k, from, to } }, st, ck);
+                // the slope of a clean 220 Hz sine at 0.5 is 0.0144 a sample; a click is a jump of a large part of the level
+                float worst = 0.0f;
+                for (int i = 1; i < N; ++i) worst = std::max (worst, std::abs (l[(size_t) i] - l[(size_t) (i - 1)]));
+                const float limit = (k == PF::Crush || k == PF::Vinyl) ? 1.0f : 0.09f;   // bitcrush and vinyl crackle are steps by design
+                if (worst > limit) clicky.add (juce::String (PF::padName (k)) + " " + juce::String (worst, 3));
+                // back to dry: 10 ms after letting go (Pitch Down glides back first; the throws ring out)
+                int back = to + (int) (0.01 * sr);
+                if (k == PF::PitchDown) back = to + (int) (0.35 * sr);
+                if (k == PF::Echo || k == PF::Verb)
+                {
+                    back = N;
+                    for (int i = N - 1; i > to; --i) if (l[(size_t) i] != in[(size_t) i]) { back = i + 1; break; }
+                    std::cout << "  " << PF::padName (k) << " tail: " << juce::String ((back - to) / sr, 2) << " s" << std::endl;
+                    if (back >= N - 1) notBack.add (juce::String (PF::padName (k)) + " (tail still going)");
+                }
+                bool exact = true;
+                for (int i = back; i < N; ++i) if (l[(size_t) i] != in[(size_t) i] || r[(size_t) i] != in[(size_t) i]) { exact = false; break; }
+                if (! exact) notBack.add (PF::padName (k));
+                // and while held it does something
+                double d = 0; for (int i = from + 2000; i < to - 100; ++i) d += std::abs (l[(size_t) i] - in[(size_t) i]);
+                if (d < 1.0 && k != PF::Dj) notBack.add (juce::String (PF::padName (k)) + " (does nothing)");
+            }
+            CHECK (clicky.isEmpty(), "no clicks engaging / releasing pads" + (clicky.isEmpty() ? juce::String() : ": " + clicky.joinIntoString (", ")));
+            CHECK (notBack.isEmpty(), "every pad returns to the dry sound exactly" + (notBack.isEmpty() ? juce::String() : ": " + notBack.joinIntoString (", ")));
+        }
+        // 3. the DJ filter: dark to the left, thin to the right, transparent in the middle
+        {
+            auto bright = [&] (float pos)
+            {
+                PF fx; fx.prepare (sr); PF::Settings st; st.quant = 0; st.djPos = pos;
+                std::vector<float> in ((size_t) sr), l, r; juce::Random rnd (3); for (auto& x : in) x = (rnd.nextFloat() - 0.5f) * 0.5f;
+                runFx (fx, in, l, r, { { PF::Dj, 0, (int) sr } }, st, ck);
+                double hi = 0, lo = 0; float a = 0, b = 0;
+                for (size_t i = 24000; i < in.size(); ++i) { const float d = l[i] - a; a = l[i]; hi += d * d; b += (l[i] - b) * 0.01f; lo += b * b; }
+                return std::make_pair (hi, lo);
+            };
+            const auto dark = bright (-0.8f), mid = bright (0.0f), thin = bright (0.8f);
+            CHECK (dark.first < mid.first * 0.05 && thin.second < mid.second * 0.1, "DJ filter: LP left, HP right");
+        }
+        // 4. on the beat grid: 90 / 140 / 174 BPM, starting mid-bar; 1/16, 1/4 and bar grids
+        for (double bpm : { 90.0, 140.0, 174.0 })
+            for (int q : { 1, 3, 5 })
+            {
+                PF fx; fx.prepare (sr);
+                PF::Clock c; c.tempo = bpm; c.beatInc = bpm / 60.0 / sr; c.beat = 7.31; c.barOrigin = 4.0; c.beatsPerBar = 4.0;
+                PF::Settings st; st.quant = q; st.crushBits = 2.0f;
+                const int N = (int) (3.0 * sr);
+                std::vector<float> in ((size_t) N), l, r; sine (in, 330.0, 0.3f);
+                const int press = 1000;
+                runFx (fx, in, l, r, { { PF::Crush, press, N } }, st, c, 37);
+                int first = -1; for (int i = 0; i < N; ++i) if (l[(size_t) i] != in[(size_t) i]) { first = i; break; }
+                const double g = PF::gridBeats (q, 4.0), atPress = c.beat + c.beatInc * press;
+                const double line = std::ceil ((atPress - c.barOrigin) / g - 1e-9) * g + c.barOrigin;
+                const int expect = (int) std::ceil ((line - c.beat) / c.beatInc - 1e-9);
+                CHECK (first >= 0 && std::abs (first - expect) <= 1, "quantised engage lands on the grid at " + juce::String (bpm) + " BPM, grid " + juce::String (g)
+                       + " (sample " + juce::String (first) + ", grid line at " + juce::String (expect) + ")");
+            }
+        // 5. Beat Repeat at 174 BPM: a 1/16 repeated
+        {
+            const double bpm = 174.0;
+            PF fx; fx.prepare (sr);
+            PF::Clock c; c.tempo = bpm; c.beatInc = bpm / 60.0 / sr; c.beat = 0.0;
+            PF::Settings st; st.quant = 0; st.rollRate = 2;
+            const int N = (int) sr;
+            std::vector<float> in ((size_t) N), l, r;
+            for (int i = 0; i < N; ++i) in[(size_t) i] = 0.3f * (float) (std::sin (2.0 * kPi * 197.0 * i / sr) + std::sin (2.0 * kPi * 331.0 * i / sr + 0.4 * std::sin (2.0 * kPi * 3.0 * i / sr)));
+            runFx (fx, in, l, r, { { PF::Roll, 0, N } }, st, c);
+            const double slice = 0.25 * 60.0 / bpm * sr;
+            double err = 0, ref = 0;
+            for (int i = 200; i < (int) slice - 200; ++i)
+            {
+                const double a = l[(size_t) i], b = l[(size_t) (i + (int) std::lround (3 * slice))];
+                err += (a - b) * (a - b); ref += a * a;
+            }
+            CHECK (err < ref * 0.05, "Beat Repeat at 174 BPM repeats the first 1/16 (" + juce::String (err / (ref + 1e-12), 4) + ")");
+        }
+        // 6. in the synth: host-locked, play pressed mid-bar; MIDI keys play the pads and aren't heard as notes
+        for (double bpm : { 90.0, 140.0, 174.0 })
+        {
+            struct FakeHead : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+            FakeHead head;
+            auto p = std::make_unique<MegaSynthProcessor>();
+            p->setPlayConfigDetails (0, 2, sr, 512); p->prepareToPlay (sr, 512); p->setPlayHead (&head);
+            setP (*p, P_pfQuant, 3.0f); setP (*p, P_pfKeys, 1.0f);
+            const double inc = bpm / 60.0 / sr; double ppq = 7.31;
+            juce::AudioBuffer<float> buf (2, 128);
+            for (int pos = 0; pos < (int) (1.5 * sr); pos += 128)
+            {
+                head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+                head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+                juce::MidiBuffer m;
+                if (pos == 0) m.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100), 0);
+                if (pos == 4096) m.addEvent (juce::MidiMessage::noteOn (1, 36 + PF::Crush, (juce::uint8) 100), 50);
+                buf.clear(); p->processBlock (buf, m); ppq += 128 * inc;
+            }
+            p->setPlayHead (nullptr);
+            const double at = p->getEngine().perf().lastEngagedBeat (PF::Crush);
+            const double line = std::ceil (7.31 + 4146 * inc);   // the next beat after the key
+            CHECK (std::abs (at - line) <= inc * 1.01, "host at " + juce::String (bpm) + " BPM, play pressed mid-bar: the MIDI key's pad lands on the beat (beat "
+                   + juce::String (at, 6) + ", line " + juce::String (line) + ")");
+            CHECK (p->param (P_pfCrush)->getValue() > 0.5f && p->getEngine().perf().state (PF::Crush) == PF::On, "the MIDI key set the pad's parameter and it plays");
+
+        }
+        {
+            // the key isn't played as a note; Latch makes a key toggle
+            auto p = make(); setP (*p, P_pfKeys, 1.0f);
+            juce::AudioBuffer<float> b (2, 256); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100), 0);
+            p->processBlock (b, m);
+            CHECK (b.getMagnitude (0, 0, 256) == 0.0f && p->param (P_pfRoll)->getValue() > 0.5f, "a pad key plays the pad, not a note");
+            juce::MidiBuffer off; off.addEvent (juce::MidiMessage::noteOff (1, 36), 0); p->processBlock (b, off);
+            CHECK (p->param (P_pfRoll)->getValue() < 0.5f, "letting go of the key lets go of the pad");
+            setP (*p, P_pfLatch, 1.0f);
+            juce::MidiBuffer on2; on2.addEvent (juce::MidiMessage::noteOn (1, 37, (juce::uint8) 100), 0); on2.addEvent (juce::MidiMessage::noteOff (1, 37), 10);
+            p->processBlock (b, on2);
+            CHECK (p->param (P_pfReverse)->getValue() > 0.5f, "latched: a press switches the pad on and it stays on");
+            juce::MidiBuffer on3; on3.addEvent (juce::MidiMessage::noteOn (1, 37, (juce::uint8) 100), 0); p->processBlock (b, on3);
+            CHECK (p->param (P_pfReverse)->getValue() < 0.5f, "latched: the next press switches it off");
+        }
+        // 7. parameters: automatable, MIDI-learnable, Mod Matrix destinations where continuous; the XY pads are sources
+        {
+            bool ok = true;
+            for (int i = P_pfRoll; i <= P_pfSpring2; ++i)
+            {
+                const auto& m = tg::meta (i);
+                if (m.module != "Performance FX" || m.group != MutGroup::None || m.category != Category::Fx) ok = false;
+                if (m.scale != Scale::Toggle && m.scale != Scale::Choice && ! m.modulatable && i != P_pfX1 && i != P_pfY1 && i != P_pfX2 && i != P_pfY2) ok = false;
+            }
+            CHECK (ok && ! tg::meta (P_pfX1).modulatable && tg::meta (P_pfDjPos).modulatable, "Performance FX parameters: one module, continuous ones are destinations, not mutated");
+            juce::StringArray badText;
+            for (int i = P_pfRoll; i <= P_pfSpring2; ++i)
+            {
+                const auto& m = tg::meta (i);
+                if (m.scale == Scale::Toggle || m.scale == Scale::Choice) continue;
+                for (float t : { 0.1f, 0.5f, 0.93f })
+                {
+                    const float v = m.min + (m.max - m.min) * t;
+                    const float back = parseParam (i, formatParam (i, v));
+                    if (std::abs (back - v) > (m.max - m.min) * 0.01f) badText.add (kParamIds[i] + juce::String (" ") + formatParam (i, v));
+                }
+            }
+            CHECK (badText.isEmpty(), "typed values read back" + (badText.isEmpty() ? juce::String() : ": " + badText.joinIntoString (", ")));
+            auto p = make();
+            setP (*p, P_pfX1, 1.0f);
+            p->addRoute (MS_PfX1, P_pfDjPos, 0.5f);
+            p->addRoute (MS_PfY2, P_filterCutoff, 0.5f);
+            setP (*p, P_pfY2, 0.0f);
+            juce::AudioBuffer<float> b (2, 512); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            for (int k = 0; k < 4; ++k) { b.clear(); p->processBlock (b, m); m.clear(); }
+            const float dj = p->getEngine().liveOffset[(size_t) P_pfDjPos].load(), cut = p->getEngine().liveOffset[(size_t) P_filterCutoff].load();
+            CHECK (std::abs (dj - 0.5f) < 0.02f && std::abs (cut + 0.5f) < 0.02f, "XY pads drive Performance FX and voice destinations (" + juce::String (dj, 3) + ", " + juce::String (cut, 3) + ")");
+        }
+        // 8. saved in projects and patches, undo and A/B; old projects have every pad off
+        {
+            auto plain = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+            auto p = make(); setP (*p, P_pfEcho, 1.0f); setP (*p, P_pfDjPos, 0.4f); setP (*p, P_pfGatePattern, 5.0f); setP (*p, P_pfX2, 0.8f); setP (*p, P_pfLatch, 1.0f);
+            auto same = [&] (MegaSynthProcessor& q) { return plain (q, P_pfEcho) > 0.5f && std::abs (plain (q, P_pfDjPos) - 0.4f) < 0.01f && juce::roundToInt (plain (q, P_pfGatePattern)) == 5
+                                                         && std::abs (plain (q, P_pfX2) - 0.8f) < 0.01f && plain (q, P_pfLatch) > 0.5f; };
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (same (*q), "saved in projects");
+            auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
+            CHECK (same (*r), "saved in patches");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"13\"");
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
+            auto o = make(); o->setStateInformation (old.getData(), (int) old.getSize());
+            CHECK (plain (*o, P_pfEcho) < 0.5f && std::abs (plain (*o, P_pfDjPos) + 0.6f) < 0.01f, "old projects: every pad off, settings at their defaults");
+            auto u = make(); u->pushHistory ("x"); setP (*u, P_pfVerbSize, 0.2f); u->pushHistory ("verb"); u->undo();
+            CHECK (std::abs (plain (*u, P_pfVerbSize) - 0.8f) < 0.01f, "undo");
+            auto ab = make(); setP (*ab, P_pfCrushBits, 4.0f); ab->pushHistory ("x"); ab->abSelect (1); setP (*ab, P_pfCrushBits, 10.0f); ab->pushHistory ("y"); ab->abSelect (0);
+            CHECK (std::abs (plain (*ab, P_pfCrushBits) - 4.0f) < 0.05f, "A/B");
+        }
+        // 9. the page: a control for every Performance FX parameter
+        {
+            auto p = make();
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            ed->setSize (1200, 890);
+            auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+            CHECK (e != nullptr && e->showPage ("Performance FX") && e->currentPageName() == "Performance FX", "Perform > Performance FX opens");
+            CHECK (e != nullptr && e->showPage ("Perform") && e->currentPageName() == "Perform", "Perform > Perform still opens");
+            std::set<int> got;
+            std::function<void (juce::Component*)> walk = [&] (juce::Component* c)
+            {
+                if (auto* k = dynamic_cast<tgui::Knob*> (c)) got.insert (k->paramIndex);
+                if (auto* xy = dynamic_cast<tgui::PerfXY*> (c)) { got.insert (xy->px()); got.insert (xy->py()); }
+                if (auto* ch = dynamic_cast<tgui::Choice*> (c)) juce::ignoreUnused (ch);
+                if (c->getProperties().contains ("megaParam")) got.insert ((int) c->getProperties()["megaParam"]);
+                for (auto* ch : c->getChildren()) walk (ch);
+            };
+            walk (ed.get());
+            juce::StringArray missing;
+            for (int i = P_pfRoll; i <= P_pfSpring2; ++i) if (got.count (i) == 0) missing.add (kParamIds[i]);
+            CHECK (missing.isEmpty(), "every Performance FX parameter has a control" + (missing.isEmpty() ? juce::String() : ": " + missing.joinIntoString (", ")));
+        }
+        // 10. CPU: the stage idle, one pad, and every pad at once
+        {
+            auto cost = [&] (int pads)
+            {
+                PF fx; fx.prepare (sr); PF::Settings st; st.quant = 0;
+                for (int k = 0; k < pads; ++k) st.pad[k] = true;
+                std::vector<float> l (256), r (256);
+                PF::Clock c = ck;
+                const int blocks = (int) (10.0 * sr / 256);
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                for (int b = 0; b < blocks; ++b) { sine (l, 220.0, 0.3f, b * 256); r = l; fx.process (l.data(), r.data(), 256, st, c); c.beat += 256 * c.beatInc; }
+                return juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0) / 10.0 * 100.0;
+            };
+            std::cout << "  CPU (% of a core): idle " << juce::String (cost (0), 3) << "  Beat Repeat " << juce::String (cost (1), 3)
+                      << "  all 13 pads " << juce::String (cost (PF::kPads), 3) << std::endl;
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PERFONLY", {}).isNotEmpty())
+    {
+        perfTests();
+        std::cout << (failures == 0 ? "PERF TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_CHARONLY", {}).isNotEmpty())
     {
         charTests();
@@ -3386,6 +3647,7 @@ int main()
             if (auto* k = dynamic_cast<tgui::Knob*> (c)) ids.insert (kParamIds[k->paramIndex]);
             if (auto* sg = dynamic_cast<tgui::Segmented*> (c); sg != nullptr && sg->getParam() >= 0) ids.insert (kParamIds[sg->getParam()]);
             if (c->getProperties().contains ("megaParam")) ids.insert (kParamIds[(int) c->getProperties()["megaParam"]]);
+            if (auto* xy = dynamic_cast<tgui::PerfXY*> (c)) { ids.insert (kParamIds[xy->px()]); ids.insert (kParamIds[xy->py()]); }
             for (auto* ch : c->getChildren()) walk (ch);
         };
         walk (ed.get());
@@ -3400,11 +3662,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.40.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.46.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.40; now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.46 (Performance FX added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",
@@ -3709,9 +3971,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 13"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": 14"), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"13\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"14\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -4808,6 +5070,7 @@ int main()
     masterTests();
     mixerTests();
     charTests();
+    perfTests();
     hardTests();
     lfoTests();
     arpTests();

@@ -131,6 +131,19 @@ inline const char* const kCharModelLabels[] = { "Off (Model)","Formant","Formant
 inline const char* const kMfTypeLabels[] = { "Low Pass","High Pass","Band Pass","Notch" };
 inline const char* const kMfSlopeKeys[]   = { "12","24" };
 inline const char* const kMfSlopeLabels[] = { "12 dB/oct","24 dB/oct" };
+// Performance FX (state version 14)
+inline const char* const kPfQuantKeys[]   = { "off","1/16","1/8","1/4","1/2","bar" };
+inline const char* const kPfQuantLabels[] = { "Off (instant)","1/16","1/8","1/4","1/2","1 bar" };
+inline const char* const kPfRollKeys[]    = { "1/4","1/8","1/16","1/32","1/8T","1/16T" };
+inline const char* const kPfRollLabels[]  = { "1/4","1/8","1/16","1/32","1/8 triplet","1/16 triplet" };
+inline const char* const kPfStutKeys[]    = { "1/16","1/32","1/64" };
+inline const char* const kPfStutLabels[]  = { "1/16","1/32","1/64" };
+inline const char* const kPfGateKeys[]    = { "8ths","offbeat","trance1","trance2","dotted","gallop","half","build" };
+inline const char* const kPfGateLabels[]  = { "Straight 8ths","Offbeat","Trance 1","Trance 2","Dotted","Gallop","Half bar","Build" };
+inline const char* const kPfEchoKeys[]    = { "1/16","1/8","3/16","1/4","1/2" };
+inline const char* const kPfEchoLabels[]  = { "1/16","1/8","3/16 (dotted 8th)","1/4","1/2" };
+inline const char* const kPfKeysKeys[]    = { "off","36","48","60","72","84","96" };
+inline const char* const kPfKeysLabels[]  = { "Off","MIDI 36-48 (C1-C2)","MIDI 48-60 (C2-C3)","MIDI 60-72 (C3-C4)","MIDI 72-84 (C4-C5)","MIDI 84-96 (C5-C6)","MIDI 96-108 (C6-C7)" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
 inline const char* const kEnvSrcLabels[] = { "ENV1","ENV2","ENV3" };
 
@@ -280,6 +293,14 @@ inline const ChoiceList kListPEnvTarget  = TG_LIST(kPEnvTarget);
 inline const ChoiceList kListMfType  = TG_LIST(kMfType);
 inline const ChoiceList kListCharModel = TG_LIST(kCharModel);
 inline const ChoiceList kListMfSlope = TG_LIST(kMfSlope);
+inline const ChoiceList kListPfQuant = TG_LIST(kPfQuant);
+inline const ChoiceList kListPfRoll  = TG_LIST(kPfRoll);
+inline const ChoiceList kListPfStut  = TG_LIST(kPfStut);
+inline const ChoiceList kListPfGate  = TG_LIST(kPfGate);
+inline const ChoiceList kListPfEcho  = TG_LIST(kPfEcho);
+inline const ChoiceList kListPfKeys  = TG_LIST(kPfKeys);
+// Performance FX pads, in the order they're processed: P_pfRoll + k
+constexpr int kPfPads = 13;
 
 // LFO extras (state version 7): 8 parameters per LFO, LFO k at P_lfo1Sync + kLfoXStride * k
 constexpr int kLfoXStride = 8;
@@ -904,7 +925,47 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(flt2Char,    "Filter 2 Character", kListCharModel, 0) \
     F(flt2CharAmt, "Filter 2 Character Amount", 0, 1, 0.5, 0.01, 0) \
     C(mfChar,      "Master Filter Character", kListCharModel, 0) \
-    F(mfCharAmt,   "Master Filter Character Amount", 0, 1, 0.5, 0.01, 0)
+    F(mfCharAmt,   "Master Filter Character Amount", 0, 1, 0.5, 0.01, 0) \
+    B(pfRoll,      "Perf Beat Repeat", false) \
+    B(pfReverse,   "Perf Reverse", false) \
+    B(pfTapeStop,  "Perf Tape Stop", false) \
+    B(pfTapeStart, "Perf Tape Start", false) \
+    B(pfBrake,     "Perf Backspin", false) \
+    B(pfPitchDown, "Perf Pitch Down", false) \
+    B(pfStutter,   "Perf Stutter Gate", false) \
+    B(pfGate,      "Perf Trance Gate", false) \
+    B(pfDj,        "Perf DJ Filter", false) \
+    B(pfCrush,     "Perf Bitcrush", false) \
+    B(pfVinyl,     "Perf Vinyl", false) \
+    B(pfEcho,      "Perf Echo Throw", false) \
+    B(pfVerb,      "Perf Reverb Throw", false) \
+    C(pfQuant,     "Perf Quantise", kListPfQuant, 1) \
+    B(pfLatch,     "Perf Latch", false) \
+    C(pfKeys,      "Perf MIDI Keys", kListPfKeys, 0) \
+    C(pfRollRate,  "Perf Repeat Length", kListPfRoll, 2) \
+    F(pfTapeTime,  "Perf Tape Time", 0.25, 4, 1, 0.01, 0) \
+    F(pfPitchGlide,"Perf Pitch Glide", 0, 2, 0.3, 0.01, 0) \
+    F(pfPitchAmt,  "Perf Pitch Amount", -24, 0, -12, 0.1, 0) \
+    C(pfStutterRate,"Perf Stutter Rate", kListPfStut, 1) \
+    C(pfGatePattern,"Perf Gate Pattern", kListPfGate, 2) \
+    F(pfGateDepth, "Perf Gate Depth", 0, 1, 1, 0.01, 0) \
+    F(pfDjPos,     "Perf DJ Filter Position", -1, 1, -0.6, 0.01, 0) \
+    F(pfDjRes,     "Perf DJ Filter Resonance", 0, 1, 0.3, 0.01, 0) \
+    F(pfCrushBits, "Perf Crush Bits", 2, 16, 6, 0.01, 0) \
+    F(pfCrushRate, "Perf Crush Rate", 1000, 48000, 8000, 1, -1) \
+    F(pfVinylAmt,  "Perf Vinyl Amount", 0, 1, 0.6, 0.01, 0) \
+    C(pfEchoTime,  "Perf Echo Time", kListPfEcho, 2) \
+    F(pfEchoFb,    "Perf Echo Feedback", 0, 0.95, 0.6, 0.01, 0) \
+    F(pfEchoMix,   "Perf Echo Level", 0, 1, 0.7, 0.01, 0) \
+    F(pfVerbSize,  "Perf Reverb Size", 0, 1, 0.8, 0.01, 0) \
+    F(pfVerbMix,   "Perf Reverb Level", 0, 1, 0.6, 0.01, 0) \
+    B(pfVerbFreeze,"Perf Reverb Freeze", false) \
+    F(pfX1,        "Perf XY 1 X", 0, 1, 0.5, 0.001, 0) \
+    F(pfY1,        "Perf XY 1 Y", 0, 1, 0.5, 0.001, 0) \
+    F(pfX2,        "Perf XY 2 X", 0, 1, 0.5, 0.001, 0) \
+    F(pfY2,        "Perf XY 2 Y", 0, 1, 0.5, 0.001, 0) \
+    B(pfSpring1,   "Perf XY 1 Spring", true) \
+    B(pfSpring2,   "Perf XY 2 Spring", true)
 
 enum ParamIndex
 {

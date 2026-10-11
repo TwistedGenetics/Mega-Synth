@@ -248,6 +248,7 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
     v[MS_RandNote] = randNote;
     v[MS_CellNoise] = inst.value (CI_Source);
     for (int k = 0; k < 8; ++k) v[MS_Macro1 + k] = s.v[P_macro1 + k];
+    for (int k = 0; k < 4; ++k) v[MS_PfX1 + k] = 2.0f * s.v[P_pfX1 + k] - 1.0f;   // the XY pads (bipolar)
 
     // random clock (Random Rate): smooth random, stepped random, sample & hold of LFO 1, chaos
     rndPh += (double) clampv (s.f (P_randRate), 0.01f, 50.0f) * dt;
@@ -1318,7 +1319,7 @@ void Engine::prepare (double sampleRate, int maxBlock)
     sr = sampleRate;
     for (auto& v : voices) v.prepare (sr);
     fxBus.prepare (sr, maxBlock);
-    masterFilter.prepare (sr); outTrim.prepare (sr);
+    masterFilter.prepare (sr); outTrim.prepare (sr); perfFx.prepare (sr);
     gran.prepare (sr);
     spec.prepare (sr);
     fbm.prepare (sr, maxBlock);
@@ -1333,6 +1334,7 @@ void Engine::reset()
 {
     for (auto& v : voices) v.kill();
     fxBus.reset();
+    perfFx.reset();
     masterFilter.reset();
     gran.reset();
     spec.reset();
@@ -1534,6 +1536,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             globalSrc[MS_ArpPos] = modIn->arpPos; globalSrc[MS_ArpGate] = modIn->arpGate; globalSrc[MS_Sidechain] = modIn->sidechain;
         }
         for (int k = 0; k < 8; ++k) globalSrc[MS_Macro1 + k] = s.v[P_macro1 + k];
+        for (int k = 0; k < 4; ++k) globalSrc[MS_PfX1 + k] = 2.0f * s.v[P_pfX1 + k] - 1.0f;
         globalSrc[MS_DnaSeq] = dsValue; globalSrc[MS_DnaSeq2] = dsValue2; globalSrc[MS_DnaGate] = dsGate;
     }
     float* srcW = newest != nullptr ? newest->srcV : globalSrc;
@@ -1593,6 +1596,23 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             fbm.end (L, R);
         }
         else fxBus.process (L, R, numSamples, *fs, globalMod);
+
+        // ---- Performance FX (bypassed, untouched, while no pad is engaged)
+        {
+            PerfFx::Settings pf;
+            for (int k = 0; k < PerfFx::kPads; ++k) pf.pad[k] = fs->v[P_pfRoll + k] > 0.5f;
+            pf.quant = clampv (fs->i (P_pfQuant), 0, 5); pf.rollRate = clampv (fs->i (P_pfRollRate), 0, 5);
+            pf.stutterRate = clampv (fs->i (P_pfStutterRate), 0, 2); pf.gatePattern = clampv (fs->i (P_pfGatePattern), 0, 7);
+            pf.echoTime = clampv (fs->i (P_pfEchoTime), 0, 4);
+            pf.tapeBeats = fs->f (P_pfTapeTime); pf.glide = fs->f (P_pfPitchGlide); pf.pitchSemis = fs->f (P_pfPitchAmt);
+            pf.gateDepth = fs->f (P_pfGateDepth); pf.djPos = fs->f (P_pfDjPos); pf.djRes = fs->f (P_pfDjRes);
+            pf.crushBits = fs->f (P_pfCrushBits); pf.crushRate = fs->f (P_pfCrushRate); pf.vinyl = fs->f (P_pfVinylAmt);
+            pf.echoFb = fs->f (P_pfEchoFb); pf.echoMix = fs->f (P_pfEchoMix); pf.verbSize = fs->f (P_pfVerbSize); pf.verbMix = fs->f (P_pfVerbMix);
+            pf.verbFreeze = fs->f (P_pfVerbFreeze) > 0.5f;
+            PerfFx::Clock ck;
+            ck.beat = s.fxBeat; ck.beatInc = s.fxBeatInc; ck.barOrigin = s.fxBarOrigin; ck.beatsPerBar = s.fxBeatsPerBar; ck.tempo = s.fxTempo;
+            perfFx.process (L, R, numSamples, pf, ck);
+        }
 
         // ---- the Master Filter (everything passes through it), then the Output trim
         MasterFilter::Settings mf;

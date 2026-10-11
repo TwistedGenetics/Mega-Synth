@@ -7,7 +7,16 @@ namespace tg
 static constexpr int kCtrl = 16; // control-rate block (samples)
 
 static inline double pow2 (double x) { return std::exp2 (x); }
-static inline double wrap01 (double p) { p -= std::floor (p); return p; }
+static inline double pow2z (float x) { return x == 0.0f ? 1.0 : std::exp2 ((double) x); }   // exp2 (+-0) is exactly 1
+// p - floor(p), with the common cases done without floor: the same operations on the same values, so bit for bit
+// the same result (p + 0.0 turns -0 into +0, as p - floor(p) does)
+static inline double wrap01 (double p)
+{
+    if (p >= 0.0 && p < 1.0) return p + 0.0;
+    if (p >= 1.0 && p < 2.0) return p - 1.0;
+    if (p >= -1.0 && p < 0.0) return p - (-1.0);
+    p -= std::floor (p); return p;
+}
 
 double syncBeats (const char* key)
 {
@@ -972,17 +981,17 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 }
                 if (arCut)
                 {
-                    cutB[i] = clampv (cutoff.v * (float) pow2 (ad[AD_Cut]), 20.0f, 20000.0f);
+                    cutB[i] = clampv (cutoff.v * (float) pow2z (ad[AD_Cut]), 20.0f, 20000.0f);
                     resB[i] = clampv (res.v + ad[AD_Res], 0.1f, 30.0f);
                 }
                 if (arCut2)
                 {
-                    cutB2[i] = clampv (cutoff2.v * (float) pow2 (ad[AD_Cut2]), 20.0f, 20000.0f);
+                    cutB2[i] = clampv (cutoff2.v * (float) pow2z (ad[AD_Cut2]), 20.0f, 20000.0f);
                     resB2[i] = clampv (res2.v + ad[AD_Res2], 0.1f, 30.0f);
                 }
             }
             const double fmMul = 1.0 + (double) fmIndex * m;   // through-zero linear FM
-            auto pm = [&] (int a) { return ! ARType::value ? 1.0 : pow2 (ad[a]) * (fmT[a] ? fmMul : 1.0); };
+            auto pm = [&] (int a) { return ! ARType::value ? 1.0 : pow2z (ad[a]) * (fmT[a] ? fmMul : 1.0); };
 
             // Osc 2 and 3 first so Osc 1's legacy FM uses this sample's Osc 2 (as in Web Audio)
             double fr = ! ARType::value ? (double) (f2.v * peRatio[1] + fmIn (1)) : f2.v * peRatio[1] * pm (AD_P2) + fmIn (1);

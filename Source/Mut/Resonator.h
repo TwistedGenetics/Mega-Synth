@@ -85,6 +85,12 @@ public:
 
     void configure (const ResonatorParams& p, double noteHz)
     {
+        // the same settings as last time: the coefficients would come out the same, so keep them
+        // (modes that are off stay silent between calls, so their state is already zero)
+        if (cfgValid && noteHz == cfgHz && sr == cfgSr && p.pitch == cfgP.pitch && p.decay == cfgP.decay && p.damping == cfgP.damping
+            && p.inharm == cfgP.inharm && p.spread == cfgP.spread && p.feedback == cfgP.feedback && p.tuning == cfgP.tuning && p.modes == cfgP.modes)
+            return;
+        cfgValid = true; cfgP = p; cfgHz = noteHz; cfgSr = sr;
         const int n = juce::jlimit (1, kModes, p.modes);
         const double base = noteHz * std::exp2 (p.pitch / 12.0);
         float wsum = 0.0f;
@@ -142,6 +148,7 @@ private:
     struct Mode { double a1 = 0, a2 = 0, b0 = 0, x1 = 0, x2 = 0, y1 = 0, y2 = 0; float gl = 0.7f, gr = 0.7f, w = 1; bool on = false; };
     std::array<Mode, kModes> md {};
     double sr = 48000.0;
+    bool cfgValid = false; ResonatorParams cfgP; double cfgHz = 0.0, cfgSr = 0.0;
     float norm = 0, fb = 0, last = 0, env = 0, agcA = 0.1f, agcR = 0.001f;
 };
 

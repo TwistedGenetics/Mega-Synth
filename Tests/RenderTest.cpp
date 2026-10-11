@@ -579,7 +579,8 @@ int main()
                 bars ([&] (double o)
                 {
                     for (double t : { 0.0, 0.75, 1.5, 2.5, 3.25, 4.0, 4.75, 5.5, 6.5, 7.0 })
-                        for (int n : { 53, 56, 60 }) notes.push_back ({ o + t, 0.22, n, 100 });
+                        for (int n : { 53, 56, 60 })
+                            if (n == 53 || ! desc.contains ("chord memory")) notes.push_back ({ o + t, 0.22, n, 100 });   // chord memory: one key
                 });
             if (juce::String (list[(size_t) idx].name) == "Ragga Siren Stab")
                 notes.push_back ({ 13.0, 1.0, 28, 100 });   // hold E0 for a beat: Beat Repeat
@@ -2259,6 +2260,70 @@ int main()
         return pct;
     };
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_WORST", {}).isNotEmpty()) { worst (1); return 0; }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_HASHALL", {}).isNotEmpty())
+    {
+        // a fingerprint of every factory preset's output (DAW at 172 BPM, play pressed mid-bar), plus the worst case, at all three qualities
+        struct FakeHead : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+        const auto& list = factoryPresets();
+        auto hashRun = [&] (std::function<void (MegaSynthProcessor&)> setup, const juce::String& name)
+        {
+            FakeHead head;
+            auto p = std::make_unique<MegaSynthProcessor>();
+            p->setPlayConfigDetails (0, 2, sr, 256); p->prepareToPlay (sr, 256); p->setPlayHead (&head);
+            setup (*p);
+            const double bpm = 172.0, inc = bpm / 60.0 / sr; double ppq = 6.3;
+            juce::AudioBuffer<float> buf (2, 256);
+            for (int b = 0; b < 400; ++b)   // let the convolution reverbs load their impulses (a background thread) before listening
+            {
+                head.info.setIsPlaying (false); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+                buf.clear(); juce::MidiBuffer none; p->processBlock (buf, none); juce::Thread::sleep (2);
+            }
+            uint64_t h = 1469598103934665603ull;
+            const int total = (int) (2.5 * sr);
+            for (int pos = 0; pos < total; pos += 256)
+            {
+                head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+                head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+                head.info.setTimeSignature (juce::AudioPlayHead::TimeSignature { 4, 4 });
+                juce::MidiBuffer m;
+                if (pos == 256 * 4) for (int nt : { 41, 53, 60, 65, 68 }) m.addEvent (juce::MidiMessage::noteOn (1, nt, (juce::uint8) 110), 17);
+                if (pos == 256 * 300) for (int nt : { 53, 65 }) m.addEvent (juce::MidiMessage::noteOff (1, nt), 3);
+                if (pos == 256 * 330) m.addEvent (juce::MidiMessage::noteOn (1, 72, (juce::uint8) 70), 100);
+                buf.clear(); p->processBlock (buf, m); ppq += 256 * inc;
+                for (int c = 0; c < 2; ++c)
+                    for (int i = 0; i < 256; ++i) { uint32_t b; const float v = buf.getSample (c, i); std::memcpy (&b, &v, 4); h = (h ^ b) * 1099511628211ull; }
+            }
+            p->setPlayHead (nullptr);
+            std::cout << "HASH " << name << " " << juce::String::toHexString ((juce::int64) h) << std::endl;
+        };
+        for (int q = 0; q < 3; ++q)
+            for (int idx = 0; idx < (int) list.size(); ++idx)
+                hashRun ([&] (MegaSynthProcessor& p) { p.loadFactoryPreset (idx); setP (p, P_quality, (float) q); }, juce::String (q) + ":" + list[(size_t) idx].name);
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BENCH", {}).isNotEmpty())
+    {
+        // CPU benchmark: every factory preset holding a 6-note chord for 3 s (best of 3), and the worst case (best of 3)
+        const auto& list = factoryPresets();
+        double total = 0, top = 0; juce::String topName;
+        const int runs = juce::jlimit (1, 9, juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BENCH", "3").getIntValue());
+        for (int idx = 0; idx < (int) list.size(); ++idx)
+        {
+            double best = 1e9;
+            for (int run = 0; run < runs; ++run)
+            {
+                auto p = make(); p->loadFactoryPreset (idx);
+                render (*p, 0.3, {});
+                double cpu = 0; render (*p, 3.0, chord (0.0, 2.5, { 48, 55, 60, 63, 67, 70 }), nullptr, &cpu);
+                best = std::min (best, cpu / 3.0 * 100.0);
+            }
+            total += best; if (best > top) { top = best; topName = list[(size_t) idx].name; }
+        }
+        double w = 1e9; for (int run = 0; run < runs; ++run) w = std::min (w, worst (1));
+        std::cout << "BENCH presets: average " << juce::String (total / (double) list.size(), 2) << "% of a core, heaviest " << topName << " "
+                  << juce::String (top, 2) << "%; worst case (Normal) " << juce::String (w, 2) << "%" << std::endl;
+        return 0;
+    }
 
     // ---- Hardening: worst-case CPU, host programs, DNA clock settings as Mod Matrix destinations
     auto hardTests = [&]

@@ -1235,13 +1235,18 @@ void MegaSynthEditor::buildPages()
             snd->knob (idx, n);
         auto* rpt = new StutterPad (proc);
         snd->add (rpt, 108, 70);
-        auto* arpS = sec (page, "Arp / Chord", col::seq);
+        auto* arpS = sec (page, "Arp / Chord / Pitch / Unison", col::seq);
         arpS->add (new ParamToggle (proc, P_arpOn, "Arp", col::seq), 64, 40);
         arpS->add (new ParamToggle (proc, P_arpLatch, "Latch", col::seq), 74, 40);
         arpS->choice (P_arpRate, "Rate", 100);
         arpS->choice (P_arpMode, "Mode", 96);
-        arpS->knob (P_arpGate, "Gate", 64);
         arpS->add (new ParamToggle (proc, P_chdOn, "Chord", col::seq), 74, 40);
+        arpS->newRow();
+        arpS->knob (P_arpGate, "Gate", 64);
+        arpS->knob (P_pEnvAmt, "Pitch Env", 64);
+        arpS->knob (P_pEnvD, "Env Decay", 64);
+        arpS->knob (P_uni1Voices, "Osc 1 Unison", 72);
+        arpS->knob (P_uni1Detune, "Detune", 64);
         auto* help = page->own (new juce::Label ({}, "Right-click any knob for MIDI Learn, modulation and macros. "
                                                      "Pump, OTT and Crunch need the Volume Shaper, Multiband and Vintage Sampler switched on (Effects > Rack); "
                                                      "the repeat pad needs Beat Repeat."));

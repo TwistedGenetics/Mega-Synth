@@ -172,7 +172,7 @@ Each of the four LFOs has, on top of Wave, Rate and Depth:
 - Chord memory feeds the arpeggiator: hold one key and the arp plays the chord.
 - Both play through the voices, so the DNA Sequencer (restart on each note), the Volume Shaper (each note) and Beat Repeat follow the arpeggiated notes.
 - **Arp Position** and **Arp Step Gate** are Mod Matrix sources. Arp Swing and Gate are Mod Matrix destinations; they follow the modulation with one audio block of delay.
-- Arp On, Latch, Rate, Mode, Gate and Chord are also on the Perform tab.
+- Arp On, Latch, Rate, Mode, Gate and Chord are also on the Perform tab, along with the Pitch Envelope amount and decay and Osc 1's unison voices and detune.
 - Only notes you play are arpeggiated, not the step sequencer's.
 - Old patches and projects load with both off.
 

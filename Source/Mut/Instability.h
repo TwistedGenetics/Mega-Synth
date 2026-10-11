@@ -37,13 +37,13 @@ public:
     // -1..1
     float value (int k) const
     {
-        const auto& x = g[k];
-        const double w = 0.5 - 0.5 * std::cos (3.14159265358979 * x.ph);
-        return (float) (x.a + (x.b - x.a) * w);
+        auto& x = g[k];
+        if (x.ph != x.wPh) { x.wPh = x.ph; x.w = 0.5 - 0.5 * std::cos (3.14159265358979 * x.ph); }   // the phase only moves in advance()
+        return (float) (x.a + (x.b - x.a) * x.w);
     }
 
 private:
-    struct Gen { double a = 0, b = 0, ph = 0, speed = 1; };
+    struct Gen { double a = 0, b = 0, ph = 0, speed = 1; mutable double wPh = -1.0, w = 0.0; };
     Gen g[CI_COUNT];
     uint32_t rng = 1;
     double rnd() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng & 0xFFFFFF) / 8388608.0 - 1.0; }

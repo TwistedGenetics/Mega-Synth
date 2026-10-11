@@ -4,7 +4,15 @@
 namespace tg
 {
 
-static inline double wrap01 (double p) { p -= std::floor (p); return p; }
+// p - floor(p), with the common cases done without floor: the same operations on the same values, so bit for bit
+// the same result (p + 0.0 turns -0 into +0, as p - floor(p) does)
+static inline double wrap01 (double p)
+{
+    if (p >= 0.0 && p < 1.0) return p + 0.0;
+    if (p >= 1.0 && p < 2.0) return p - 1.0;
+    if (p >= -1.0 && p < 0.0) return p - (-1.0);
+    p -= std::floor (p); return p;
+}
 
 //==============================================================================
 void FxBus::prepare (double sampleRate, int block)

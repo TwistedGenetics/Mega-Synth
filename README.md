@@ -50,7 +50,7 @@ The tabs follow the signal: the oscillators, the mix, the filters, the envelopes
 |---|---|
 | Perform | Perform, Performance FX |
 | Overview | (one page) |
-| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring |
+| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring, Granular Synth |
 | Mixer | (one page) |
 | Filters | (one page) |
 | Envelopes | Amp & Filter, Mod Envelopes, Pitch Envelope, MSEG 1 & 2 |
@@ -145,7 +145,7 @@ Each filter has a **Character** menu next to its Model. *Off* uses the classic M
 
 A console, in the order the sound flows:
 
-- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw and the Ring modulator, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
+- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, the Ring modulator and the Granular Synth, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
   - Pan is a balance: centred, both sides stay at full level, so a centred mix sounds exactly as it did before the strips. Panning turns the other side down.
   - A muted source still works as an FM or ring modulator. With any Solo on, only soloed sources are heard. Mute and Solo ramp over a few milliseconds, so they don't click.
   - Pan is a Mod Matrix destination. The strips aren't changed by Mutate.
@@ -154,6 +154,40 @@ A console, in the order the sound flows:
 - **Effect Returns**: Delay, Reverb, Shimmer, Chorus, Reverse.
 - **Analog**: Warmth, Bass Keep, Drift.
 - **Output**: Master Volume (before the effects, as always), the Master Filter's On and Cutoff, the Output trim, and a stereo meter with the peak held.
+
+## Granular Synth (Oscillators > Granular Synth)
+
+A playable granular oscillator. Each note plays its own cloud of grains from a sample you load. It's separate from the **Granular** bus stage (FX & Mutation > Bus Mutation), which grains the whole mix.
+
+- **Sample:**
+  - Load a WAV, AIFF, FLAC or MP3 (Ogg also works). Loading switches the synth on. The waveform shows Position, the area the grains come from, and the newest note's playhead. Click or drag on the wave to set Position.
+  - The sample is saved inside the project and the patch, and comes back with undo and A/B.
+  - **Length cap: 20 s.** A longer file is cut to its first 20 s, and only that part is saved (as a 24-bit WAV). That keeps a project to roughly 10 MB at most, which keeps saving, undo and A/B quick.
+  - The page shows how much the sample adds to the project, and warns above 8 MB.
+- **Grains:**
+  - **Position:** where in the sample the grains come from.
+  - **Scan:** how fast the playhead moves through the sample, from -2x to 2x. 0 freezes it.
+  - **Spray:** random start offsets, 0 to 500 ms.
+  - **Grain Size:** 5 to 500 ms.
+  - **Density:** 1 to 100 grains a second.
+  - **Grain Shape:** Hann, Triangle, Flat top, Percussive or Gaussian. Every shape starts and ends at zero, so grains don't click.
+  - **Reverse:** the chance of a grain playing backwards.
+  - **Spread:** how widely the grains are scattered across the stereo field.
+- **Pitch:**
+  - **Pitch** (semitones) and **Fine** (cents) shift the grains.
+  - **Random** adds a random pitch to each grain.
+  - **Root Note** is the key that plays the sample at its own pitch.
+  - With **Key Track** on (the default), the grains follow the note you play. They also follow pitch bend, and the pitch envelope when it targets all oscillators. Portamento doesn't glide them.
+- **Output:**
+  - **Level** feeds the mix before the filters, so the grains go through the filters, amp envelope and effects like any oscillator.
+  - It has its own strip on the Mixer page (pan, mute, solo, meter).
+  - It can stand in for **DNA Splice** source A or B. A choice in its Output section does this, so the DNA source lists of older patches are unchanged and Mutate gives the same results.
+- **Mod Matrix:** every continuous control is a per-voice destination, except Root Note. Nothing here is changed by Mutate.
+- **Quality** limits the grains per note: **Eco 8, Normal 24, High 48**. With 8 notes of a very dense cloud (100 grains a second of 400 ms), the grain engine uses about 4% of one core at Eco, 11% at Normal and 21% at High. Typical settings (20 grains a second of 80 ms, about 2 overlapping) cost well under 1% per note.
+- **Older patches** load with it off and no sample. When it's off, or has no sample, it costs nothing.
+- **Approximations:**
+  - Grains read the sample with linear interpolation.
+  - Without Spray, the cloud repeats at the Density rate. Like any synchronous granular engine, that colours the sound with a comb of Density-spaced partials, so a little Spray gives a cleaner pitch.
 
 ## Performance FX (Perform > Performance FX)
 

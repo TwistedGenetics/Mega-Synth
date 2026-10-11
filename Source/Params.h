@@ -142,6 +142,11 @@ inline const char* const kPfGateKeys[]    = { "8ths","offbeat","trance1","trance
 inline const char* const kPfGateLabels[]  = { "Straight 8ths","Offbeat","Trance 1","Trance 2","Dotted","Gallop","Half bar","Build" };
 inline const char* const kPfEchoKeys[]    = { "1/16","1/8","3/16","1/4","1/2" };
 inline const char* const kPfEchoLabels[]  = { "1/16","1/8","3/16 (dotted 8th)","1/4","1/2" };
+// Granular Synth (state version 15)
+inline const char* const kGsShapeKeys[]   = { "hann","triangle","tukey","perc","gauss" };
+inline const char* const kGsShapeLabels[] = { "Hann (smooth)","Triangle","Flat top","Percussive","Gaussian" };
+inline const char* const kGsDnaKeys[]     = { "off","a","b" };
+inline const char* const kGsDnaLabels[]   = { "Off","Replaces DNA Source A","Replaces DNA Source B" };
 inline const char* const kPfKeysKeys[]    = { "off","36","48","60","72","84","96" };
 inline const char* const kPfKeysLabels[]  = { "Off","MIDI 36-48 (C1-C2)","MIDI 48-60 (C2-C3)","MIDI 60-72 (C3-C4)","MIDI 72-84 (C4-C5)","MIDI 84-96 (C5-C6)","MIDI 96-108 (C6-C7)" };
 inline const char* const kEnvSrcKeys[]   = { "env1","env2","env3" };
@@ -299,6 +304,8 @@ inline const ChoiceList kListPfStut  = TG_LIST(kPfStut);
 inline const ChoiceList kListPfGate  = TG_LIST(kPfGate);
 inline const ChoiceList kListPfEcho  = TG_LIST(kPfEcho);
 inline const ChoiceList kListPfKeys  = TG_LIST(kPfKeys);
+inline const ChoiceList kListGsShape = TG_LIST(kGsShape);
+inline const ChoiceList kListGsDna   = TG_LIST(kGsDna);
 // Performance FX pads, in the order they're processed: P_pfRoll + k
 constexpr int kPfPads = 13;
 
@@ -308,6 +315,8 @@ constexpr int kLfoXStride = 8;
 constexpr int kUniStride = 5, kUniOscs = 6;
 // Mixer channel strips: Pan, Mute, Solo per source (Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, Ring), from P_mxOsc1Pan
 constexpr int kMxStride = 3, kMxSources = 9;
+// ... plus strips added later, each Pan / Mute / Solo in a row: 9 = Granular Synth
+constexpr int kMxStrips = 10;
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
@@ -965,7 +974,26 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(pfX2,        "Perf XY 2 X", 0, 1, 0.5, 0.001, 0) \
     F(pfY2,        "Perf XY 2 Y", 0, 1, 0.5, 0.001, 0) \
     B(pfSpring1,   "Perf XY 1 Spring", true) \
-    B(pfSpring2,   "Perf XY 2 Spring", true)
+    B(pfSpring2,   "Perf XY 2 Spring", true) \
+    B(gsOn,        "Granular Synth On", false) \
+    F(gsLevel,     "Granular Synth Level", 0, 1, 0.7, 0.01, 0) \
+    F(gsPosition,  "Granular Position", 0, 1, 0.25, 0.001, 0) \
+    F(gsScan,      "Granular Scan", -2, 2, 0, 0.01, 0) \
+    F(gsSpray,     "Granular Spray", 0, 500, 20, 0.1, 60) \
+    F(gsSize,      "Granular Grain Size", 5, 500, 80, 0.1, -1) \
+    F(gsDensity,   "Granular Density", 1, 100, 20, 0.1, -1) \
+    C(gsShape,     "Granular Grain Shape", kListGsShape, 0) \
+    F(gsSemi,      "Granular Pitch", -24, 24, 0, 1, 0) \
+    F(gsCents,     "Granular Fine", -100, 100, 0, 0.1, 0) \
+    F(gsPitchRand, "Granular Pitch Random", 0, 12, 0, 0.01, 0) \
+    F(gsReverse,   "Granular Reverse", 0, 1, 0, 0.01, 0) \
+    F(gsSpread,    "Granular Stereo Spread", 0, 1, 0.3, 0.01, 0) \
+    F(gsRoot,      "Granular Root Note", 24, 96, 60, 1, 0) \
+    B(gsKeyTrack,  "Granular Key Track", true) \
+    C(gsDna,       "Granular as DNA Source", kListGsDna, 0) \
+    F(mxGranPan,   "Granular Pan", -1, 1, 0, 0.01, 0) \
+    B(mxGranMute,  "Granular Mute", false) \
+    B(mxGranSolo,  "Granular Solo", false)
 
 enum ParamIndex
 {
@@ -992,5 +1020,8 @@ inline const char* const kParamIds[] = {
 #undef TG_B
 #undef TG_A
 };
+
+// a Mixer strip's Pan parameter (Mute and Solo follow it)
+inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : P_mxGranPan + kMxStride * (strip - kMxSources); }
 
 } // namespace tg

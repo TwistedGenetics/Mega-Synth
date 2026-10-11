@@ -11,6 +11,7 @@
 #include "Mut/Resonator.h"
 #include "Fx/MasterFilter.h"
 #include "Fx/PerfFx.h"
+#include "GranSynth.h"
 #include "Mut/Granular.h"
 #include "Mut/Spectral.h"
 #include "Mut/FeedbackMatrix.h"
@@ -111,11 +112,13 @@ private:
     S l1, l2, l3, lSub, lC, lSS;
     // Mixer strips (Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, Ring): balance pan and mute / solo.
     // Only while one is away from centre / unmuted does the mix use them (otherwise it is exactly as before).
-    S mxPan[kMxSources], mxGate[kMxSources];
-    float mxL[kMxSources] {}, mxR[kMxSources] {};
+    S mxPan[kMxStrips], mxGate[kMxStrips];
+    float mxL[kMxStrips] {}, mxR[kMxStrips] {};
     bool mxActive = false;
 public:
-    float mxPeak[kMxSources] {};   // the level of each source in the last block (when the Mixer is showing)
+    float mxPeak[kMxStrips] {};   // the level of each source in the last block (when the Mixer is showing)
+    int granGrains() const { return gsRun ? gran.activeGrains() : 0; }
+    double granPlayhead() const { return gsRun ? gran.playhead() : -1.0; }
 private:
     void updateMixer (const Snapshot&, bool first, float c);
 
@@ -156,6 +159,13 @@ private:
         }
     };
     WtPlayer wt[2];
+    // the Granular Synth (sample slot 2)
+    GranVoice gran;
+    GranVoice::Params gsP;
+    const WaveSample* gsWav = nullptr;
+    S lGs;
+    bool gsRun = false;      // on, with a sample, or still fading out
+    int gsDnaSlot = 0;       // 1 / 2: stands in for DNA Splice source A / B
     // ---- unison: up to 7 extra (side) voices per oscillator: Osc 1-3, WT 1, WT 2, Complex
     static constexpr int kUniSide = 7;
     int uniN[kUniOscs] { 1, 1, 1, 1, 1, 1 };              // voices (1 = off: the oscillator as it always was)
@@ -302,9 +312,11 @@ public:
     float arpModOffset (int which) const { return arpMod[juce::jlimit (0, 1, which)]; }
     std::atomic<float> lfoPlayhead[4] { -1.0f, -1.0f, -1.0f, -1.0f };   // newest voice's LFO phases (-1: no voice)
     std::atomic<float> msegPlayhead[2] { -1.0f, -1.0f }, msegLevelShown[2] { 0.0f, 0.0f };
+    std::atomic<double> granPlayheadShown { -1.0 };   // the newest note's Granular Synth playhead (sample frames), -1 when none
+    std::atomic<int> granGrainsShown { 0 };           // grains playing, all notes
     // the Mixer's meters: the editor switches them on while the Mixer is showing and reads (and resets) the peaks
     mutable std::atomic<bool> mixerMeters { false };
-    mutable std::array<std::atomic<float>, kMxSources> mixerPeak {};
+    mutable std::array<std::atomic<float>, kMxStrips> mixerPeak {};
     mutable std::array<std::atomic<float>, 2> outputPeak {};   // the final output, L / R (always measured: almost free)
 
 private:

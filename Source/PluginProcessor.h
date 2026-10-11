@@ -119,6 +119,16 @@ public:
     bool loadSampleData (const juce::MemoryBlock&, const juce::String& name, int slot = 0);
     void clearSample (int slot = 0);
     juce::String getSampleStatus (int slot = 0) const;
+    // sample slots: 0 WT 1, 1 WT 2, 2 the Granular Synth, 3 the Break Chopper
+    static constexpr int kSampleSlots = 4, kSlotGranular = 2, kSlotBreak = 3;
+    static juce::String sampleSuffix (int k) { static const char* s[] = { "", "2", "Gran", "Break" }; return s[juce::jlimit (0, 3, k)]; }
+    static const char* samplePatchKey (int k) { static const char* s[] = { "wavetable", "wavetable2", "granularSample", "breakSample" }; return s[juce::jlimit (0, 3, k)]; }
+    // the longest audio a slot keeps: the wavetable slots 120 s as before; the Granular Synth 20 s and the
+    // Break Chopper 30 s (8 bars at 64 BPM), so a project doesn't grow past roughly 10 MB per sample
+    static double sampleCapSeconds (int k) { return k == kSlotGranular ? 20.0 : (k == kSlotBreak ? 30.0 : 120.0); }
+    const tg::WaveSample* getSample (int slot) const { return currentWave[juce::jlimit (0, kSampleSlots - 1, slot)].load(); }
+    size_t getSampleBytes (int slot) const { const juce::ScopedLock sl (waveLock); return waveData[juce::jlimit (0, kSampleSlots - 1, slot)].getSize(); }
+    juce::String getSampleName (int slot) const { const juce::ScopedLock sl (waveLock); return waveName[juce::jlimit (0, kSampleSlots - 1, slot)]; }
 
     juce::String exportBrowserPatch() const;
     juce::String importBrowserPatch (const juce::String& json);   // returns an error message, or empty on success
@@ -172,7 +182,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 14;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX
+    static constexpr int kStateVersion = 15;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -206,7 +216,8 @@ private:
     void setMidiDefaultsForOldPatch();
     void setMixerDefaultsForOldPatch();
     void setCharDefaultsForOldPatch();
-    void setPerfDefaultsForOldPatch();      // ... and from before Performance FX      // ... and from before the filter character models     // ... and from before the Mixer strips (pan / mute / solo)     // ... and from before the wheel / sustain switches
+    void setPerfDefaultsForOldPatch();      // ... and from before Performance FX
+    void setGranDefaultsForOldPatch();      // ... and from before the Granular Synth      // ... and from before the filter character models     // ... and from before the Mixer strips (pan / mute / solo)     // ... and from before the wheel / sustain switches
     void setEnvDefaultsForOldPatch();      // ... and from before the pitch envelope and MSEGs       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
     void handleMidi (const juce::MidiMessage&);
     void seqTick (int stepIndex, double stepSeconds);
@@ -218,8 +229,8 @@ private:
         juce::ValueTree params;
         juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps, fxRack, lfoShapes, arpStore, msegs;
         int sceneEdit = 0;
-        std::shared_ptr<const juce::MemoryBlock> wave[2];
-        juce::String waveName[2];
+        std::shared_ptr<const juce::MemoryBlock> wave[4];
+        juce::String waveName[4];
     };
     Snapshot captureSnapshot (const juce::String& label);
     void restoreSnapshot (const Snapshot&);
@@ -313,11 +324,11 @@ private:
     bool hostWasPlaying = false;
 
     // sample for Osc 4
-    std::atomic<tg::WaveSample*> currentWave[2] { { nullptr }, { nullptr } };
+    std::atomic<tg::WaveSample*> currentWave[4] { { nullptr }, { nullptr }, { nullptr }, { nullptr } };
     std::vector<std::unique_ptr<tg::WaveSample>> waveKeep;
-    juce::MemoryBlock waveData[2];
-    std::shared_ptr<const juce::MemoryBlock> waveShared[2];   // same bytes, shared with history snapshots
-    juce::String waveName[2];
+    juce::MemoryBlock waveData[4];
+    std::shared_ptr<const juce::MemoryBlock> waveShared[4];   // same bytes, shared with history snapshots
+    juce::String waveName[4];
     mutable juce::CriticalSection waveLock;
     juce::AudioFormatManager formats;
 

@@ -9,6 +9,7 @@
 #include "Registry.h"
 #include "UI/Overview.h"
 #include "UI/PerfFxPage.h"
+#include "UI/SamplePages.h"
 
 using namespace tg;
 using namespace tgui;
@@ -1359,7 +1360,7 @@ void MegaSynthEditor::buildPages()
     struct TabDef { const char* name; juce::StringArray subs; juce::Colour colour; };
     const TabDef layout[] = {
         { "Perform", { "Perform", "Performance FX" }, col::accent }, { "Overview", {}, col::accent },
-        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring" }, col::osc },
+        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth" }, col::osc },
         { "Mixer", {}, col::mixer }, { "Filters", {}, col::filter },
         { "Envelopes", { "Amp & Filter", "Mod Envelopes", "Pitch Envelope", "MSEG 1 & 2" }, col::env },
         { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Space", "Dirt", "Motion", "Rack" }, col::fx },
@@ -1686,12 +1687,101 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Oscillators > Granular Synth
+    {
+        auto* page = addPage ("Granular Synth");
+        const int slot = MegaSynthProcessor::kSlotGranular;
+        auto* smp = sec (page, "Sample  (Each note plays its own cloud of grains from this sample. Click or drag on the wave to set Position. "
+                               "The sample is saved inside the project and patch; anything longer than 20 s is cut to 20 s, which keeps a "
+                               "project to about 10 MB at most. Quality limits the grains per note: Eco 8, Normal 24, High 48.)", col::supersaw);
+        auto* wave = page->own (new SampleWaveView (proc, slot, col::supersaw));
+        wave->setTooltip ("Click or drag to set Position");
+        auto plain = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+        wave->markers = [this, plain, slot]
+        {
+            std::vector<SampleWaveView::Marker> m;
+            m.push_back ({ (double) plain (P_gsPosition), col::text, "Pos", true });
+            const auto* w = proc.getSample (slot);
+            const double ph = proc.getEngine().granPlayheadShown.load();
+            if (w != nullptr && ph >= 0.0) m.push_back ({ ph / std::max (1, w->length), col::supersaw.brighter (0.5f), {}, false });
+            return m;
+        };
+        wave->shade = [this, plain, slot]
+        {
+            const auto* w = proc.getSample (slot);
+            if (w == nullptr) return juce::Range<double>();
+            const double p0 = plain (P_gsPosition), spray = plain (P_gsSpray) * 0.001 / std::max (0.01, w->duration());
+            return juce::Range<double> (std::max (0.0, p0 - spray), std::min (1.0, p0 + spray + plain (P_gsSize) * 0.001 / std::max (0.01, w->duration())));
+        };
+        auto setPos = [this] (double f, const juce::MouseEvent&) { proc.param (P_gsPosition)->setValueNotifyingHost ((float) f); };
+        wave->onClick = setPos; wave->onDrag = setPos;
+        auto* load = page->own (new juce::TextButton ("Load Sample"));
+        auto* clear = page->own (new juce::TextButton ("Clear"));
+        auto* info = page->own (new juce::Label());
+        info->setColour (juce::Label::textColourId, col::muted);
+        info->setFont (juce::Font (juce::FontOptions (11.5f)));
+        granInfo = info;
+        info->setText (sampleInfoText (proc, slot), juce::dontSendNotification);
+        load->onClick = [this, slot]
+        {
+            chooser = std::make_unique<juce::FileChooser> ("Load a sample for the Granular Synth", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [this, slot] (const juce::FileChooser& fc)
+                                  {
+                                      const auto f = fc.getResult();
+                                      if (f == juce::File()) return;
+                                      const bool ok = proc.loadSampleFile (f, slot);
+                                      setStatus (ok ? "Sample loaded into the Granular Synth" : "Couldn't read that audio file");
+                                      if (ok && proc.param (P_gsOn)->getValue() < 0.5f) proc.param (P_gsOn)->setValueNotifyingHost (1.0f);
+                                      proc.pushHistory ("Load granular sample");
+                                  });
+        };
+        clear->onClick = [this, slot] { proc.clearSample (slot); proc.pushHistory ("Clear granular sample"); setStatus ("Granular Synth sample cleared"); };
+        auto* on = page->own (new ParamToggle (proc, P_gsOn, "On", col::supersaw));
+
+        auto* gr = sec (page, "Grains", col::supersaw);
+        gr->knob (P_gsPosition, "Position", 68);
+        gr->knob (P_gsScan, "Scan", 68);
+        gr->knob (P_gsSpray, "Spray", 68);
+        gr->knob (P_gsSize, "Grain Size", 68);
+        gr->knob (P_gsDensity, "Density", 68);
+        gr->choice (P_gsShape, "Grain Shape", 130);
+        gr->knob (P_gsReverse, "Reverse", 68);
+        gr->knob (P_gsSpread, "Spread", 68);
+        auto* pit = sec (page, "Pitch", col::osc);
+        pit->knob (P_gsSemi, "Pitch", 64);
+        pit->knob (P_gsCents, "Fine", 64);
+        pit->knob (P_gsPitchRand, "Random", 64);
+        pit->knob (P_gsRoot, "Root Note", 64);
+        pit->add (new ParamToggle (proc, P_gsKeyTrack, "Key Track", col::osc), 100, 40);
+        auto* out = sec (page, "Output  (Level goes into the mix before the filters, with its own strip on the Mixer page. It can also stand in for "
+                               "DNA Splice source A or B.)", col::mixer);
+        out->knob (P_gsLevel, "Level", 64);
+        out->knob (P_mxGranPan, "Pan", 64);
+        out->add (new ParamToggle (proc, P_mxGranMute, "Mute", col::mixer), 70, 40);
+        out->add (new ParamToggle (proc, P_mxGranSolo, "Solo", col::mixer), 70, 40);
+        out->choice (P_gsDna, "DNA Splice", 190);
+        page->onResize = [page, smp, wave, load, clear, info, on, gr, pit, out]
+        {
+            const int g = 10, W = page->getWidth();
+            smp->setBounds (g, g, W - 2 * g, 228);
+            wave->setBounds (g + 10, g + 34, W - 2 * g - 20, 150);
+            on->setBounds (g + 10, g + 190, 60, 28);
+            load->setBounds (g + 76, g + 192, 110, 26);
+            clear->setBounds (g + 192, g + 192, 70, 26);
+            info->setBounds (g + 270, g + 192, W - 2 * g - 280, 26);
+            gr->setBounds (g, g + 238, W - 2 * g, 130);
+            pit->setBounds (g, g + 378, 470, 130);
+            out->setBounds (g + 480, g + 378, W - 2 * g - 480, 130);
+        };
+    }
+
     // ---------------------------------------------------------------- Mixer & FM
     {
         auto* page = addPage ("Mixer");
         // ---- channel strips, in the order the sources are listed everywhere else
         struct StripDef { const char* name; int level, extra; const char* extraCap; int pEnv; juce::Colour c; };
-        const StripDef strips[kMxSources] = {
+        const StripDef strips[kMxStrips] = {
             { "Osc 1", P_osc1Gain, P_uni1Voices, "Voices", 1, col::osc },
             { "Osc 2", P_osc2Gain, P_uni1Voices + kUniStride, "Voices", 2, col::osc },
             { "Osc 3", P_osc3Gain, P_uni1Voices + 2 * kUniStride, "Voices", 3, col::osc },
@@ -1700,9 +1790,10 @@ void MegaSynthEditor::buildPages()
             { "WT 2", P_wt2Gain, P_uni1Voices + 4 * kUniStride, "Voices", 6, col::wavetable },
             { "Complex", P_complexGain, P_uni1Voices + 5 * kUniStride, "Voices", 7, col::complex },
             { "SuperSaw", P_supersawGain, P_supersawVoices, "Voices", 8, col::supersaw },
-            { "Ring", P_ringGain, P_ringMix, "Ring Mix", -1, col::fm } };
+            { "Ring", P_ringGain, P_ringMix, "Ring Mix", -1, col::fm },
+            { "Granular", P_gsLevel, P_gsDensity, "Density", 99, col::supersaw } };   // (99: lit only when the pitch envelope moves all)
         juce::Array<ChannelStrip*> stripList;
-        for (int k = 0; k < kMxSources; ++k)
+        for (int k = 0; k < kMxStrips; ++k)
             stripList.add (page->own (new ChannelStrip (proc, k, strips[k].name, strips[k].level, strips[k].extra, strips[k].extraCap, strips[k].pEnv, strips[k].c)));
         mixerStrips = stripList;
         auto* srcHelp = sec (page, "Sources", col::mixer);
@@ -1778,7 +1869,7 @@ void MegaSynthEditor::buildPages()
         page->onResize = [page, stripList, srcHelp, engS, chipList, rt, w, outS, outL, outR]
         {
             const int g = 10, W = page->getWidth();
-            const int stripW = 80, stripsW = stripW * kMxSources + 2 * 4;
+            const int stripW = 74, stripsW = stripW * kMxStrips + 2 * 4;
             srcHelp->setBounds (g, g, stripsW + 8, 32 + 360 + 8);
             for (int k = 0; k < stripList.size(); ++k) { stripList[k]->setBounds (g + 4 + k * stripW, g + 32, stripW - 4, 360); stripList[k]->toFront (false); }
             w->setBounds (g, g + 410, 260, 130);
@@ -3122,6 +3213,12 @@ void MegaSynthEditor::timerCallback()
 
     for (int k = 0; k < 2; ++k)
         if (sampleBars[k] != nullptr) sampleBars[k]->status.setText (proc.getSampleStatus (k), juce::dontSendNotification);
+    if (granInfo != nullptr && granInfo->isShowing())
+    {
+        auto t = sampleInfoText (proc, MegaSynthProcessor::kSlotGranular);
+        if (proc.getSample (MegaSynthProcessor::kSlotGranular) != nullptr) t << "   grains playing: " << proc.getEngine().granGrainsShown.load();
+        granInfo->setText (t, juce::dontSendNotification);
+    }
     if (proc.getPatchName() != lastShownName) refreshPatchList();
     undoBtn.setEnabled (proc.canUndo() || proc.lastHistoryLabel().isNotEmpty());
     redoBtn.setEnabled (proc.canRedo());

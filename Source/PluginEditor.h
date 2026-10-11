@@ -443,6 +443,7 @@ private:
     juce::ToggleButton seqRunBtn { "Run Sequencer" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> seqRunAtt;
     std::unique_ptr<juce::FileChooser> chooser;
+    juce::Label* granInfo = nullptr;   // Granular Synth sample: name, length, size
 
     uint32_t lastStepVersion = 0;
     int lastPlaying = -2, lastLength = -1, lastOct = 99;

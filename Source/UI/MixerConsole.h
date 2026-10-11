@@ -46,7 +46,7 @@ public:
     ChannelStrip (MegaSynthProcessor& p, int strip, const juce::String& name, int levelParam, int extraParam, const juce::String& extraCaption, int pEnvTarget, juce::Colour c)
         : proc (p), index (strip), title (name), colour (c), pEnvIndex (pEnvTarget)
     {
-        const int b = tg::P_mxOsc1Pan + tg::kMxStride * strip;
+        const int b = tg::mxParam (strip);
         level = std::make_unique<Knob> (p, levelParam, "Level", c);
         pan = std::make_unique<Knob> (p, b, "Pan", c);
         addAndMakeVisible (*level); addAndMakeVisible (*pan);
@@ -141,7 +141,7 @@ public:
         g.setColour (lit ? colour : col::muted); g.fillEllipse (r.getX() + 8, r.getY() + 9, 7, 7);
         g.setColour (lit ? col::text : col::muted);
         g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
-        g.drawText (title, juce::Rectangle<float> (r.getX() + 19, r.getY() + 4, r.getWidth() - 22, 17), juce::Justification::centredLeft, true);
+        g.drawFittedText (title, juce::Rectangle<float> (r.getX() + 19, r.getY() + 4, r.getWidth() - 22, 17).toNearestInt(), juce::Justification::centredLeft, 1, 0.75f);
         if (knob == nullptr)
         {
             g.setFont (juce::Font (juce::FontOptions (10.5f)));

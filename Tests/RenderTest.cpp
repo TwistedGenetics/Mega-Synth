@@ -10,6 +10,7 @@
 #include "UI/FilterPanel.h"
 #include "UI/PatchBrowser.h"
 #include "UI/PerfFxPage.h"
+#include "UI/SamplePages.h"
 #include "UI/Overview.h"
 
 using namespace tg;
@@ -2275,6 +2276,20 @@ int main()
         if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ALLSHOTS", {}) == "char")
         { setP (*p, P_flt1Char, (float) CM_Formant); setP (*p, P_flt1CharAmt, 0.3f); setP (*p, P_filterRes, 10.0f); setP (*p, P_mfChar, (float) CM_Comb); setP (*p, P_mfCharAmt, 0.85f); setP (*p, P_mfCutoff, 300.0f); }
         p->msegs.setPreset (1, 2);
+        {
+            // a made-up sample for the Granular Synth page
+            juce::AudioBuffer<float> b (2, (int) (3.0 * 44100));
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const double t = i / 44100.0;
+                b.setSample (c, i, (float) (0.6 * std::sin (2.0 * kPi * 220.0 * t + c) * std::exp (-1.5 * std::fmod (t, 0.75)) + 0.2 * std::sin (2.0 * kPi * 331.0 * t)));
+            }
+            juce::MemoryBlock mb;
+            { auto* os = new juce::MemoryOutputStream (mb, false); juce::WavAudioFormat wav;
+              std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os, 44100.0, 2, 16, {}, 0)); w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()); }
+            p->loadSampleData (mb, "Made-up pad.wav", MegaSynthProcessor::kSlotGranular);
+            setP (*p, P_gsOn, 1.0f); setP (*p, P_gsScan, 0.4f);
+        }
         render (*p, 0.3, chord (0.0, 1.0, { 48 }));
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
         ed->setSize (1200, 890);
@@ -3618,6 +3633,216 @@ int main()
                       << "  all 13 pads " << juce::String (cost (PF::kPads), 3) << std::endl;
         }
     };
+    // ---- Granular Synth
+    auto granTests = [&]
+    {
+        std::cout << "Granular Synth" << std::endl;
+        const int slot = MegaSynthProcessor::kSlotGranular;
+        // a sine (or anything) as a WAV file in memory
+        auto wavOf = [&] (double seconds, double rate, int chans, std::function<float (int, int)> fn)
+        {
+            juce::AudioBuffer<float> b (chans, (int) (seconds * rate));
+            for (int c = 0; c < chans; ++c) for (int i = 0; i < b.getNumSamples(); ++i) b.setSample (c, i, fn (c, i));
+            juce::MemoryBlock mb;
+            {
+                auto* os = new juce::MemoryOutputStream (mb, false);
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os, rate, (unsigned) chans, 24, {}, 0));
+                w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+            }
+            return mb;
+        };
+        auto sineWav = [&] (double hz, double seconds = 1.0) { return wavOf (seconds, 44100.0, 1, [=] (int, int i) { return 0.8f * (float) std::sin (2.0 * kPi * hz * i / 44100.0); }); };
+        // only the Granular Synth sounding, no effects
+        auto granOnly = [&]
+        {
+            auto p = make();
+            for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain, P_osc4Gain, P_wt2Gain, P_ringGain,
+                           P_reverbMix, P_delayMix, P_chorusMix, P_shimmerMix, P_reverseMix }) setP (*p, i, 0.0f);
+            setP (*p, P_filterCutoff, 18000.0f);
+            // (spray scatters the grain starts; without it the cloud repeats at the Density rate, and its spectrum
+            // becomes a comb of 1 / Density lines, which would fool the pitch measurement)
+            setP (*p, P_gsOn, 1.0f); setP (*p, P_gsSpray, 40.0f); setP (*p, P_gsSpread, 0.0f); setP (*p, P_gsSize, 200.0f); setP (*p, P_gsDensity, 15.0f);
+            return p;
+        };
+        auto peakHz = [&] (const juce::AudioBuffer<float>& b, double t0)
+        {
+            const int order = 15, N = 1 << order;
+            std::vector<float> x ((size_t) N * 2, 0.0f);
+            const int s0 = (int) (t0 * sr);
+            for (int i = 0; i < N && s0 + i < b.getNumSamples(); ++i)
+                x[(size_t) i] = b.getSample (0, s0 + i) * (0.5f - 0.5f * (float) std::cos (2.0 * kPi * i / (N - 1)));
+            juce::dsp::FFT fft (order); fft.performFrequencyOnlyForwardTransform (x.data());
+            int k = 2; for (int i = 2; i < N / 2 - 1; ++i) if (x[(size_t) i] > x[(size_t) k]) k = i;
+            const double a = x[(size_t) k - 1], c = x[(size_t) k], d = x[(size_t) k + 1];
+            const double off = 0.5 * (a - d) / (a - 2.0 * c + d);
+            return (k + off) * sr / N;
+        };
+        auto zcHz = [&] (const juce::AudioBuffer<float>& c, double t0, double t1)
+        {
+            double first = -1, last = -1; int n = 0;
+            for (int i = (int) (t0 * sr) + 1; i < (int) (t1 * sr); ++i)
+            {
+                const float a = c.getSample (0, i - 1), b = c.getSample (0, i);
+                if (a < 0.0f && b >= 0.0f) { const double x = (i - 1 + a / (a - b)) / sr; if (first < 0) first = x; last = x; ++n; }
+            }
+            return n > 1 ? (n - 1) / (last - first) : 0.0;
+        };
+        auto oneGrain = [&] (MegaSynthProcessor& p) { setP (p, P_gsRoot, 69.0f); setP (p, P_gsSpray, 0.0f); setP (p, P_gsSize, 500.0f); setP (p, P_gsDensity, 2.0f); setP (p, P_gsPosition, 0.1f); };
+        // 1. off (the default) or with no sample: nothing changes
+        {
+            auto a = make(), b = make();
+            b->loadSampleData (sineWav (440.0), "sine.wav", slot);   // loaded, but the Granular Synth is off
+            tg::resetVoiceRandom(); juce::AudioBuffer<float> x; render (*a, 0.5, chord (0.0, 0.4, { 60, 64 }), &x);
+            tg::resetVoiceRandom(); juce::AudioBuffer<float> y; render (*b, 0.5, chord (0.0, 0.4, { 60, 64 }), &y);
+            float d = 0; for (int c = 0; c < 2; ++c) for (int i = 0; i < x.getNumSamples(); ++i) d = std::max (d, std::abs (x.getSample (c, i) - y.getSample (c, i)));
+            CHECK (d == 0.0f, "loaded but off: bit-identical");
+            // switched on with no sample: nothing plays from it (the default-off case is covered bit for bit by the golden renders)
+            auto o = make(); setP (*o, P_gsOn, 1.0f);
+            const auto st = render (*o, 0.3, chord (0.0, 0.25, { 60 }));
+            CHECK (st.finite && st.peak > 0.01f && o->getEngine().granGrainsShown.load() == 0, "on with no sample: no grains, the synth plays as usual");
+        }
+        // 2. pitch tracking: a 440 Hz sample with its root at A4 plays the note you press
+        {
+            juce::StringArray bad;
+            for (auto [note, keyTrack, semis, expect] : { std::tuple<int, bool, float, double> { 69, true, 0.0f, 440.0 }, { 81, true, 0.0f, 880.0 }, { 57, true, 0.0f, 220.0 },
+                                                          { 64, true, 0.0f, 440.0 * std::pow (2.0, -5.0 / 12.0) }, { 69, true, 7.0f, 440.0 * std::pow (2.0, 7.0 / 12.0) },
+                                                          { 81, false, 0.0f, 440.0 } })
+            {
+                auto p = granOnly();
+                p->loadSampleData (sineWav (440.0, 4.0), "sine.wav", slot);
+                // one long grain at a time (500 ms, two a second): inside a grain the pitch is a clean sine
+                setP (*p, P_gsSpray, 0.0f); setP (*p, P_gsSize, 500.0f); setP (*p, P_gsDensity, 2.0f); setP (*p, P_gsPosition, 0.1f);
+                setP (*p, P_gsRoot, 69.0f); setP (*p, P_gsKeyTrack, keyTrack ? 1.0f : 0.0f); setP (*p, P_gsSemi, semis);
+                juce::AudioBuffer<float> b; render (*p, 0.6, chord (0.0, 0.55, { note }), &b);
+                const double hz = zcHz (b, 0.12, 0.38);
+                std::cout << "  note " << note << (keyTrack ? "" : " (no key track)") << " +" << semis << " st: " << juce::String (hz, 2) << " Hz (expect " << juce::String (expect, 2) << ")" << std::endl;
+                if (std::abs (hz / expect - 1.0) > 0.003) bad.add (juce::String (note));
+            }
+            CHECK (bad.isEmpty(), "pitch tracking" + (bad.isEmpty() ? juce::String() : ": " + bad.joinIntoString (", ")));
+        }
+        // 3. no clicks: every grain shape starts and ends at zero (second difference of the cloud stays smooth)
+        {
+            WaveSample w; w.numChannels = 1; w.sampleRate = sr; w.length = (int) sr; w.peak = 1.0f;
+            w.ch[0].resize ((size_t) w.length); for (int i = 0; i < w.length; ++i) w.ch[0][(size_t) i] = (float) std::sin (2.0 * kPi * 220.0 * i / sr);
+            w.ch[1] = w.ch[0];
+            juce::StringArray clicky;
+            for (int shape = 0; shape < 5; ++shape)
+            {
+                GranVoice g; g.prepare (sr); g.start (7);
+                GranVoice::Params gp; gp.shape = shape; gp.sizeMs = 40.0f; gp.density = 35.0f; gp.sprayMs = 100.0f; gp.spread = 0.8f; gp.reverse = 0.3f; gp.maxGrains = 48;
+                float prev[2] = {}, prev2[2] = {}, worst = 0.0f, peak = 0.0f;
+                for (int i = 0; i < (int) sr; ++i)
+                {
+                    float l, r; g.tick (w, gp, l, r);
+                    const float d2 = std::abs (l - 2.0f * prev[0] + prev2[0]);
+                    if (i > 2) worst = std::max (worst, d2);
+                    peak = std::max (peak, std::abs (l));
+                    prev2[0] = prev[0]; prev[0] = l;
+                }
+                // a 220 Hz sine's second difference is 0.0021 of its level; a window that jumps would be ~1
+                const float rel = worst / std::max (1e-6f, peak);
+                std::cout << "  shape " << shape << ": worst 2nd difference " << juce::String (rel, 4) << " of the peak" << std::endl;
+                if (rel > 0.05f) clicky.add (juce::String (shape));
+            }
+            CHECK (clicky.isEmpty(), "grain shapes don't click" + (clicky.isEmpty() ? juce::String() : ": " + clicky.joinIntoString (", ")));
+            // a note's start and end through the synth: the amp envelope covers them
+            auto p = granOnly(); p->loadSampleData (sineWav (440.0), "sine.wav", slot);
+            setP (*p, P_ampA, 0.005f); setP (*p, P_ampR, 0.05f);
+            juce::AudioBuffer<float> b; render (*p, 0.8, chord (0.05, 0.5, { 69 }), &b);
+            float jump = 0, pk = 0; for (int i = 1; i < b.getNumSamples(); ++i) { jump = std::max (jump, std::abs (b.getSample (0, i) - b.getSample (0, i - 1))); pk = std::max (pk, std::abs (b.getSample (0, i))); }
+            CHECK (pk > 0.01f && jump < pk * 0.12f, "note on / off in the synth: no clicks (" + juce::String (jump / std::max (1e-6f, pk), 3) + ")");
+        }
+        // 4. Quality limits the grains per note; CPU at Eco / Normal / High
+        {
+            WaveSample w; w.numChannels = 2; w.sampleRate = sr; w.length = (int) sr; w.peak = 1.0f;
+            w.ch[0].assign ((size_t) w.length, 0.1f); w.ch[1] = w.ch[0];
+            for (auto [cap, expect] : { std::pair<int, int> { 8, 8 }, { 24, 24 }, { 48, 48 } })
+            {
+                GranVoice g; g.prepare (sr); g.start (1);
+                GranVoice::Params gp; gp.sizeMs = 500.0f; gp.density = 100.0f; gp.maxGrains = cap;
+                int most = 0; float l, r;
+                for (int i = 0; i < (int) sr; ++i) { g.tick (w, gp, l, r); most = std::max (most, g.activeGrains()); }
+                CHECK (most == expect, "Quality cap: at most " + juce::String (expect) + " grains a note (" + juce::String (most) + ")");
+            }
+            juce::String line;
+            for (auto [name, cap] : { std::pair<const char*, int> { "Eco", 8 }, { "Normal", 24 }, { "High", 48 } })
+            {
+                // 8 notes of a very dense cloud (100 grains a second of 400 ms: 40 would overlap), the grain engine alone
+                GranVoice v[8]; for (int k = 0; k < 8; ++k) { v[k].prepare (sr); v[k].start ((uint64_t) k); }
+                GranVoice::Params gp; gp.sizeMs = 400.0f; gp.density = 100.0f; gp.sprayMs = 80.0f; gp.scan = 0.3f; gp.spread = 0.6f; gp.maxGrains = cap;
+                float acc = 0.0f, l, r;
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                for (int i = 0; i < (int) (5.0 * sr); ++i) for (int k = 0; k < 8; ++k) { gp.ratio = 1.0 + 0.1 * k; v[k].tick (w, gp, l, r); acc += l; }
+                const double secs = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+                line << name << " " << juce::String (secs / 5.0 * 100.0, 2) << "%  ";
+                if (acc == 12345.0f) std::cout << "";
+            }
+            std::cout << "  CPU, 8 notes of a very dense cloud (grain engine, % of a core): " << line << std::endl;
+        }
+        // 5. saved in the project and the patch (the sample too), undo and A/B; long files are cut; old projects have none
+        {
+            auto p = granOnly();
+            CHECK (p->loadSampleData (sineWav (330.0, 2.0), "tone.wav", slot), "a WAV loads");
+            setP (*p, P_gsPosition, 0.6f); setP (*p, P_gsSize, 120.0f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            const auto* w = q->getSample (slot);
+            CHECK (w != nullptr && std::abs (w->duration() - 2.0) < 0.01 && q->getSampleName (slot) == "tone.wav"
+                   && std::abs (q->param (P_gsPosition)->convertFrom0to1 (q->param (P_gsPosition)->getValue()) - 0.6f) < 0.01f, "saved in projects, with the sample");
+            auto r = make(); r->importBrowserPatch (p->exportBrowserPatch());
+            CHECK (r->getSample (slot) != nullptr && r->getSampleName (slot) == "tone.wav" && r->param (P_gsOn)->getValue() > 0.5f, "saved in patches, with the sample");
+            auto x = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"14\"")
+                                               .replace ("waveDataGran=", "oldIgnored=");
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (x), old);
+            auto o = make(); o->loadSampleData (sineWav (100.0), "leftover.wav", slot);
+            o->setStateInformation (old.getData(), (int) old.getSize());
+            CHECK (o->getSample (slot) == nullptr && o->param (P_gsOn)->getValue() < 0.5f, "old projects: no granular sample, off");
+            // undo brings a cleared sample back
+            p->pushHistory ("x"); p->clearSample (slot); p->pushHistory ("clear"); p->undo();
+            CHECK (p->getSample (slot) != nullptr, "undo restores the sample");
+            // a 25 s file is cut to 20 s, and only that is saved
+            auto l = make();
+            const auto big = wavOf (25.0, 44100.0, 1, [] (int, int i) { return 0.3f * (float) std::sin (0.05 * i); });
+            l->loadSampleData (big, "long.wav", slot);
+            const auto* lw = l->getSample (slot);
+            CHECK (lw != nullptr && std::abs (lw->duration() - 20.0) < 0.01 && l->getSampleBytes (slot) < big.getSize() * 0.85, "long files are cut to 20 s (and saved cut)");
+            juce::MemoryBlock lb; l->getStateInformation (lb);
+            auto l2 = make(); l2->setStateInformation (lb.getData(), (int) lb.getSize());
+            CHECK (l2->getSample (slot) != nullptr && std::abs (l2->getSample (slot)->duration() - 20.0) < 0.01, "the cut sample reloads");
+            std::cout << "  " << tgui::sampleInfoText (*l, slot) << std::endl;
+            juce::AudioFormatManager fm; fm.registerBasicFormats();
+            CHECK (fm.findFormatForFileExtension ("mp3") != nullptr && fm.findFormatForFileExtension ("flac") != nullptr && fm.findFormatForFileExtension ("aiff") != nullptr, "WAV, AIFF, FLAC and MP3 readers");
+        }
+        // 6. Mod Matrix destinations (per voice), the Mixer strip, DNA Splice
+        {
+            CHECK (tg::meta (P_gsPosition).modulatable && tg::meta (P_gsDensity).modulatable && ! tg::meta (P_gsRoot).modulatable && tg::meta (P_gsPosition).group == MutGroup::None,
+                   "granular controls are Mod Matrix destinations and not mutated");
+            auto p = granOnly(); p->loadSampleData (sineWav (440.0, 4.0), "sine.wav", slot); oneGrain (*p);
+            p->addRoute (MS_Macro1, P_gsSemi, 0.25f); setP (*p, P_macro1, 1.0f);   // + a quarter of 48 semitones = +12
+            juce::AudioBuffer<float> b; render (*p, 0.6, chord (0.0, 0.55, { 69 }), &b);
+            const double hz = zcHz (b, 0.12, 0.38);
+            CHECK (std::abs (hz / 880.0 - 1.0) < 0.004, "a macro route moves the granular pitch (" + juce::String (hz, 1) + " Hz)");
+            auto m = granOnly(); m->loadSampleData (sineWav (440.0), "sine.wav", slot); setP (*m, P_mxGranMute, 1.0f);
+            const auto st = render (*m, 0.5, chord (0.0, 0.45, { 69 }));
+            CHECK (st.peak < 1e-6f, "the Mixer's Granular mute silences it");
+            auto so = make(); so->loadSampleData (sineWav (440.0, 4.0), "sine.wav", slot); setP (*so, P_gsOn, 1.0f); setP (*so, P_mxGranSolo, 1.0f); oneGrain (*so);
+            for (int i : { P_reverbMix, P_delayMix, P_chorusMix }) setP (*so, i, 0.0f);
+            setP (*so, P_filterCutoff, 18000.0f); setP (*so, P_gsSpread, 0.0f);
+            juce::AudioBuffer<float> sb; render (*so, 0.6, chord (0.0, 0.55, { 69 }), &sb);
+            CHECK (std::abs (zcHz (sb, 0.12, 0.38) / 440.0 - 1.0) < 0.004, "soloed: only the granular is heard (" + juce::String (zcHz (sb, 0.12, 0.38), 1) + " Hz)");
+            auto d = granOnly(); d->loadSampleData (sineWav (440.0), "sine.wav", slot);
+            setP (*d, P_dnaMix, 1.0f); setP (*d, P_gsDna, 1.0f);
+            const auto ds = render (*d, 0.5, chord (0.0, 0.45, { 69 }));
+            CHECK (ds.finite && ds.peak > 1e-4f, "stands in for DNA Splice source A");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_GRANONLY", {}).isNotEmpty())
+    {
+        granTests();
+        std::cout << (failures == 0 ? "GRAN TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PERFONLY", {}).isNotEmpty())
     {
         perfTests();
@@ -3662,11 +3887,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.46.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.47.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.46 (Performance FX added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.47 (Performance FX and the Granular Synth added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",
@@ -3971,9 +4196,9 @@ int main()
         CHECK (std::abs (fromNormalised (P_filterCutoff, 0.5f) - 632.5f) < 1.0f, "log scaling centre (20 Hz - 20 kHz, per octave)");
 
         auto p = make();
-        CHECK (p->exportBrowserPatch().contains ("\"version\": 14"), "patch version missing");
+        CHECK (p->exportBrowserPatch().contains ("\"version\": " + juce::String (MegaSynthProcessor::kStateVersion)), "patch version missing");
         juce::MemoryBlock st; p->getStateInformation (st);
-        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"14\""), "state version missing");
+        CHECK (getXmlFromBinaryForTest (st).contains ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\""), "state version missing");
 
         // history: edit, undo, redo, original
         const float orig = p->param (P_filterCutoff)->getValue();
@@ -5071,6 +5296,7 @@ int main()
     mixerTests();
     charTests();
     perfTests();
+    granTests();
     hardTests();
     lfoTests();
     arpTests();

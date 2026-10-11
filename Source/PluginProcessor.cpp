@@ -38,7 +38,7 @@ namespace
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
             || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni") || id.startsWith ("pEnv") || id.startsWith ("mseg")
-            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx") || id.startsWith ("flt") || id.startsWith ("pf");
+            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx") || id.startsWith ("flt") || id.startsWith ("pf") || id.startsWith ("gs");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -565,7 +565,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     hostTempo = bpm;
     fillSnapshot (n);
 
-    const WaveSample* wavs[2] = { currentWave[0].load(), currentWave[1].load() };
+    const WaveSample* wavs[4] = { currentWave[0].load(), currentWave[1].load(), currentWave[2].load(), currentWave[3].load() };
     if (capStopReq.load()) { capRecording = false; capStopReq = false; capReady = true; }
     if (grainLoadReady.load())
     {
@@ -872,8 +872,11 @@ bool MegaSynthProcessor::loadSampleData (const juce::MemoryBlock& data, const ju
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (std::make_unique<juce::MemoryInputStream> (data, true)));
     if (reader == nullptr || reader->lengthInSamples <= 1) return false;
 
+    slot = juce::jlimit (0, kSampleSlots - 1, slot);
     auto ws = std::make_unique<WaveSample>();
-    const int len = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 120.0));
+    const double capSecs = sampleCapSeconds (slot);
+    const bool trimmed = (double) reader->lengthInSamples > reader->sampleRate * capSecs;
+    const int len = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * capSecs));
     ws->numChannels = reader->numChannels > 1 ? 2 : 1;
     ws->length = len;
     ws->sampleRate = reader->sampleRate > 0 ? reader->sampleRate : 44100.0;
@@ -888,18 +891,28 @@ bool MegaSynthProcessor::loadSampleData (const juce::MemoryBlock& data, const ju
     for (int c = 0; c < ws->numChannels; ++c) peak = std::max (peak, tmp.getMagnitude (std::min (c, tmp.getNumChannels() - 1), 0, len));
     ws->peak = std::max (peak, 0.0001f);
 
+    // a file longer than the cap is kept (and saved) as just the part that's used, as a 24-bit WAV
+    juce::MemoryBlock kept;
+    if (trimmed && slot >= 2)
+    {
+        juce::MemoryOutputStream* mos = new juce::MemoryOutputStream (kept, false);
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (mos, ws->sampleRate, (unsigned int) tmp.getNumChannels(), 24, {}, 0));
+        if (w != nullptr) { w->writeFromAudioSampleBuffer (tmp, 0, len); w.reset(); }
+        else { delete mos; kept = data; }
+    }
+    const juce::MemoryBlock& store = (trimmed && slot >= 2 && kept.getSize() > 0) ? kept : data;
     const juce::ScopedLock sl (waveLock);
-    slot = juce::jlimit (0, 1, slot);
-    waveData[slot] = data;
-    waveShared[slot] = std::make_shared<const juce::MemoryBlock> (data);
+    waveData[slot] = store;
+    waveShared[slot] = std::make_shared<const juce::MemoryBlock> (store);
     waveName[slot] = name;
     currentWave[slot].store (ws.get());
     waveKeep.push_back (std::move (ws));
     // free old samples once they're well out of use (never the two current ones)
-    while (waveKeep.size() > 6)
+    while (waveKeep.size() > 10)
     {
         auto it = std::find_if (waveKeep.begin(), waveKeep.end(), [this] (const auto& w)
-                                { return w.get() != currentWave[0].load() && w.get() != currentWave[1].load(); });
+                                { for (auto& c : currentWave) if (w.get() == c.load()) return false; return true; });
         if (it == waveKeep.end()) break;
         waveKeep.erase (it);
     }
@@ -909,7 +922,7 @@ bool MegaSynthProcessor::loadSampleData (const juce::MemoryBlock& data, const ju
 void MegaSynthProcessor::clearSample (int slot)
 {
     const juce::ScopedLock sl (waveLock);
-    slot = juce::jlimit (0, 1, slot);
+    slot = juce::jlimit (0, kSampleSlots - 1, slot);
     currentWave[slot].store (nullptr);
     waveData[slot].reset();
     waveShared[slot].reset();
@@ -919,9 +932,9 @@ void MegaSynthProcessor::clearSample (int slot)
 juce::String MegaSynthProcessor::getSampleStatus (int slot) const
 {
     const juce::ScopedLock sl (waveLock);
-    slot = juce::jlimit (0, 1, slot);
+    slot = juce::jlimit (0, kSampleSlots - 1, slot);
     const auto* w = currentWave[slot].load();
-    if (w == nullptr) return "No wavetable loaded";
+    if (w == nullptr) return slot >= 2 ? "No sample loaded" : "No wavetable loaded";
     return "Loaded: " + waveName[slot] + "  " + juce::String (w->duration(), 2) + "s  peak " + juce::String (w->peak, 2);
 }
 
@@ -952,9 +965,10 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("patchName", getPatchName(), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
-        for (int k = 0; k < 2; ++k)
+        for (int k = 0; k < kSampleSlots; ++k)
         {
-            const juce::String suffix = k == 0 ? "" : "2";
+            const juce::String suffix = sampleSuffix (k);
+            if (k >= 2 && waveData[k].getSize() == 0) continue;   // (no empty properties for the newer slots)
             state.setProperty ("waveName" + suffix, waveName[k], nullptr);
             state.setProperty ("waveData" + suffix, waveData[k].getSize() > 0 ? juce::Base64::toBase64 (waveData[k].getData(), waveData[k].getSize()) : juce::String(), nullptr);
         }
@@ -985,6 +999,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 12) { setMasterDefaultsForOldPatch(); setMixerDefaultsForOldPatch(); }
     if (version < 13) setCharDefaultsForOldPatch();
     if (version < 14) setPerfDefaultsForOldPatch();
+    if (version < 15) setGranDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1014,9 +1029,9 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     { const juce::ScopedLock sl (nameLock); mutHistory.clear(); mutHistory.addTokens (tree.getProperty ("mutHistory").toString(), "|", {}); mutHistory.removeEmptyStrings(); }
     lastMorph = raw[P_sceneMorph]->load() > 0.5f;
 
-    for (int k = 0; k < 2; ++k)
+    for (int k = 0; k < kSampleSlots; ++k)
     {
-        const juce::String suffix = k == 0 ? "" : "2";
+        const juce::String suffix = sampleSuffix (k);
         const juce::String wd = tree.getProperty ("waveData" + suffix).toString();
         juce::MemoryOutputStream mo;
         if (wd.isNotEmpty() && juce::Base64::convertFromBase64 (mo, wd))
@@ -1122,9 +1137,10 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
 
     {
         const juce::ScopedLock sl (waveLock);
-        for (int k = 0; k < 2; ++k)
+        for (int k = 0; k < kSampleSlots; ++k)
         {
-            const juce::Identifier key (k == 0 ? "wavetable" : "wavetable2");   // the browser only knows "wavetable"
+            const juce::Identifier key (samplePatchKey (k));   // the browser only knows "wavetable"
+            if (k >= 2 && waveData[k].getSize() == 0) continue;
             if (waveData[k].getSize() > 0)
             {
                 auto* w = new juce::DynamicObject();
@@ -1205,6 +1221,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("mxOsc1Pan")) setMixerDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("flt1Char")) setCharDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("pfRoll")) setPerfDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("gsOn")) setGranDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -1259,9 +1276,9 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
     }
 
     juce::String sampleError;
-    for (int k = 0; k < 2; ++k)
+    for (int k = 0; k < kSampleSlots; ++k)
     {
-        const juce::var wt = patch[k == 0 ? "wavetable" : "wavetable2"];
+        const juce::var wt = patch[samplePatchKey (k)];
         if (wt.isObject())
         {
             const juce::String b64 = wt["data"].toString().fromFirstOccurrenceOf ("base64,", false, false);
@@ -1420,6 +1437,18 @@ void MegaSynthProcessor::setPerfDefaultsForOldPatch()
 {
     // Before Performance FX: every pad off, the settings and XY pads at their defaults
     for (int i = P_pfRoll; i <= P_pfSpring2; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->getDefaultValue());
+        prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setGranDefaultsForOldPatch()
+{
+    // Before the Granular Synth: off, its settings and Mixer strip at their defaults
+    for (int i = P_gsOn; i <= P_mxGranSolo; ++i)
     {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture();
@@ -1741,7 +1770,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
     s.patchName = getPatchName();
     s.label = label;
     const juce::ScopedLock sl (waveLock);
-    for (int k = 0; k < 2; ++k) { s.wave[k] = waveShared[k]; s.waveName[k] = waveName[k]; }
+    for (int k = 0; k < kSampleSlots; ++k) { s.wave[k] = waveShared[k]; s.waveName[k] = waveName[k]; }
     return s;
 }
 
@@ -1749,7 +1778,7 @@ bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
 {
     return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.lfoShapes == b.lfoShapes && a.arpStore == b.arpStore && a.msegs == b.msegs && a.scenes == b.scenes && a.macroNames == b.macroNames
         && a.sceneEdit == b.sceneEdit && a.patchName == b.patchName
-        && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1]
+        && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1] && a.wave[2] == b.wave[2] && a.wave[3] == b.wave[3]
         && a.params.isEquivalentTo (b.params);
 }
 
@@ -1776,7 +1805,7 @@ void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
     setMacroNamesJoined (s.macroNames);
     lastMorph = raw[P_sceneMorph]->load() > 0.5f;
     setPatchName (s.patchName);
-    for (int k = 0; k < 2; ++k)
+    for (int k = 0; k < kSampleSlots; ++k)
     {
         if (s.wave[k] == waveShared[k]) continue;
         if (s.wave[k] != nullptr)

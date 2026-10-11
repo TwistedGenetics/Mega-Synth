@@ -50,6 +50,7 @@ double syncRate (const ChoiceList& list, int idx, double tempo, double fallback)
 void Voice::prepare (double sampleRate)
 {
     sr = sampleRate;
+    gran.prepare (sampleRate);
     waveMut.prepare (sampleRate);
     dna.prepare (sampleRate);
     reso.prepare (sampleRate);
@@ -84,6 +85,7 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     t = 0.0;
     startedAt = voiceRand01() * 1000.0;
     for (int i = 0; i < 9; ++i) ssDriftSin[i] = std::sin ((startedAt + i * 0.37) * 7.123);   // fixed per note
+    gran.start (ord * 131u + (uint64_t) k);   // its own random sequence (the shared voice one is left alone)
     panWidth = -1.0f; panVoices = -1;
     accentBoost = o.accentBoost;
     filterAccent = o.filterAccent;
@@ -431,11 +433,11 @@ void Voice::advanceLfos (const Snapshot& s, int n)
 void Voice::updateMixer (const Snapshot& s, bool first, float c)
 {
     bool anySolo = false;
-    for (int k = 0; k < kMxSources; ++k) anySolo |= s.v[P_mxOsc1Solo + kMxStride * k] > 0.5f;
+    for (int k = 0; k < kMxStrips; ++k) anySolo |= s.v[mxParam (k) + 2] > 0.5f;
     bool active = false;
-    for (int k = 0; k < kMxSources; ++k)
+    for (int k = 0; k < kMxStrips; ++k)
     {
-        const int b = P_mxOsc1Pan + kMxStride * k;
+        const int b = mxParam (k);
         float pan = clampv (s.f (b), -1.0f, 1.0f);
         if (std::abs (pan) < 1.0e-6f) pan = 0.0f;
         const bool muted = s.v[b + 1] > 0.5f || (anySolo && s.v[b + 2] <= 0.5f);
@@ -616,6 +618,28 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
         wt[k].loaded = w != nullptr && w->length > 1;
     }
     const bool wtLoaded = wt[0].loaded;
+    // the Granular Synth: on with a sample loaded (its level fades, so switching it never clicks)
+    {
+        const WaveSample* g = wavs != nullptr ? wavs[2] : nullptr;
+        if (g != gsWav) { gsWav = g; if (g != nullptr) gran.start (order * 131u + (uint64_t) key); }
+        const bool on = s.v[P_gsOn] > 0.5f && gsWav != nullptr && gsWav->length > 1;
+        lGs.target = on ? clampv (s.f (P_gsLevel), 0.0f, 1.0f) : 0.0f;
+        if (first) lGs.v = lGs.target; else lGs.step (c10);
+        if (! on && lGs.v < 1.0e-5f) lGs.v = 0.0f;
+        gsRun = gsWav != nullptr && (on || lGs.v > 0.0f);
+        gsDnaSlot = clampv (s.i (P_gsDna), 0, 2);
+        if (gsRun)
+        {
+            gsP.position = s.f (P_gsPosition); gsP.scan = s.f (P_gsScan); gsP.sprayMs = s.f (P_gsSpray); gsP.sizeMs = clampv (s.f (P_gsSize), 5.0f, 500.0f);
+            gsP.density = clampv (s.f (P_gsDensity), 1.0f, 100.0f); gsP.shape = clampv (s.i (P_gsShape), 0, 4);
+            gsP.semis = s.f (P_gsSemi) + s.f (P_gsCents) * 0.01f; gsP.pitchRand = s.f (P_gsPitchRand);
+            gsP.reverse = s.f (P_gsReverse); gsP.spread = s.f (P_gsSpread);
+            gsP.maxGrains = s.i (P_quality) == 0 ? 8 : (s.i (P_quality) == 2 ? 48 : 24);
+            const double rootHz = 440.0 * pow2 ((clampv (s.f (P_gsRoot), 0.0f, 127.0f) - 69.0) / 12.0);
+            const double pe = s.i (P_pEnvTarget) == 0 ? (double) peRatio[0] : 1.0;   // the pitch envelope when it targets all oscillators
+            gsP.ratio = (s.v[P_gsKeyTrack] > 0.5f ? baseFreq / rootHz : 1.0) * pow2 (pitch / 1200.0) * pe;   // (pitch: bend and the LFO pitch slots)
+        }
+    }
 
     // --- mixer levels
     l1.target   = hardMuted (s.f (P_osc1Gain), mod[MT_osc1Gain], 2);
@@ -638,7 +662,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
 
     // --- "source mute": silence the voice when every source is at zero
     const float audible = l1.target + l2.target + l3.target + lSub.target + wt[0].level.target + wt[1].level.target + lC.target + lSS.target
-                        + rm * std::max (0.0f, s.f (P_ringGain));
+                        + rm * std::max (0.0f, s.f (P_ringGain)) + lGs.target;   // (+ 0 when the Granular Synth is off: unchanged)
     const float mute = audible > 0.0001f ? 1.0f : 0.0f;
     srcMute.target = mute;
     srcMute.step (first ? 1.0f : smoothCoef (dtc, mute > 0 ? 0.008 : 0.02));
@@ -1144,6 +1168,15 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             if (uniN[0] > 1) uniOsc (0, wave1, fr);
             aPrev[0] = o1; aPrev[1] = o2; aPrev[2] = o3; aPrev[3] = osub;
 
+            // the Granular Synth's cloud
+            float gsL = 0.0f, gsR = 0.0f, gsRaw = 0.0f;
+            if (gsRun)
+            {
+                gran.tick (*gsWav, gsP, gsL, gsR);
+                gsRaw = 0.5f * (gsL + gsR);
+                gsL *= lGs.v; gsR *= lGs.v;
+            }
+
             // mixer
             const float g1 = lvl (l1.v, AD_L1), g2 = lvl (l2.v, AD_L2), g3 = lvl (l3.v, AD_L3), gs = lvl (lSub.v, AD_LSub);
             const float o4g = lvl (wt[0].level.v, AD_LWt1) * wt[0].comp;
@@ -1179,11 +1212,20 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                     mL = a; mR = b;
                 }
             }
+            if (gsRun)
+            {
+                // its own Mixer strip (pan, mute / solo, meter), then into the mix before the filters
+                if (mc.meters) mxPeak[kMxSources] = std::max (mxPeak[kMxSources], std::max (std::abs (gsL), std::abs (gsR)));
+                if (mxActive) { gsL *= mxL[kMxSources]; gsR *= mxR[kMxSources]; }
+                mL += gsL; mR += gsR;
+            }
             if (dnaOn)
             {
                 // the splice of A and B, blended with the oscillator mix
                 const float srcs[8] = { o1, o2, o3, osub, o4m * wt[0].comp, 0.5f * (w2L + w2R) * wt[1].comp, cRaw, ssRaw };
                 float a = srcs[dnaCur.srcA], b = srcs[dnaCur.srcB];
+                if (gsDnaSlot == 1 && gsRun) a = gsRaw;   // the Granular Synth can stand in for A or B
+                else if (gsDnaSlot == 2 && gsRun) b = gsRaw;
                 const double tn = t + i * isr;
                 float sp;
                 if (dnaFade > 0 && dnaPrev.mode == dnaCur.mode)
@@ -1504,10 +1546,10 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     if (mc.meters)
     {
         // the Mixer's strip meters: the loudest voice's level per source, held until the editor reads it
-        float pk[kMxSources] {};
+        float pk[kMxStrips] {};
         for (auto& v : voices)
-            for (int k = 0; k < kMxSources; ++k) { if (v.active) pk[k] = std::max (pk[k], v.mxPeak[k]); v.mxPeak[k] = 0.0f; }
-        for (int k = 0; k < kMxSources; ++k)
+            for (int k = 0; k < kMxStrips; ++k) { if (v.active) pk[k] = std::max (pk[k], v.mxPeak[k]); v.mxPeak[k] = 0.0f; }
+        for (int k = 0; k < kMxStrips; ++k)
             if (pk[k] > mixerPeak[k].load (std::memory_order_relaxed)) mixerPeak[k].store (pk[k], std::memory_order_relaxed);
     }
     // the shared "Free" LFO clocks (Hz mode) and the editor's playheads
@@ -1515,6 +1557,12 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     {
         lfoFreePh[k] = wrap01 (lfoFreePh[k] + (double) s.f (P_lfo1Rate + 3 * k) * numSamples / sr);
         lfoPlayhead[k].store (newest != nullptr && newest->active ? newest->lfoPhaseShown (k) : -1.0f, std::memory_order_relaxed);
+    }
+    {
+        int grains = 0;
+        for (auto& v : voices) if (v.active) grains += v.granGrains();
+        granGrainsShown.store (grains, std::memory_order_relaxed);
+        granPlayheadShown.store (newest != nullptr && newest->active ? newest->granPlayhead() : -1.0, std::memory_order_relaxed);
     }
     for (int k = 0; k < 2; ++k)
     {

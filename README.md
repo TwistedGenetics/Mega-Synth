@@ -348,7 +348,25 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
   - The order is: the step's setting, then the slice's (Break Chopper page), then the break's.
   - The grid tags these steps **R**, **A** or **C**. A **\*** means a cycle override.
 - **Late:** how late a step plays, as a share of a step (0-50%). Humanise sets it, and you can set it by hand. The grid tags a late step with **>**.
-- **Mod Matrix sources:** **Break Seq Step** (where in the pattern), **Break Seq Pattern** (which one) and **Break Slice** (the last slice played), all 0..1.
+- **Fills (the Fill panel):**
+  - **Fill** plays the current pattern's fill. It can come from the **Fill** button, the **Fill Key** (a note you choose, which isn't played as a note), or the Fill parameter, which you can automate or MIDI-learn.
+  - **Start:** the next beat, the next bar, or **End of pattern** (the fill starts as many steps before the pattern's end as it is long, so it lands at the end of the phrase).
+  - **Length:** 1 beat, 2 beats, 1 bar or 2 bars. **Mode:** **One-shot** plays the Length; **Held** plays from the start until you let go.
+  - **When it ends:**
+    - **Pattern carries on** (the default): the pattern comes back exactly where it would have been, as if it had kept running underneath.
+    - **Restart the pattern:** the pattern starts again from step 1.
+    - A running chain carries on underneath either way.
+  - **Fill Source** (per pattern):
+    - **Auto** (the default) makes a fill from the pattern with one of Snare Build, Stutter, Rollers, Pitch Dive or Frankenbreak. The tool is chosen per pattern from a seed, so it's the same every time, and the knob shows which one.
+    - **New Fills** picks again for every pattern; Undo goes back.
+    - Or choose a pattern A-H as the fill.
+    - A fill plays the last steps of its source, as many as its length. For example, a 1-bar fill from a 2-bar pattern plays that pattern's second bar.
+  - **Fill Break** (per pattern) plays the fill's Active steps from another break, for example a fill from Break 2 over a groove from Break 1.
+  - **Auto Fill:** a fill every 4, 8 or 16 bars, timed to end with the phrase. **Chance** sets how often it actually plays.
+  - **On the grid:** the fill's steps get an orange bar, and its first step shows the countdown ("FILL in 5") and then its progress ("FILL 3/16"), with its length.
+  - **Fill Active** (0 or 1) is a Mod Matrix source.
+  - **What's saved:** fill settings are saved in patches, projects, undo and A/B. Older projects load with fills off. Auto fills aren't saved; they're remade from the pattern and the seed.
+- **Mod Matrix sources:** **Break Seq Step** (where in the pattern), **Break Seq Pattern** (which one), **Break Slice** (the last slice played), **Break Slot** and **Fill Active**, all 0..1.
 - **What's saved:** patterns, chain and per-slice settings are saved in patches, projects, undo and A/B. That includes each step's Stretch, Cycle and Late, and each slice's Stretch and Cycle.
 
 ## Performance FX (Perform > Performance FX)

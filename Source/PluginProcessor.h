@@ -84,7 +84,11 @@ public:
     double getHostTempoShown() const { const double h = hostTempo.load(); return h > 0.0 ? h : (double) raw[tg::P_seqTempo]->load(); }   // slice the loaded break again when its sample or slicing changed (message thread)
     std::atomic<int> breakAudition { -1 };    // the editor asks for a slice to be played
     std::atomic<int> bsStepShown { -1 }, bsPatternShown { 0 };   // the Break Sequencer's playing step and pattern
-    struct BsLogEntry { double beat; int64_t step; int pattern, slice; bool fired; int brk = -1; };
+    // the fill, for the step grid: steps until it starts (-1: none waiting), steps played (-1: none
+    // playing), its length in steps (0: held), and the pattern step it starts on (-1: none)
+    std::atomic<int> bsFillCountdown { -1 }, bsFillPosShown { -1 }, bsFillLenShown { 0 }, bsFillFirstIdx { -1 };
+    void refreshAutoFills (bool force = false);   // each pattern's Auto fill (message thread)
+    struct BsLogEntry { double beat; int64_t step; int pattern, slice; bool fired; int brk = -1; bool fill = false; };
     std::vector<BsLogEntry>* bsLog = nullptr;   // tests: every Break Sequencer step with the beat it played on
     std::atomic<int> arpStepShown { -1 };     // for the editor
     struct ArpLogEntry { double beat; int note; bool on; float vel; };
@@ -215,7 +219,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 19;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch
+    static constexpr int kStateVersion = 20;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -253,6 +257,7 @@ private:
     void setGranDefaultsForOldPatch();      // ... and from before the Granular Synth
     void setBreakDefaultsForOldPatch();     // ... and from before the Break Chopper
     void setBreak3DefaultsForOldPatch();    // ... and from before three breaks
+    void setFillDefaultsForOldPatch();      // ... and from before fills
     void setToolDefaultsForOldPatch();      // ... and from before the stage-4 pattern tools
     void setChopDefaultsForOldPatch();      // ... and from before chop mode      // ... and from before the filter character models     // ... and from before the Mixer strips (pan / mute / solo)     // ... and from before the wheel / sustain switches
     void setEnvDefaultsForOldPatch();      // ... and from before the pitch envelope and MSEGs       // ... and from before the effects rack   // every parameter, route, scene, step and sample back to the defaults
@@ -326,6 +331,14 @@ private:
     uint32_t bsRng = 0x9E3779B9u;
     struct BsRoll { double beat; tg::BreakChopper::Trigger t; };
     BsRoll bsRolls[16]; int bsNumRolls = 0;
+    // fills (audio thread): 0 none, 1 waiting for its start, 2 playing; steps [start, end)
+    int bsFillState = 0, bsFillPat = 0, bsFillLen = 16;
+    int64_t bsFillStart = 0, bsFillEnd = 0, bsOffset = 0;   // bsOffset: where the pattern restarted (Restart the pattern)
+    bool bsFillHeld = false, bsFillParamLast = false, bsSkipChain = false;
+    uint32_t bsFillRng = 0x2545F491u;
+    void bsFillPress (bool down);
+    void bsShowFill (int64_t k, int steps);
+    juce::String lastFillKey;
     double bsDue() const;          // the beat of the next step or roll
     void bsTick (double beat);     // plays what's due at this beat
     void bsStart (double beat);

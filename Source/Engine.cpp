@@ -246,7 +246,7 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
         v[MS_ArpPos]      = in->arpPos;
         v[MS_ArpGate]     = in->arpGate;
         v[MS_Sidechain]   = in->sidechain;
-        v[MS_BsStep] = in->bsStep; v[MS_BsPattern] = in->bsPattern; v[MS_BsSlice] = in->bsSlice; v[MS_BsBreak] = in->bsBreak;
+        v[MS_BsStep] = in->bsStep; v[MS_BsPattern] = in->bsPattern; v[MS_BsSlice] = in->bsSlice; v[MS_BsBreak] = in->bsBreak; v[MS_BsFill] = in->bsFill;
     }
     v[MS_RandNote] = randNote;
     v[MS_CellNoise] = inst.value (CI_Source);
@@ -1601,7 +1601,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             globalSrc[MS_ModWheel] = modIn->wheel; globalSrc[MS_PitchBend] = modIn->bend;
             globalSrc[MS_Aftertouch] = modIn->aftertouch; globalSrc[MS_CcA] = modIn->ccA; globalSrc[MS_CcB] = modIn->ccB;
             globalSrc[MS_ArpPos] = modIn->arpPos; globalSrc[MS_ArpGate] = modIn->arpGate; globalSrc[MS_Sidechain] = modIn->sidechain;
-            globalSrc[MS_BsStep] = modIn->bsStep; globalSrc[MS_BsPattern] = modIn->bsPattern; globalSrc[MS_BsSlice] = modIn->bsSlice; globalSrc[MS_BsBreak] = modIn->bsBreak;
+            globalSrc[MS_BsStep] = modIn->bsStep; globalSrc[MS_BsPattern] = modIn->bsPattern; globalSrc[MS_BsSlice] = modIn->bsSlice; globalSrc[MS_BsBreak] = modIn->bsBreak; globalSrc[MS_BsFill] = modIn->bsFill;
         }
         for (int k = 0; k < 8; ++k) globalSrc[MS_Macro1 + k] = s.v[P_macro1 + k];
         for (int k = 0; k < 4; ++k) globalSrc[MS_PfX1 + k] = 2.0f * s.v[P_pfX1 + k] - 1.0f;

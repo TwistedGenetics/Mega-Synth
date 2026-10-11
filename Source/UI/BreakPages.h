@@ -75,7 +75,8 @@ public:
     {
         const auto d = proc.breakStore.get();
         const int pat = editedPattern(), steps = numSteps();
-        juce::String key; key << pat << "|" << steps << "|" << selected << "|" << proc.bsStepShown.load() << "|" << proc.bsPatternShown.load();
+        juce::String key; key << pat << "|" << steps << "|" << selected << "|" << proc.bsStepShown.load() << "|" << proc.bsPatternShown.load()
+                              << "|f" << proc.bsFillCountdown.load() << "," << proc.bsFillPosShown.load() << "," << proc.bsFillLenShown.load() << "," << proc.bsFillFirstIdx.load();
         for (int i = 0; i < steps; ++i) { const auto& s = d.step[pat][i]; key << (s.on ? "1" : "0") << s.slice << s.roll << (s.accent ? "a" : "") << (s.reverse ? "r" : "") << (s.tie ? "t" : "") << juce::roundToInt (s.vel * 20.0f) << "b" << s.brk << (s.layer ? "L" : "") << juce::roundToInt (s.pitch) << "s" << s.stretch << juce::roundToInt (s.cycleMs) << "n" << juce::roundToInt (s.nudge * 100); }
         if (key != lastKey) { lastKey = key; data = d; repaint(); }
     }
@@ -111,9 +112,38 @@ public:
                 g.drawText (marks, r.withTrimmedTop (16.0f).withHeight (13.0f), juce::Justification::centred);
             }
             if (i == selected) { g.setColour (col::text); g.drawRoundedRectangle (r, 5.0f, 1.6f); }
+            // the fill: the steps it covers (an orange bar), its countdown and length on its first step
+            const int f0 = proc.bsFillFirstIdx.load(), fl = proc.bsFillLenShown.load();
+            if (f0 >= 0 && proc.bsPatternShown.load() == pat)
+            {
+                const int span = fl > 0 ? std::min (fl, steps) : 1;
+                if (((i - f0) % steps + steps) % steps < span)
+                {
+                    g.setColour (juce::Colour (0xffff9f43));
+                    g.fillRoundedRectangle (juce::Rectangle<float> (r.getX() + 2.0f, r.getBottom() - 4.0f, r.getWidth() - 4.0f, 3.0f), 1.5f);
+                }
+
+            }
             g.setColour (col::muted.withAlpha (0.7f));
             g.setFont (juce::Font (juce::FontOptions (9.0f)));
             g.drawText (juce::String (i + 1), juce::Rectangle<float> (r.getX(), r.getBottom() + 1.0f, r.getWidth(), 11.0f), juce::Justification::centred);
+        }
+        // the fill's countdown and length, on its first step
+        const int f0 = proc.bsFillFirstIdx.load(), fl = proc.bsFillLenShown.load();
+        if (f0 >= 0 && f0 < steps && proc.bsPatternShown.load() == pat)
+        {
+            const auto r = cell (f0).toFloat().reduced (2.0f);
+            const int cd = proc.bsFillCountdown.load(), pos = proc.bsFillPosShown.load();
+            const juce::String len = fl == 4 ? "1 beat" : fl == 8 ? "2 beats" : fl == 16 ? "1 bar" : fl == 32 ? "2 bars" : "held";
+            const juce::String t = cd >= 0 ? "FILL in " + juce::String (cd) : "FILL " + juce::String (pos + 1) + (fl > 0 ? "/" + juce::String (fl) : juce::String());
+            const juce::String label = t + "  (" + len + ")";
+            const juce::Font f (juce::FontOptions (9.5f, juce::Font::bold));
+            juce::GlyphArrangement ga; ga.addLineOfText (f, label, 0.0f, 0.0f);
+            const float tw = ga.getBoundingBox (0, -1, true).getWidth() + 8.0f;
+            const juce::Rectangle<float> box (std::min (r.getX() + 2.0f, (float) getWidth() - tw - 2.0f), r.getBottom() - 19.0f, tw, 13.0f);
+            g.setColour (col::panel.withAlpha (0.9f)); g.fillRoundedRectangle (box, 3.0f);
+            g.setColour (juce::Colour (0xffff9f43)); g.setFont (f);
+            g.drawText (label, box, juce::Justification::centred);
         }
     }
     void mouseDown (const juce::MouseEvent& e) override
@@ -148,6 +178,32 @@ private:
     MegaSynthProcessor& proc;
     tg::BreakData data;
     juce::String lastKey;
+};
+
+// The Fill button: down = the Fill parameter on, up = off (one-shot fills start on the press; held
+// fills last while it's held). Lit while a fill waits or plays.
+class FillButton : public juce::TextButton, private juce::Timer
+{
+public:
+    explicit FillButton (MegaSynthProcessor& p) : juce::TextButton ("Fill"), proc (p)
+    {
+        tagParam (*this, tg::P_bsFill);
+        setTooltip ("Fill: plays this pattern's fill, then the pattern carries on where it would have been. Also the Fill key, or automate / MIDI-learn the Fill parameter.");
+        startTimerHz (15);
+    }
+    ~FillButton() override { stopTimer(); }
+    void mouseDown (const juce::MouseEvent& e) override { juce::TextButton::mouseDown (e); set (1.0f); }
+    void mouseUp (const juce::MouseEvent& e) override { juce::TextButton::mouseUp (e); set (0.0f); }
+private:
+    void set (float v) { auto* prm = proc.param (tg::P_bsFill); prm->beginChangeGesture(); prm->setValueNotifyingHost (v); prm->endChangeGesture(); }
+    void timerCallback() override
+    {
+        const bool lit = proc.bsFillCountdown.load() >= 0 || proc.bsFillPosShown.load() >= 0;
+        setToggleState (lit, juce::dontSendNotification);
+        setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffff9f43));
+        setClickingTogglesState (false);
+    }
+    MegaSynthProcessor& proc;
 };
 
 // Keeps the store-bound controls showing the store's values

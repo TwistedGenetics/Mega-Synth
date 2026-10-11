@@ -346,6 +346,46 @@ void MegaSynthProcessor::bsStart (double beat)
     bsLastStep = (int64_t) std::ceil (beat * 4.0 - 1.0e-6) - 1;
     bsChainIdx = -1;
     bsRng = 0x9E3779B9u;
+    bsFillState = 0; bsOffset = 0; bsSkipChain = false; bsFillRng = 0x2545F491u;
+    bsFillCountdown.store (-1); bsFillPosShown.store (-1); bsFillFirstIdx.store (-1);
+    modInputs.bsFill = 0.0f;
+}
+
+static int64_t posMod (int64_t a, int64_t m) { return ((a % m) + m) % m; }
+
+// a fill pressed (the Fill parameter, button or key) or let go
+void MegaSynthProcessor::bsFillPress (bool down)
+{
+    static const int lens[] = { 4, 8, 16, 32 };
+    if (down)
+    {
+        if (! bsRunning || bsFillState != 0) return;
+        bsFillLen = lens[juce::jlimit (0, 3, snap.i (P_bsFillLen))];
+        bsFillHeld = snap.i (P_bsFillMode) == 1;
+        const int steps = snap.i (P_bsSteps) == 1 ? 32 : 16;
+        const int how = juce::jlimit (0, 2, snap.i (P_bsFillStart));
+        int64_t start = bsLastStep + 1;   // the next step to play
+        if (how == 0) while (posMod (start, 4) != 0) ++start;                      // the next beat
+        else if (how == 1) while (posMod (start, 16) != 0) ++start;                // the next bar
+        else while (posMod (start - bsOffset + bsFillLen, steps) != 0) ++start;   // so it ends where the pattern does
+        bsFillStart = start;
+        bsFillEnd = bsFillHeld ? INT64_MAX : start + bsFillLen;
+        bsFillState = 1;
+        bsShowFill (bsLastStep, steps);
+    }
+    else if (bsFillHeld)
+    {
+        if (bsFillState == 1) bsFillState = 0;                    // let go before it started
+        else if (bsFillState == 2) bsFillEnd = bsLastStep + 1;    // it ends with this step
+    }
+}
+
+void MegaSynthProcessor::bsShowFill (int64_t k, int steps)
+{
+    bsFillCountdown.store (bsFillState == 1 ? (int) std::min<int64_t> (9999, bsFillStart - k) : -1, std::memory_order_relaxed);
+    bsFillPosShown.store (bsFillState == 2 ? (int) std::min<int64_t> (9999, k - bsFillStart) : -1, std::memory_order_relaxed);
+    bsFillLenShown.store (bsFillHeld ? 0 : bsFillLen, std::memory_order_relaxed);
+    bsFillFirstIdx.store (bsFillState != 0 ? (int) posMod (bsFillStart - bsOffset, steps) : -1, std::memory_order_relaxed);
 }
 
 double MegaSynthProcessor::bsDue() const
@@ -368,17 +408,27 @@ void MegaSynthProcessor::bsTick (double beat)
     const float swing = juce::jlimit (0.0f, 0.75f, snap.f (P_bsSwing));
     const auto& d = ch.data();
     const int steps = snap.i (P_bsSteps) == 1 ? 32 : 16;
+    // the Fill parameter (automation, MIDI learn, the page's button)
+    const bool fillParam = snap.v[P_bsFill] > 0.5f;
+    if (fillParam != bsFillParamLast) { bsFillParamLast = fillParam; bsFillPress (fillParam); }
     int guard = 0;
     while (bsStepBeat (bsLastStep + 1, swing) <= beat + 1.0e-9 && ++guard < 64)
     {
         const int64_t k = ++bsLastStep;
-        const int idx = (int) (((k % steps) + steps) % steps);
+        // a fill ends: the pattern comes back where it would have been by now (it kept running
+        // underneath), or starts again from its first step
+        if (bsFillState == 2 && k >= bsFillEnd)
+        {
+            bsFillState = 0;
+            if (snap.i (P_bsFillReturn) == 1) { bsOffset = k; bsSkipChain = true; }
+        }
+        const int idx = (int) posMod (k - bsOffset, steps);
         // which pattern: the chain (moving on each time the pattern starts again), or the selected one,
         // switched on the next step, beat or bar
         int chainLen = 0; while (chainLen < 16 && d.chain[chainLen] != 0) ++chainLen;
         if (snap.v[P_bsChainOn] > 0.5f && chainLen > 0)
         {
-            if (idx == 0 || bsChainIdx < 0)
+            if ((idx == 0 && ! bsSkipChain) || bsChainIdx < 0)
             {
                 bsChainIdx = (bsChainIdx + 1) % chainLen; bsPlaying = juce::jlimit (0, 7, d.chain[bsChainIdx] - 'A');
                 bsApplyPatternBreak (d);
@@ -390,7 +440,36 @@ void MegaSynthProcessor::bsTick (double beat)
             const int sw = juce::jlimit (0, 2, snap.i (P_bsSwitch));
             if (want != bsPlaying && (sw == 0 || (sw == 1 && (k & 3) == 0) || (sw == 2 && (k & 15) == 0))) { bsPlaying = want; bsApplyPatternBreak (d); }
         }
-        const tg::BreakStep& s = d.step[bsPlaying][idx];
+        bsSkipChain = false;
+        // Auto Fill: every 4, 8 or 16 bars (by chance), timed to end with the phrase
+        static const int lens[] = { 4, 8, 16, 32 }, autoBars[] = { 0, 4, 8, 16 };
+        const int afBars = autoBars[juce::jlimit (0, 3, snap.i (P_bsAutoFill))];
+        if (bsFillState == 0 && afBars > 0)
+        {
+            const int L = lens[juce::jlimit (0, 3, snap.i (P_bsFillLen))];
+            if (posMod (k + L, 16 * afBars) == 0)
+            {
+                bsFillRng ^= bsFillRng << 13; bsFillRng ^= bsFillRng >> 17; bsFillRng ^= bsFillRng << 5;
+                if ((float) (bsFillRng & 0xffffff) / 16777216.0f < snap.f (P_bsAutoFillProb))
+                { bsFillState = 1; bsFillStart = k; bsFillEnd = k + L; bsFillLen = L; bsFillHeld = false; }
+            }
+        }
+        if (bsFillState == 1 && k >= bsFillStart) { bsFillState = 2; bsFillPat = bsPlaying; }
+        const bool inFill = bsFillState == 2 && k >= bsFillStart && k < bsFillEnd;
+        // the step: the pattern's, or the fill's (its source's last steps, as long as the fill)
+        const tg::BreakStep* sp = &d.step[bsPlaying][idx];
+        int fillBrk = -1;
+        if (inFill)
+        {
+            const int fj = (int) posMod (k - bsFillStart, bsFillLen);
+            const int srcIdx = (int) posMod (fj - bsFillLen, steps);
+            const int src = juce::jlimit (0, 8, d.fillSrc[bsFillPat]);
+            sp = src > 0 ? &d.step[src - 1][srcIdx] : &d.autoFill[bsFillPat][srcIdx];
+            if (d.fillBrk[bsFillPat] > 0) fillBrk = juce::jlimit (0, 2, d.fillBrk[bsFillPat] - 1);
+        }
+        const tg::BreakStep& s = *sp;
+        modInputs.bsFill = inFill ? 1.0f : 0.0f;
+        bsShowFill (k, steps);
         bool fired = false; int firedBrk = -1;
         if (s.on && ! s.tie)
         {
@@ -401,8 +480,8 @@ void MegaSynthProcessor::bsTick (double beat)
                 tg::BreakChopper::Trigger t;
                 t.slice = s.slice; t.vel = juce::jlimit (0.0f, 1.25f, s.vel * (s.accent ? 1.25f : 1.0f)); t.pitch = s.pitch; t.reverse = s.reverse;
                 // which break: the step's own, or the Active Break (swapped every other bar or two with Alternate)
-                int brk = s.brk > 0 ? s.brk - 1 : juce::jlimit (0, 2, snap.i (P_bcActive) - 1);
-                if (s.brk == 0)
+                int brk = s.brk > 0 ? s.brk - 1 : (fillBrk >= 0 ? fillBrk : juce::jlimit (0, 2, snap.i (P_bcActive) - 1));
+                if (s.brk == 0 && ! inFill)
                 {
                     static const int altBars[] = { 0, 1, 2, 4 };
                     const int ab = altBars[juce::jlimit (0, 3, snap.i (P_bsAlternate))];
@@ -427,7 +506,7 @@ void MegaSynthProcessor::bsTick (double beat)
                 }
             }
         }
-        if (bsLog != nullptr) bsLog->push_back ({ beat, k, bsPlaying, s.slice, fired, firedBrk });
+        if (bsLog != nullptr) bsLog->push_back ({ beat, k, bsPlaying, s.slice, fired, firedBrk, inFill });
         const int ns = ch.numSlices (ch.lastBreakPlayed());
         modInputs.bsStep = (float) idx / (float) (steps - 1);
         modInputs.bsPattern = (float) bsPlaying / 7.0f;
@@ -443,6 +522,60 @@ void MegaSynthProcessor::bsApplyPatternBreak (const tg::BreakData& d)
 {
     const int pb = d.patBreak[juce::jlimit (0, 7, bsPlaying)];
     if (pb > 0 && snap.i (P_bcActive) != pb) { setParamFromAudio (P_bcActive, (float) pb); snap.v[P_bcActive] = (float) pb; }
+}
+
+void MegaSynthProcessor::refreshAutoFills (bool force)
+{
+    // each pattern's Auto fill: one of Snare Build, Stutter, Rollers, Pitch Dive or Frankenbreak (chosen
+    // per pattern from the fill seed), made from that pattern. Remade whenever the patterns, the
+    // seed or the analysis change; never saved (the same seed always makes the same fill)
+    const int steps = raw[P_bsSteps]->load() > 0.5f ? 32 : 16;
+    const float amount = std::max (0.5f, raw[P_bsAmount]->load());
+    juce::String key;
+    key << (int) breakStore.getVersion() << "|" << steps << "|" << amount << "|" << lastBreakKey[0] << "|" << lastBreakKey[1] << "|" << lastBreakKey[2];
+    if (key == lastFillKey && ! force) return;
+    lastFillKey = key;
+    const auto d = breakStore.get();
+    int loaded = 0; for (auto& b : d.brk) loaded += b.nSlices > 0 ? 1 : 0;
+    static const int kAuto[] = { tg::breaktools::ToolSnareBuild, tg::breaktools::ToolStutter, tg::breaktools::ToolRollers, tg::breaktools::ToolPitchDive, -1 };
+    std::vector<tg::BreakStep> out ((size_t) (tg::BreakData::kPatterns * tg::BreakData::kSteps));
+    int tools[tg::BreakData::kPatterns] {};
+    auto tmp = std::make_unique<tg::BreakData>();
+    for (int p = 0; p < tg::BreakData::kPatterns; ++p)
+    {
+        const int gb = d.fillBrk[p] > 0 ? d.fillBrk[p] - 1 : (d.patBreak[p] > 0 ? d.patBreak[p] - 1 : 0);
+        tg::breaktools::Rng r (d.fillSeed * 977 + p * 131);
+        int pick = r.below (5);
+        if (pick == 4 && loaded < 2) pick = r.below (4);   // (Frankenbreak needs two breaks)
+        const int seed = d.fillSeed * 7919 + p;
+        // (a tool that would leave this pattern as it is, e.g. Rollers on a pattern with every step on: the next one)
+        int chosen = pick;
+        for (int tries = 0; tries < 5; ++tries, pick = (pick + 1) % 5)
+        {
+            if (pick == 4 && loaded < 2) continue;
+            chosen = pick;
+            *tmp = d;
+            if (kAuto[pick] >= 0) tg::breaktools::applyTool (kAuto[pick], *tmp, p, steps, seed, amount, gb, false);
+            else tg::breaktools::frankenbreak (*tmp, p, steps, seed, amount, gb);
+            bool differs = false;
+            for (int i = 0; i < steps && ! differs; ++i)
+            {
+                const auto &x = tmp->step[p][i], &y = d.step[p][i];
+                differs = x.on != y.on || x.slice != y.slice || x.roll != y.roll || x.pitch != y.pitch || x.reverse != y.reverse || x.brk != y.brk || x.vel != y.vel;
+            }
+            if (differs) break;
+        }
+        std::copy (tmp->step[p], tmp->step[p] + tg::BreakData::kSteps, out.begin() + p * tg::BreakData::kSteps);
+        tools[p] = chosen;
+    }
+    breakStore.setAnalysis ([&] (tg::BreakData& x)
+    {
+        for (int p = 0; p < tg::BreakData::kPatterns; ++p)
+        {
+            std::copy (out.begin() + p * tg::BreakData::kSteps, out.begin() + (p + 1) * tg::BreakData::kSteps, x.autoFill[p]);
+            x.autoFillTool[p] = tools[p];
+        }
+    });
 }
 
 void MegaSynthProcessor::refreshBreakAnalysis (bool force)
@@ -765,6 +898,9 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
         const int nn = m.getNoteNumber();
         static const int patBase[] = { -1, 24, 72, 84, 96 };
         const int pb = patBase[juce::jlimit (0, 4, snap.i (P_bsKeys))];
+        // the Fill key (it isn't played as a note)
+        const int fk = juce::roundToInt (snap.f (P_bsFillKey));
+        if (fk >= 0 && nn == fk) { bsFillPress (m.isNoteOn()); return; }
         if (pb >= 0 && nn >= pb && nn < pb + 8)
         {
             if (m.isNoteOn()) { setParamFromAudio (P_bsPattern, (float) (nn - pb)); snap.v[P_bsPattern] = (float) (nn - pb); }
@@ -1120,7 +1256,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         const int anySlices = engine.breaks().numSlices (0) + engine.breaks().numSlices (1) + engine.breaks().numSlices (2);
         const bool run = bcOn && snap.v[P_bsOn] > 0.5f && anySlices > 0 && fxBeatInc > 0.0 && (hostPlaying || ! hostTransport);
         if (run && ! bsRunning) bsStart (beatAt (0));
-        if (! run && bsRunning) { bsRunning = false; bsNumRolls = 0; bsStepShown.store (-1); }
+        if (! run && bsRunning) { bsRunning = false; bsNumRolls = 0; bsStepShown.store (-1); bsFillState = 0; bsFillCountdown.store (-1); bsFillPosShown.store (-1); bsFillFirstIdx.store (-1); modInputs.bsFill = 0.0f; }
         if (run)
         {
             // a jump in the song position (or the DAW starting): pick up from where it is now
@@ -1277,6 +1413,7 @@ void MegaSynthProcessor::timerCallback()
     }
     initOnFirstUse();   // a new instance: Init, on the message thread, once (never over a restored project)
     refreshBreakAnalysis();
+    refreshAutoFills();
     {
         // chop mode switched on: Manual markers from the slices there are now, and the break starts playing
         const bool chop = raw[P_bcChopMode]->load() > 0.5f;
@@ -1497,6 +1634,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 17) setBreak3DefaultsForOldPatch();
     if (version < 18) setChopDefaultsForOldPatch();
     if (version < 19) setToolDefaultsForOldPatch();
+    if (version < 20) setFillDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1726,6 +1864,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("bcActive")) setBreak3DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bcChopMode")) setChopDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bsToolSource")) setToolDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("bsFillMode")) setFillDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -1990,6 +2129,15 @@ void MegaSynthProcessor::setBreak3DefaultsForOldPatch()
 void MegaSynthProcessor::setChopDefaultsForOldPatch()
 {
     for (int i = P_bcChopMode; i <= P_bcMarkerSnap; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setFillDefaultsForOldPatch()
+{
+    for (int i = P_bsFill; i <= P_bsAutoFillProb; ++i)
     {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();

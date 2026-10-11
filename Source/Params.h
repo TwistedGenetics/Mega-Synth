@@ -170,6 +170,16 @@ inline const char* const kBsAltBreakKeys[]   = { "1","2","3" };
 inline const char* const kBsAltBreakLabels[] = { "Break 1","Break 2","Break 3" };
 inline const char* const kBsToolSrcKeys[]   = { "active","all" };
 inline const char* const kBsToolSrcLabels[] = { "From the Active Break","From all three breaks" };
+inline const char* const kBsFillModeKeys[]   = { "oneshot","held" };
+inline const char* const kBsFillModeLabels[] = { "One-shot","Held" };
+inline const char* const kBsFillLenKeys[]    = { "beat","2beats","bar","2bars" };
+inline const char* const kBsFillLenLabels[]  = { "1 beat","2 beats","1 bar","2 bars" };
+inline const char* const kBsFillStartKeys[]   = { "beat","bar","end" };
+inline const char* const kBsFillStartLabels[] = { "Next beat","Next bar","End of pattern" };
+inline const char* const kBsFillRetKeys[]   = { "carry","restart" };
+inline const char* const kBsFillRetLabels[] = { "Pattern carries on","Restart the pattern" };
+inline const char* const kBsAutoFillKeys[]   = { "off","4","8","16" };
+inline const char* const kBsAutoFillLabels[] = { "Off","Every 4 bars","Every 8 bars","Every 16 bars" };
 inline const char* const kBcSnapKeys[]   = { "none","zero","transient","g8","g16","g32" };
 inline const char* const kBcSnapLabels[] = { "Snap: none","Snap: zero crossing","Snap: transient","Snap: grid 1/8","Snap: grid 1/16","Snap: grid 1/32" };
 inline const char* const kPfKeysKeys[]    = { "off","36","48","60","72","84","96" };
@@ -343,6 +353,11 @@ inline const ChoiceList kListBsAlt     = TG_LIST(kBsAlt);
 inline const ChoiceList kListBcSnap    = TG_LIST(kBcSnap);
 inline const ChoiceList kListBsAltBreak = TG_LIST(kBsAltBreak);
 inline const ChoiceList kListBsToolSrc  = TG_LIST(kBsToolSrc);
+inline const ChoiceList kListBsFillMode = TG_LIST(kBsFillMode);
+inline const ChoiceList kListBsFillLen  = TG_LIST(kBsFillLen);
+inline const ChoiceList kListBsFillStart = TG_LIST(kBsFillStart);
+inline const ChoiceList kListBsFillRet  = TG_LIST(kBsFillRet);
+inline const ChoiceList kListBsAutoFill = TG_LIST(kBsAutoFill);
 // Performance FX pads, in the order they're processed: P_pfRoll + k
 constexpr int kPfPads = 13;
 
@@ -1086,7 +1101,15 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(bcChopLatency,"Break Chop Tap Latency", 0, 100, 10, 0.1, 0) \
     C(bcMarkerSnap,"Break Marker Snap", kListBcSnap, 1) \
     C(bsToolSource,"Break Tool Source", kListBsToolSrc, 0) \
-    F(bsVarAmount, "Break Variation Amount", 0, 1, 0.3, 0.01, 0)
+    F(bsVarAmount, "Break Variation Amount", 0, 1, 0.3, 0.01, 0) \
+    B(bsFill,      "Break Fill", false) \
+    F(bsFillKey,   "Break Fill Key", -1, 127, -1, 1, 0) \
+    C(bsFillMode,  "Break Fill Mode", kListBsFillMode, 0) \
+    C(bsFillLen,   "Break Fill Length", kListBsFillLen, 2) \
+    C(bsFillStart, "Break Fill Start", kListBsFillStart, 1) \
+    C(bsFillReturn,"Break Fill Return", kListBsFillRet, 0) \
+    C(bsAutoFill,  "Break Auto Fill", kListBsAutoFill, 0) \
+    F(bsAutoFillProb,"Break Auto Fill Chance", 0, 1, 1, 0.01, 0)
 
 enum ParamIndex
 {

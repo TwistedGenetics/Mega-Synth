@@ -2309,6 +2309,9 @@ int main()
         ed->setSize (1200, 890);
         auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
         auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+        // a fill waiting to start, for the Break Sequencer's grid (the countdown and length show)
+        p->refreshAutoFills (true);
+        p->bsPatternShown.store (0); p->bsFillFirstIdx.store (16); p->bsFillCountdown.store (5); p->bsFillLenShown.store (16);
         for (auto& name : e->allPageNames())
         {
             e->showPage (name);
@@ -4690,6 +4693,178 @@ int main()
                 CHECK (std::abs ((f1 - f0) - want) < 2.0, "a late hit plays that much of a step late (" + juce::String (f1 - f0) + " samples, want " + juce::String (want, 1) + ")");
             }
         }
+        // 15. fills that return
+        {
+            const int fillKey = 30;
+            // pattern A: step i plays slice i; B: slice (i + 8) % 16; C (A's fill): slice 15 - i
+            auto setup = [&] (int start, int len, int mode, int ret)
+            {
+                auto p = make(); setP (*p, P_bcOn, 1.0f); setP (*p, P_bsOn, 1.0f); setP (*p, P_bcSliceMode, 3.0f);
+                p->loadSampleData (demo(), "demo.wav", slot);
+                setP (*p, P_bsFillKey, (float) fillKey); setP (*p, P_bsFillStart, (float) start); setP (*p, P_bsFillLen, (float) len);
+                setP (*p, P_bsFillMode, (float) mode); setP (*p, P_bsFillReturn, (float) ret);
+                p->breakStore.edit ([] (tg::BreakData& d)
+                {
+                    for (int i = 0; i < 16; ++i)
+                    {
+                        d.step[0][i].on = true; d.step[0][i].slice = i;
+                        d.step[1][i].on = true; d.step[1][i].slice = (i + 8) % 16;
+                        d.step[2][i].on = true; d.step[2][i].slice = 15 - i;
+                    }
+                    d.fillSrc[0] = 3; d.fillSrc[1] = 3;
+                });
+                return p;
+            };
+            auto run = [&] (MegaSynthProcessor& p, double bpm, double ppq0, double beats, std::vector<std::pair<double, bool>> keys)
+            {
+                std::vector<MegaSynthProcessor::BsLogEntry> log; p.bsLog = &log;
+                std::vector<std::pair<int, juce::MidiMessage>> ev;
+                for (auto& kv : keys)
+                {
+                    const int at = (int) ((kv.first - ppq0) * 60.0 / bpm * sr);
+                    ev.push_back ({ at, kv.second ? juce::MidiMessage::noteOn (1, fillKey, (juce::uint8) 100) : juce::MidiMessage::noteOff (1, fillKey) });
+                }
+                runHost (p, bpm, ppq0, beats * 60.0 / bpm, ev, 100);
+                p.bsLog = nullptr;
+                return log;
+            };
+            // the main pattern is where it would have been, every step outside [f0, f1); the fill inside
+            // (a fill plays the last steps of its source, as many as its length: fill step j is source step j - length)
+            auto check = [&] (const std::vector<MegaSynthProcessor::BsLogEntry>& log, int64_t f0, int64_t f1, double bpm, juce::String& why, int L = 0)
+            {
+                if (L == 0) L = (int) (f1 - f0);
+                const double inc = bpm / 60.0 / sr;
+                for (auto& e : log)
+                {
+                    if (std::abs (e.beat - 0.25 * (double) e.step) > inc * 1.01) { why = "step " + juce::String (e.step) + " off the grid"; return false; }
+                    const bool in = e.step >= f0 && e.step < f1;
+                    if (e.fill != in) { why = "step " + juce::String (e.step) + (in ? " should be the fill" : " shouldn't be the fill"); return false; }
+                    const int want = in ? 15 - (int) ((((e.step - f0 - L) % 16) + 16) % 16) : (int) (e.step % 16);
+                    if (e.slice != want || ! e.fired) { why = "step " + juce::String (e.step) + " played slice " + juce::String (e.slice) + ", want " + juce::String (want); return false; }
+                }
+                return true;
+            };
+            for (double bpm : { 90.0, 140.0, 174.0 })
+            {
+                juce::String why;
+                {
+                    // play pressed mid-bar (beat 7.31); the Fill key at beat 9.3; next bar, 1 bar
+                    auto p = setup (1, 2, 0, 0);
+                    const auto log = run (*p, bpm, 7.31, 10.0, { { 9.3, true }, { 9.5, false } });
+                    CHECK (! log.empty() && log.front().step == 30 && check (log, 48, 64, bpm, why) && log.back().step >= 68,
+                           "fill at " + juce::String (bpm) + " BPM: starts on the next bar, the pattern returns on the step it would have reached " + why);
+                }
+                {
+                    auto p = setup (0, 1, 0, 0);   // next beat, 2 beats
+                    const auto log = run (*p, bpm, 7.31, 6.0, { { 9.3, true }, { 9.4, false } });
+                    CHECK (check (log, 40, 48, bpm, why), "fill on the next beat, 2 beats, at " + juce::String (bpm) + " BPM " + why);
+                }
+                {
+                    auto p = setup (2, 0, 0, 0);   // the end of the pattern, 1 beat
+                    const auto log = run (*p, bpm, 7.31, 6.0, { { 9.3, true }, { 9.4, false } });
+                    CHECK (check (log, 44, 48, bpm, why), "fill timed to end with the pattern, at " + juce::String (bpm) + " BPM " + why);
+                }
+            }
+            {
+                // Restart: after the fill, the pattern starts from its first step
+                auto p = setup (0, 0, 0, 1);
+                const auto log = run (*p, 172.0, 7.31, 6.0, { { 9.3, true }, { 9.4, false } });
+                bool ok = ! log.empty();
+                for (auto& e : log)
+                {
+                    const int want = e.step >= 40 && e.step < 44 ? 3 - (int) (e.step - 40) : (e.step >= 44 ? (int) ((e.step - 44) % 16) : (int) (e.step % 16));
+                    ok = ok && e.slice == want && e.fill == (e.step >= 40 && e.step < 44);
+                }
+                CHECK (ok, "Restart the pattern: it starts again from step 1 after the fill");
+            }
+            {
+                // held: plays from the next bar until let go
+                auto p = setup (1, 2, 1, 0);
+                const auto log = run (*p, 172.0, 7.31, 10.0, { { 9.3, true }, { 13.1, false } });
+                juce::String why;
+                CHECK (check (log, 48, 53, 172.0, why, 16), "a held fill plays until it's let go " + why);
+            }
+            {
+                // with a chain running: the chain carries on underneath
+                auto p = setup (1, 2, 0, 0);
+                p->breakStore.edit ([] (tg::BreakData& d) { tg::BreakStore::setChain (d, "AB"); });
+                setP (*p, P_bsChainOn, 1.0f);
+                const auto log = run (*p, 172.0, 7.31, 14.0, { { 9.3, true }, { 9.5, false } });
+                bool ok = ! log.empty();
+                for (auto& e : log)
+                {
+                    const int pat = (int) ((e.step / 16) % 2 == 0 ? 1 : 0);   // (the chain starts at step 30: A, then B at step 32, A at 48 ...)
+                    const bool in = e.step >= 48 && e.step < 64;
+                    if (e.step < 32) continue;
+                    const int want = in ? 15 - (int) (e.step - 48) : (pat == 0 ? (int) (e.step % 16) : (int) ((e.step % 16 + 8) % 16));
+                    ok = ok && e.pattern == pat && e.fill == in && e.slice == want;
+                }
+                CHECK (ok, "fills with a chain running: the chain position carries on underneath");
+            }
+            {
+                // Auto Fill every 4 bars, ending with the phrase
+                auto p = setup (1, 2, 0, 0);
+                setP (*p, P_bsAutoFill, 1.0f); setP (*p, P_bsAutoFillProb, 1.0f); setP (*p, P_bsFillKey, -1.0f);
+                const auto log = run (*p, 172.0, 0.0, 36.0, {});
+                bool ok = log.size() >= 140;
+                for (auto& e : log) ok = ok && e.fill == ((e.step >= 48 && e.step < 64) || (e.step >= 112 && e.step < 128));
+                CHECK (ok, "Auto Fill every 4 bars: the last bar of each phrase");
+                auto q = setup (1, 2, 0, 0);
+                setP (*q, P_bsAutoFill, 1.0f); setP (*q, P_bsAutoFillProb, 0.0f);
+                const auto none = run (*q, 172.0, 0.0, 36.0, {});
+                bool any = false; for (auto& e : none) any = any || e.fill;
+                CHECK (! any, "Auto Fill at 0% chance plays none");
+            }
+            {
+                // the Fill parameter (automation / MIDI learn / the button)
+                auto p = setup (1, 2, 0, 0);
+                setP (*p, P_bsFill, 1.0f);
+                const auto log = run (*p, 172.0, 7.31, 10.0, {});
+                juce::String why;
+                CHECK (check (log, 32, 48, 172.0, why), "the Fill parameter starts a fill " + why);
+            }
+            {
+                // a fill from another break; Auto fills repeatable from the seed; saved
+                auto p = setup (1, 2, 0, 0);
+                p->loadSampleData (wav16 (tg::breaks::makeDemoBreak (44100.0, 174.0, 1), 44100.0), "b2.wav", MegaSynthProcessor::breakSlot (1));
+                setP (*p, P_bcSliceMode2, 3.0f); p->refreshBreakAnalysis();
+                p->breakStore.edit ([] (tg::BreakData& d) { d.fillBrk[0] = 2; });
+                const auto log = run (*p, 172.0, 7.31, 10.0, { { 9.3, true }, { 9.5, false } });
+                bool ok = true; int n = 0;
+                for (auto& e : log) { if (e.fill) { ok = ok && e.brk == 1; ++n; } else ok = ok && e.brk == 0; }
+                CHECK (ok && n == 16, "a fill can play another break over the groove (Fill Break)");
+                p->breakStore.edit ([] (tg::BreakData& d) { d.fillSrc[0] = 0; d.fillSeed = 5; });
+                p->refreshAutoFills (true);
+                const auto a = p->breakStore.get();
+                p->refreshAutoFills (true);
+                const auto b = p->breakStore.get();
+                bool same = true, changed = false;
+                for (int q = 0; q < 8; ++q) for (int i = 0; i < 32; ++i) same = same && a.autoFill[q][i].slice == b.autoFill[q][i].slice && a.autoFill[q][i].roll == b.autoFill[q][i].roll && a.autoFill[q][i].on == b.autoFill[q][i].on;
+                for (int i = 0; i < 16; ++i) changed = changed || a.autoFill[0][i].slice != a.step[0][i].slice || a.autoFill[0][i].roll != a.step[0][i].roll || a.autoFill[0][i].pitch != 0.0f || a.autoFill[0][i].on != a.step[0][i].on || a.autoFill[0][i].brk != a.step[0][i].brk;
+                std::cout << "  auto fill tools per pattern:"; for (int q = 0; q < 8; ++q) std::cout << " " << a.autoFillTool[q]; std::cout << (same ? " same" : " differ") << (changed ? " changed" : " unchanged") << std::endl;
+                CHECK (same && changed, "Auto fills: made from the pattern by a tool, the same from the same seed");
+                setP (*p, P_bsAutoFill, 2.0f); setP (*p, P_bsFillReturn, 1.0f);
+                juce::MemoryBlock mb; p->getStateInformation (mb);
+                auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+                const auto d = q->breakStore.get();
+                CHECK (d.fillSrc[1] == 3 && d.fillBrk[0] == 2 && d.fillSeed == 5 && q->param (P_bsAutoFill)->getValue() > 0.0f
+                       && juce::roundToInt (q->param (P_bsFillKey)->convertFrom0to1 (q->param (P_bsFillKey)->getValue())) == fillKey, "fill settings are saved with the project");
+                // an older project: no fills
+                juce::MemoryBlock old; p->getStateInformation (old);
+                auto xml = juce::parseXML (getXmlFromBinaryForTest (old));
+                if (xml != nullptr)
+                {
+                    xml->setAttribute ("stateVersion", 19);
+                    for (auto* id : { "bsFill", "bsFillKey", "bsFillMode", "bsFillLen", "bsFillStart", "bsFillReturn", "bsAutoFill", "bsAutoFillProb" })
+                        if (auto* e = xml->getChildByAttribute ("id", id)) xml->removeChildElement (e, true);
+                    juce::MemoryBlock mb2; juce::AudioProcessor::copyXmlToBinary (*xml, mb2);
+                    auto r = make(); setP (*r, P_bsAutoFill, 3.0f); setP (*r, P_bsFillKey, 50.0f); setP (*r, P_bsFill, 1.0f);
+                    r->setStateInformation (mb2.getData(), (int) mb2.getSize());
+                    CHECK (r->param (P_bsAutoFill)->getValue() == 0.0f && r->param (P_bsFill)->getValue() == 0.0f
+                           && juce::roundToInt (r->param (P_bsFillKey)->convertFrom0to1 (r->param (P_bsFillKey)->getValue())) == -1, "older projects load with fills off");
+                }
+            }
+        }
         // 10. CPU: 8 slices at once in each stretch mode, Eco / Normal / High (the chopper alone)
         {
             WaveSample w; w.numChannels = 2; w.sampleRate = 44100.0; const auto b = tg::breaks::makeDemoBreak (44100.0, 170.0, 0);
@@ -4812,6 +4987,24 @@ int main()
                                           ev.push_back ({ (int) ((b * 4.0 + 3.5) / inc), juce::MidiMessage::noteOff (1, b % 4 == 3 ? 43 : 45) }); }
             renderTo (*p, "break_demo_4_three_breaks_172.wav", ev);
         }
+        // 5. fills: Break Frankenstein's chain with an Auto Fill every 4 bars (one bar long, ending the
+        //    phrase), each fill played from Break 3 over the groove, and the pattern back on the downbeat
+        {
+            auto p = make(); p->loadFactoryPreset (35);
+            setP (*p, P_bsAutoFill, 1.0f); setP (*p, P_bsAutoFillProb, 1.0f); setP (*p, P_bsFillLen, 2.0f);
+            p->breakStore.edit ([] (tg::BreakData& d) { for (int q = 0; q < 8; ++q) d.fillBrk[q] = 3; d.fillSeed = 3; });
+            p->refreshAutoFills (true);
+            std::vector<std::pair<int, juce::MidiMessage>> ev;
+            for (int b = 0; b < 8; ++b) { ev.push_back ({ (int) (b * 4.0 / inc), juce::MidiMessage::noteOn (1, b % 4 == 3 ? 43 : 45, (juce::uint8) 90) });
+                                          ev.push_back ({ (int) ((b * 4.0 + 3.5) / inc), juce::MidiMessage::noteOff (1, b % 4 == 3 ? 43 : 45) }); }
+            std::vector<MegaSynthProcessor::BsLogEntry> log; p->bsLog = &log;
+            renderTo (*p, "break_demo_5_fills_every_4_bars_172.wav", ev);
+            p->bsLog = nullptr;
+            juce::String fills; int64_t last = -2;
+            for (auto& e : log) if (e.fill) { if (e.step != last + 1) fills << " from step " << (int) e.step; last = e.step; }
+            const auto d = p->breakStore.get();
+            std::cout << "  demo 5 fills:" << fills << "; Auto fill tools for A-D: " << d.autoFillTool[0] << " " << d.autoFillTool[1] << " " << d.autoFillTool[2] << " " << d.autoFillTool[3] << std::endl;
+        }
         return 0;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BREAKONLY", {}).isNotEmpty())
@@ -4870,11 +5063,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.55.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.56.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.55 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap and the pattern tools added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.56 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools and fills added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",

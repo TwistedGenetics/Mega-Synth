@@ -2335,6 +2335,49 @@ void MegaSynthEditor::buildPages()
         stepName->setColour (juce::Label::textColourId, col::text);
         stepName->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
         grid->onSelect = [] (int) {};
+        // ---- fills
+        auto* fillSec = sec (page, "Fill", juce::Colour (0xffff9f43));
+        fillSec->addInfo ("Fill plays a fill, then the pattern comes back exactly where it would have been, as if it had kept running "
+                          "underneath (or, with Restart, from its first step). Chains carry on underneath too. Start: on the next beat, the next bar, "
+                          "or timed to end with the pattern. One-shot plays the set Length; Held plays while you hold it. Each pattern has its own "
+                          "Fill Source: Auto (one of Snare Build, Stutter, Rollers, Pitch Dive or Frankenbreak, chosen per pattern and made from it; "
+                          "New Fills picks again) or the last steps of a pattern A-H. Fill Break plays the fill from another break. Auto Fill plays one "
+                          "every 4, 8 or 16 bars, by Chance, ending with the phrase. Fill Active is a Mod Matrix source.");
+        fillSec->add (new FillButton (proc), 64, 40);
+        fillSec->choice (P_bsFillMode, "Mode", 92);
+        fillSec->choice (P_bsFillLen, "Length", 86);
+        fillSec->choice (P_bsFillStart, "Start", 112);
+        fillSec->newRow();
+        auto patOf = [this] { return juce::jlimit (0, 7, juce::roundToInt (proc.param (P_bsPattern)->convertFrom0to1 (proc.param (P_bsPattern)->getValue()))); };
+        auto* fSrc = new StoreKnob ("Fill Source", 0, 8, 1, juce::Colour (0xffff9f43),
+                                    [this, patOf] { return (float) proc.breakStore.get().fillSrc[patOf()]; },
+                                    [this, patOf] (float v) { const int p = patOf(); proc.breakStore.edit ([p, v] (tg::BreakData& d) { d.fillSrc[p] = juce::roundToInt (v); }); },
+                                    [this, patOf] (double v)
+                                    {
+                                        const int n = juce::roundToInt (v);
+                                        if (n > 0) return "Pattern " + juce::String::charToString ((juce::juce_wchar) ('A' + n - 1));
+                                        static const char* tn[] = { "Build", "Stutter", "Rollers", "Dive", "Franken" };
+                                        return "Auto " + juce::String (tn[juce::jlimit (0, 4, proc.breakStore.get().autoFillTool[patOf()])]);
+                                    });
+        fSrc->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, true, 84, 18);
+        fSrc->setTooltip ("Where this pattern's fill comes from: Auto (made from the pattern by a tool) or the last steps of pattern A-H");
+        auto* fBrk = new StoreKnob ("Fill Break", 0, 3, 1, juce::Colour (0xffff9f43),
+                                    [this, patOf] { return (float) proc.breakStore.get().fillBrk[patOf()]; },
+                                    [this, patOf] (float v) { const int p = patOf(); proc.breakStore.edit ([p, v] (tg::BreakData& d) { d.fillBrk[p] = juce::roundToInt (v); }); },
+                                    [] (double v) { return v < 0.5 ? juce::String ("as steps") : "Break " + juce::String (juce::roundToInt (v)); });
+        fBrk->setTooltip ("The break the fill plays (for its Active steps): e.g. a fill from Break 2 over a groove from Break 1");
+        fillSec->add (fSrc, 84, 84);
+        fillSec->add (fBrk, 70, 84);
+        fillSec->knob (P_bsAutoFillProb, "Chance", 60);
+        fillSec->knob (P_bsFillKey, "Fill Key", 64);
+        auto* newFills = new juce::TextButton ("New Fills");
+        newFills->setTooltip ("New Auto fills for every pattern (a new fill seed; Undo goes back)");
+        newFills->onClick = [this] { proc.breakStore.edit ([] (tg::BreakData& d) { ++d.fillSeed; }); };
+        fillSec->add (newFills, 72, 26);
+        fillSec->newRow();
+        fillSec->choice (P_bsFillReturn, "When it ends", 164);
+        fillSec->choice (P_bsAutoFill, "Auto Fill", 128);
+        knobs.add (fSrc); knobs.add (fBrk);
         ticker->tick = [this, grid, knobs, toggles, chainEd, stepName]
         {
             grid->refresh();
@@ -2347,13 +2390,14 @@ void MegaSynthEditor::buildPages()
         };
         ticker->tick();
         breakGridForTests = grid;
-        page->onResize = [page, top, grid, stepSec, stepName]
+        page->onResize = [page, top, grid, stepSec, stepName, fillSec]
         {
             const int g = 10, W = page->getWidth();
             top->setBounds (g, g, W - 2 * g, 210);
-            grid->setBounds (g + 4, g + 216, W - 2 * g - 8, 152);
-            stepSec->setBounds (g, g + 374, W - 2 * g, 214);
-            stepName->setBounds (g + 70, g + 380, 300, 20);
+            grid->setBounds (g + 4, g + 216, W - 2 * g - 8, 140);
+            stepSec->setBounds (g, g + 362, 772, 226);
+            stepName->setBounds (g + 70, g + 368, 300, 20);
+            fillSec->setBounds (g + 780, g + 362, W - 2 * g - 780, 226);
         };
     }
 

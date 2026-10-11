@@ -72,6 +72,13 @@ struct BreakData
     int patBreak[kPatterns] {};  // 0: none; 1-3: starting this pattern makes that break the Active Break
     char chain[17] {};           // pattern chain, e.g. "AABA"
     int seed = 1;                // Shuffle / Jungle / Frankenbreak: each press takes the next seed
+    // fills: per pattern, where its fill comes from (0: Auto, 1-8: pattern A-H) and which break it
+    // plays (0: as the steps say; 1-3: that break for the Active steps); Auto fills use fillSeed
+    int fillSrc[kPatterns] {}, fillBrk[kPatterns] {};
+    int fillSeed = 1;
+    // ---- derived (not saved): each pattern's Auto fill, made from the pattern on the message thread
+    BreakStep autoFill[kPatterns][kSteps];
+    int autoFillTool[kPatterns] {};
 };
 
 class BreakStore
@@ -94,7 +101,7 @@ public:
         version.fetch_add (1);
     }
     uint32_t getVersion() const { return editVersion.load(); }   // (for undo: edits only)
-    void reset() { edit ([] (BreakData& d) { auto a = d; d = BreakData(); copyAnalysis (a, d); }); }
+    void reset() { edit ([] (BreakData& d) { auto a = d; d = BreakData(); copyAnalysis (a, d); copyFills (a, d); }); }
 
     // ---- audio thread: a fresh copy when something changed (never blocks)
     bool pull (BreakData& dst, uint32_t& seen) const
@@ -201,6 +208,14 @@ public:
         bool anyPatBreak = false;
         for (int p : d.patBreak) anyPatBreak = anyPatBreak || p != 0;
         if (anyPatBreak) { juce::Array<juce::var> pb; for (int p : d.patBreak) pb.add (p); o->setProperty ("patBreak", pb); }
+        bool anyFill = d.fillSeed != 1;
+        for (int p = 0; p < BreakData::kPatterns; ++p) anyFill = anyFill || d.fillSrc[p] != 0 || d.fillBrk[p] != 0;
+        if (anyFill)
+        {
+            juce::Array<juce::var> fs, fb;
+            for (int p = 0; p < BreakData::kPatterns; ++p) { fs.add (d.fillSrc[p]); fb.add (d.fillBrk[p]); }
+            o->setProperty ("fillSrc", fs); o->setProperty ("fillBrk", fb); o->setProperty ("fillSeed", d.fillSeed);
+        }
         return juce::var (o);
     }
     juce::String toJson() const { return juce::JSON::toString (toVar(), true); }
@@ -212,6 +227,7 @@ public:
             const auto analysis = d;
             d = BreakData();
             copyAnalysis (analysis, d);
+            copyFills (analysis, d);   // (remade from the loaded patterns on the message thread)
             if (! v.isObject()) return;
             slotFromVar (d.brk[0], v);
             for (int k = 1; k < BreakData::kBreaks; ++k)
@@ -249,6 +265,11 @@ public:
             d.seed = juce::jmax (1, (int) v.getProperty ("seed", 1));
             if (auto* pb = v["patBreak"].getArray())
                 for (int p = 0; p < juce::jmin (BreakData::kPatterns, pb->size()); ++p) d.patBreak[p] = juce::jlimit (0, 3, (int) (*pb)[p]);
+            if (auto* fs = v["fillSrc"].getArray())
+                for (int p = 0; p < juce::jmin (BreakData::kPatterns, fs->size()); ++p) d.fillSrc[p] = juce::jlimit (0, 8, (int) (*fs)[p]);
+            if (auto* fb = v["fillBrk"].getArray())
+                for (int p = 0; p < juce::jmin (BreakData::kPatterns, fb->size()); ++p) d.fillBrk[p] = juce::jlimit (0, 3, (int) (*fb)[p]);
+            d.fillSeed = juce::jmax (1, (int) v.getProperty ("fillSeed", 1));
         });
     }
 
@@ -262,6 +283,10 @@ public:
     static void copyAnalysis (const BreakData& from, BreakData& to)
     {
         for (int k = 0; k < BreakData::kBreaks; ++k) to.brk[k].copyAnalysisFrom (from.brk[k]);
+    }
+    static void copyFills (const BreakData& from, BreakData& to)
+    {
+        for (int p = 0; p < BreakData::kPatterns; ++p) { std::copy (from.autoFill[p], from.autoFill[p] + BreakData::kSteps, to.autoFill[p]); to.autoFillTool[p] = from.autoFillTool[p]; }
     }
 
 private:

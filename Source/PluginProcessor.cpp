@@ -2516,8 +2516,69 @@ juce::File MegaSynthProcessor::getPatchFolder()
 }
 
 juce::String MegaSynthProcessor::getDefaultAuthor() { return getUserInitFile().getSiblingFile ("author.txt").loadFileAsString().trim(); }
+juce::File MegaSynthProcessor::getAuthorListFile() { return getPatchFolder().getChildFile ("authors.json"); }
+
+namespace
+{
+    struct AuthorStore { juce::StringArray recent, hidden; };
+    AuthorStore loadAuthors()
+    {
+        AuthorStore st;
+        const auto v = juce::JSON::parse (MegaSynthProcessor::getAuthorListFile().loadFileAsString());
+        if (auto* a = v.getProperty ("recent", {}).getArray()) for (auto& x : *a) if (x.toString().trim().isNotEmpty()) st.recent.add (x.toString().trim());
+        if (auto* a = v.getProperty ("forgotten", {}).getArray()) for (auto& x : *a) if (x.toString().trim().isNotEmpty()) st.hidden.add (x.toString().trim());
+        return st;
+    }
+    void saveAuthors (const AuthorStore& st)
+    {
+        auto* o = new juce::DynamicObject();
+        juce::Array<juce::var> r, h; for (auto& x : st.recent) r.add (x); for (auto& x : st.hidden) h.add (x);
+        o->setProperty ("recent", r); o->setProperty ("forgotten", h);
+        MegaSynthProcessor::getAuthorListFile().replaceWithText (juce::JSON::toString (juce::var (o)));
+    }
+    bool containsNoCase (const juce::StringArray& a, const juce::String& s) { return a.contains (s, true); }
+}
+
+juce::StringArray MegaSynthProcessor::getAuthorList (const juce::StringArray& foundInPatches)
+{
+    const auto st = loadAuthors();
+    juce::StringArray out;
+    for (auto& a : st.recent) if (! containsNoCase (out, a)) out.add (a);
+    juce::StringArray extra;
+    for (auto& a : foundInPatches)
+    {
+        const auto t = a.trim();
+        if (t.isNotEmpty() && ! containsNoCase (out, t) && ! containsNoCase (extra, t) && ! containsNoCase (st.hidden, t)) extra.add (t);
+    }
+    extra.sortNatural();
+    out.addArray (extra);
+    return out;
+}
+
+void MegaSynthProcessor::rememberAuthor (const juce::String& name)
+{
+    const auto n = name.trim();
+    if (n.isEmpty()) return;
+    auto st = loadAuthors();
+    for (int i = st.recent.size(); --i >= 0;) if (st.recent[i].equalsIgnoreCase (n)) st.recent.remove (i);
+    for (int i = st.hidden.size(); --i >= 0;) if (st.hidden[i].equalsIgnoreCase (n)) st.hidden.remove (i);
+    st.recent.insert (0, n);
+    saveAuthors (st);
+}
+
+void MegaSynthProcessor::forgetAuthor (const juce::String& name)
+{
+    const auto n = name.trim();
+    if (n.isEmpty()) return;
+    auto st = loadAuthors();
+    for (int i = st.recent.size(); --i >= 0;) if (st.recent[i].equalsIgnoreCase (n)) st.recent.remove (i);
+    if (! containsNoCase (st.hidden, n)) st.hidden.add (n);
+    saveAuthors (st);
+}
+
 void MegaSynthProcessor::setDefaultAuthor (const juce::String& a)
 {
+    rememberAuthor (a);
     auto f = getUserInitFile().getSiblingFile ("author.txt");
     f.getParentDirectory().createDirectory();
     f.replaceWithText (a.trim());

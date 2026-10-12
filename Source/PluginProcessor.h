@@ -222,6 +222,12 @@ public:
     static juce::File getDeletedFolder();                             // deleted patches wait here to be restored
     static juce::String getDefaultAuthor();                           // the author last typed when saving (remembered)
     static void setDefaultAuthor (const juce::String&);
+    // every author used before, most recent first (authors.json in the patch folder): the names typed when saving,
+    // and the authors of the patches found there, less any you've told it to forget
+    static juce::StringArray getAuthorList (const juce::StringArray& foundInPatches = {});
+    static void rememberAuthor (const juce::String&);       // to the front of the list (and no longer forgotten)
+    static void forgetAuthor (const juce::String&);         // off the list (no patch changes)
+    static juce::File getAuthorListFile();
     void setPatchName (const juce::String& n) { const juce::ScopedLock sl (nameLock); patchName = n; }
     void generateRandomPhrase();
 

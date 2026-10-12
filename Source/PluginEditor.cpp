@@ -4077,7 +4077,8 @@ void MegaSynthEditor::showSaveDialog()
         else { cb->addItem (si.meta.categoryShown(), cb->getNumItems() + 1); cb->setSelectedItemIndex (cb->getNumItems() - 1, juce::dontSendNotification); }
     }
     saveWin->addTextEditor ("tags", si.meta.tagsText(), "Tags (commas or spaces)");
-    saveWin->addTextEditor ("author", si.meta.author, "Author");
+    saveWin->addComboBox ("author", MegaSynthProcessor::getAuthorList (authorsInPatches()), "Author (type a name or pick one)");
+    if (auto* ab = saveWin->getComboBoxComponent ("author")) { ab->setEditableText (true); ab->setText (si.meta.author, juce::dontSendNotification); }
     saveWin->addTextEditor ("note", si.meta.note, "Note");
     saveWin->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
     saveWin->addButton ("Save As...", 2);
@@ -4094,7 +4095,7 @@ void MegaSynthEditor::finishSave (int button)
     SaveInfo si;
     si.meta.category = w->getComboBoxComponent ("category") != nullptr ? w->getComboBoxComponent ("category")->getText() : tg::PatchMeta::uncategorised();
     si.meta.tags = tg::PatchMeta::splitTags (w->getTextEditorContents ("tags"));
-    si.meta.author = w->getTextEditorContents ("author").trim();
+    si.meta.author = w->getComboBoxComponent ("author") != nullptr ? w->getComboBoxComponent ("author")->getText().trim() : juce::String();
     si.meta.note = w->getTextEditorContents ("note").trim();
     si.name = w->getTextEditorContents ("name").trim();
     saveWithInfo (si, button == 2);
@@ -4128,10 +4129,17 @@ void MegaSynthEditor::saveWithInfo (const SaveInfo& si, bool saveAs)
     savePatchAs (f);
 }
 
+juce::StringArray MegaSynthEditor::authorsInPatches()
+{
+    tgui::PatchCatalogue c; c.rescan();
+    return c.allAuthors();
+}
+
 void MegaSynthEditor::savePatchAs (const juce::File& f)
 {
     setStatus (proc.savePatchToFile (f) ? "Saved " + f.getFileNameWithoutExtension() + " (" + proc.getPatchMeta().categoryShown() + ")" : "Couldn't save the patch there");
     refreshPatchList();
+    if (browser != nullptr && browser->isVisible()) browser->refresh();   // (a new author or tag shows in its filters at once)
 }
 
 void MegaSynthEditor::showSizeMenu()

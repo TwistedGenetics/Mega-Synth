@@ -95,7 +95,19 @@ public:
     void selectRowsForTests (const juce::Array<int>& rows);
     void setCategoryForSelection (const juce::String& category);
     void addTagsToSelection (const juce::StringArray& tags, bool remove);
+    void setAuthorForSelection (const juce::String& author);
+    void setNoteForSelection (const juce::String& note);
     void showCategory (const juce::String& c);
+    void refresh() { rescanKeep(); }             // patches changed elsewhere (e.g. the header's Save): list them again
+    // (for tests) what the panel and the filter menus show
+    juce::StringArray authorFilterItems() const { juce::StringArray a; for (int i = 0; i < authorBox.getNumItems(); ++i) a.add (authorBox.getItemText (i)); return a; }
+    juce::StringArray tagFilterItems() const { juce::StringArray a; for (int i = 0; i < tagBox.getNumItems(); ++i) a.add (tagBox.getItemText (i)); return a; }
+    juce::StringArray authorChoices() const { juce::StringArray a; for (int i = 0; i < authorCb.getNumItems(); ++i) a.add (authorCb.getItemText (i)); return a; }
+    void setAuthorFilterForTests (const juce::String& a) { for (int i = 0; i < authorBox.getNumItems(); ++i) if (authorBox.getItemText (i) == a) authorBox.setSelectedItemIndex (i, juce::sendNotificationSync); }
+    juce::String authorFilterValue() const { return authorFilter; }
+    juce::String panelCategory() const { return catBox.getText(); }
+    juce::String panelAuthor() const { return authorCb.getText(); }
+    juce::String panelNote() const { return noteEd.getText(); }
     int shownCount() const { return shown.size(); }
     const PatchEntry& shownEntry (int row) const { return cat[shown[row]]; }
 
@@ -130,6 +142,8 @@ private:
     void exportSelection();
     void rescanKeep();                           // rescan, keeping the category, filters and selection
     void fillCategoryBox (juce::ComboBox&, const juce::String& current);
+    void fillAuthorBox (const juce::String& current);
+    void refreshFilterMenus();                   // the tag / author filters: what's there now (a vanished one goes back to Any)
 
     MegaSynthProcessor& proc;
     PatchCatalogue cat;
@@ -147,11 +161,13 @@ private:
     // the information panel: one patch, or several at once
     juce::Label infoTitle, infoSub;
     juce::ComboBox catBox;
-    juce::TextEditor tagsEd, authorEd, noteEd;
+    juce::TextEditor tagsEd, noteEd;
+    juce::ComboBox authorCb;                      // type a name, or pick one used before
     juce::Label catLbl { {}, "Category" }, tagsLbl { {}, "Tags" }, authorLbl { {}, "Author" }, noteLbl { {}, "Note" };
     juce::ToggleButton favBtn { "Favourite" };
     juce::TextButton saveInfoBtn { "Save info" }, addTagsBtn { "Add tags" }, removeTagsBtn { "Remove tags" },
-                     deleteBtn { "Delete" }, restoreBtn { "Restore" }, foreverBtn { "Delete forever" };
+                     deleteBtn { "Delete" }, restoreBtn { "Restore" }, foreverBtn { "Delete forever" },
+                     setAuthorBtn { "Set author" }, setNoteBtn { "Set note" }, forgetAuthorBtn { "Forget" };
     std::unique_ptr<juce::FileChooser> chooser;
     bool suppressAudition = false;
     juce::String tagFilter, authorFilter;

@@ -429,6 +429,9 @@ public:
     struct SaveInfo { juce::String name; tg::PatchMeta meta; };
     SaveInfo defaultSaveInfo() const;            // what the dialog offers
     void saveWithInfo (const SaveInfo&, bool saveAs);
+    static juce::StringArray authorsInPatches();   // (for the Save dialog's author list)
+    tgui::PatchBrowser* browserForTests() { return browser.get(); }
+    void showBrowserForTests (bool b) { showBrowser (b); }
 private:
     void finishSave (int button);
     void savePatchAs (const juce::File&);

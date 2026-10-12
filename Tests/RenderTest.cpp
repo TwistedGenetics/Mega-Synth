@@ -6253,6 +6253,73 @@ int main()
                    "saved with its information");
             CHECK (MegaSynthProcessor::getDefaultAuthor() == "Jamie" && e->defaultSaveInfo().meta.author == "Jamie", "the author is remembered for next time");
         }
+        // 10. the author list: remembered (most recent first, no case duplicates), kept on disk, forgettable
+        {
+            MegaSynthProcessor::rememberAuthor ("DJ Hype"); MegaSynthProcessor::rememberAuthor ("Jamie"); MegaSynthProcessor::rememberAuthor ("dj hype");
+            auto list = MegaSynthProcessor::getAuthorList ({ "Someone", "Mega Synth", "JAMIE" });
+            CHECK (list[0] == "dj hype" && list[1] == "Jamie" && list.size() == 4 && list.contains ("Someone") && list.contains ("Mega Synth"),
+                   "author list: most recent first, no case duplicates, the patches' authors too (" + list.joinIntoString (", ") + ")");
+            CHECK (juce::JSON::parse (MegaSynthProcessor::getAuthorListFile().loadFileAsString()).isObject(), "kept in authors.json (so it lasts)");
+            const auto before = fB.loadFileAsString();
+            MegaSynthProcessor::forgetAuthor ("Someone");
+            CHECK (! MegaSynthProcessor::getAuthorList ({ "Someone" }).contains ("Someone") && fB.loadFileAsString() == before && tgui::patchlib::readMeta (fB).author == "Someone",
+                   "forgetting a name takes it off the list and changes no patch");
+            MegaSynthProcessor::rememberAuthor ("Someone");
+            CHECK (MegaSynthProcessor::getAuthorList ({ "Someone" })[0] == "Someone", "typing it again brings it back");
+        }
+        // 11. the filters refresh at once; several patches' author and note set together
+        {
+            auto p = make();
+            tgui::PatchBrowser b (*p); b.setSize (1200, 640); b.open();
+            b.showCategory ("Your patches");
+            int rowA = -1; for (int r = 0; r < b.shownCount(); ++r) if (b.shownEntry (r).name == "Alpha") rowA = r;
+            b.selectRowsForTests ({ rowA });
+            CHECK (b.authorChoices().contains ("Jamie") && b.authorChoices().contains ("Mega Synth"), "the author field lists the authors used before");
+            // a new author on one patch: in the filter straight away
+            b.setAuthorForSelection ("Goldie");
+            CHECK (b.authorFilterItems().contains ("Goldie") && tgui::patchlib::readMeta (fA).author == "Goldie", "a new author shows in Any author without reopening");
+            b.setAuthorFilterForTests ("Goldie");
+            CHECK (b.authorFilterValue() == "Goldie" && b.shownCount() == 1, "filter by the new author");
+            b.selectRowsForTests ({ 0 });
+            b.setAuthorForSelection ("Jamie");   // (the only Goldie patch renamed away)
+            CHECK (b.authorFilterValue().isEmpty() && ! b.authorFilterItems().contains ("Goldie") && b.shownCount() > 1, "a vanished author: the filter goes back to Any");
+            // several at once, one of them a factory preset; the loaded patch picks it up
+            b.showCategory ("All");
+            juce::Array<int> rows; int iB = -1, iC = -1, iF = -1;
+            for (int r = 0; r < b.shownCount(); ++r)
+            {
+                const auto& e = b.shownEntry (r);
+                if (e.name == "Bravo") iB = r; if (e.name == "My Hoover") iC = r; if (e.factory && e.index == 7) iF = r;
+            }
+            rows.add (iB); rows.add (iC); rows.add (iF);
+            const auto mB = tgui::patchlib::readMeta (fB);
+            const auto fH = folder.getChildFile ("My Hoover.megasynth");
+            const auto mH = tgui::patchlib::readMeta (fH);
+            p->loadPatchFromFile (fB);
+            b.selectRowsForTests (rows);
+            CHECK (b.panelAuthor().isEmpty() && b.panelCategory().isEmpty() && b.panelNote().isEmpty(), "mixed values show as (mixed), the fields blank");
+            b.setAuthorForSelection ("Ed Rush");
+            const auto nB = tgui::patchlib::readMeta (fB), nH = tgui::patchlib::readMeta (fH), nF = MegaSynthProcessor::factoryMetaFor (7);
+            CHECK (nB.author == "Ed Rush" && nH.author == "Ed Rush" && nF.author == "Ed Rush", "Set author changes all three (the factory one as your edit)");
+            CHECK (nB.category == mB.category && nB.tags == mB.tags && nB.note == mB.note && nH.category == mH.category && nH.tags == mH.tags && nH.note == mH.note
+                   && nF.category == tg::factoryMeta (7).category && nF.note == tg::factoryMeta (7).note, "... their category, tags and notes untouched");
+            CHECK (p->getPatchMeta().author == "Ed Rush", "the loaded patch picks it up");
+            CHECK (b.panelAuthor() == "Ed Rush", "now they share it, the panel shows it");
+            b.setNoteForSelection ("");
+            CHECK (tgui::patchlib::readMeta (fB).note == mB.note, "a blank note keeps each one's own");
+            b.setNoteForSelection ("Roll it");
+            CHECK (tgui::patchlib::readMeta (fB).note == "Roll it" && tgui::patchlib::readMeta (fH).note == "Roll it" && MegaSynthProcessor::factoryMetaFor (7).note == "Roll it"
+                   && b.panelNote() == "Roll it", "Set note on all of them");
+            tgui::patchlib::saveFactoryMeta (7, tg::factoryMeta (7));
+            // the header's Save with an open browser: its filter lists the new author at once
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+            e->showBrowserForTests (true);
+            auto si = e->defaultSaveInfo(); si.name = "Bukem Bass"; si.meta.author = "LTJ";
+            e->saveWithInfo (si, false);
+            CHECK (e->browserForTests() != nullptr && e->browserForTests()->authorFilterItems().contains ("LTJ"), "saving from the header updates the open browser's Any author");
+            e->showBrowserForTests (false);
+        }
         // 9. the browser opens with all this (and draws)
         {
             auto p = make();

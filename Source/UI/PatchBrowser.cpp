@@ -274,7 +274,7 @@ PatchBrowser::PatchBrowser (MegaSynthProcessor& p) : proc (p)
     resList.setRowHeight (30);
     resList.setMultipleSelectionEnabled (true);
     search.setTextToShowWhenEmpty ("Search: name, category, tag, author or note (e.g. \"reese\", \"pad dark\")", col::muted);
-    for (auto* t : { &search, &tagsEd, &authorEd, &noteEd })
+    for (auto* t : { &search, &tagsEd, &noteEd })
     {
         t->setColour (juce::TextEditor::backgroundColourId, col::panel2);
         t->setColour (juce::TextEditor::textColourId, col::text);
@@ -287,7 +287,23 @@ PatchBrowser::PatchBrowser (MegaSynthProcessor& p) : proc (p)
     search.onEscapeKey = [this] { if (onClose) onClose(); };
     noteEd.setMultiLine (true, true); noteEd.setReturnKeyStartsNewLine (true);
     tagsEd.setTextToShowWhenEmpty ("e.g. dark rolling 174", col::muted);
-    authorEd.setTextToShowWhenEmpty ("your name", col::muted);
+    authorCb.setEditableText (true);
+    authorCb.setTextWhenNothingSelected ("your name");
+    authorCb.setTooltip ("Type a name, or pick one you've used before");
+    addAndMakeVisible (authorCb);
+    forgetAuthorBtn.setTooltip ("Take the name shown off the author list (no patch changes)");
+    forgetAuthorBtn.onClick = [this]
+    {
+        const auto a = authorCb.getText().trim();
+        if (a.isEmpty() || a == "(mixed)") return;
+        MegaSynthProcessor::forgetAuthor (a);
+        fillAuthorBox (authorCb.getText());
+        if (onStatus) onStatus (a + " taken off the author list");
+    };
+    setAuthorBtn.setTooltip ("Give every selected patch the author above (their other information stays)");
+    setNoteBtn.setTooltip ("Give every selected patch the note above (leave it blank to keep each one's own)");
+    setAuthorBtn.onClick = [this] { setAuthorForSelection (authorCb.getText()); };
+    setNoteBtn.onClick = [this] { setNoteForSelection (noteEd.getText()); };
     noteEd.setTextToShowWhenEmpty ("How to play it, what the macros do...", col::muted);
     audition.setToggleState (true, juce::dontSendNotification);
     audition.setTooltip ("Loads each patch as you select it (arrow keys or click). Undo or Original goes back.");
@@ -298,7 +314,8 @@ PatchBrowser::PatchBrowser (MegaSynthProcessor& p) : proc (p)
     exportBtn.setTooltip ("Save the selected patches (factory ones too) as patch files somewhere else, with their information");
     importBtn.onClick = [this] { importPatches(); };
     exportBtn.onClick = [this] { exportSelection(); };
-    for (auto* b : { &closeBtn, &folderBtn, &importBtn, &exportBtn, &saveInfoBtn, &addTagsBtn, &removeTagsBtn, &deleteBtn, &restoreBtn, &foreverBtn })
+    for (auto* b : { &closeBtn, &folderBtn, &importBtn, &exportBtn, &saveInfoBtn, &addTagsBtn, &removeTagsBtn, &deleteBtn, &restoreBtn, &foreverBtn,
+                     &setAuthorBtn, &setNoteBtn, &forgetAuthorBtn })
         addAndMakeVisible (*b);
     for (auto* c : { &tagBox, &authorBox, &catBox }) addAndMakeVisible (*c);
     tagBox.onChange = [this] { tagFilter = tagBox.getSelectedId() > 1 ? tagBox.getText() : juce::String(); refilter(); };
@@ -340,7 +357,7 @@ PatchBrowser::PatchBrowser (MegaSynthProcessor& p) : proc (p)
     infoTitle.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
     addAndMakeVisible (infoTitle);
     hint.setText ("Arrow keys browse, Enter or double-click loads and closes, Esc closes. Shift / Cmd-click picks several (then the "
-                  "category and tags apply to them all). Click the star to add a favourite.", juce::dontSendNotification);
+                  "category, tags, author and note apply to them all). Click the star to add a favourite.", juce::dontSendNotification);
     hint.setColour (juce::Label::textColourId, col::muted);
     hint.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (hint);
@@ -356,6 +373,30 @@ void PatchBrowser::fillCategoryBox (juce::ComboBox& b, const juce::String& curre
     for (int i = 0; i < b.getNumItems(); ++i) if (b.getItemText (i) == current) b.setSelectedItemIndex (i, juce::dontSendNotification);
 }
 
+void PatchBrowser::refreshFilterMenus()
+{
+    auto fill = [] (juce::ComboBox& box, const juce::String& anyLabel, const juce::StringArray& items, juce::String& filter)
+    {
+        box.clear (juce::dontSendNotification); box.addItem (anyLabel, 1);
+        int id = 2; for (auto& t : items) box.addItem (t, id++);
+        box.setSelectedId (1, juce::dontSendNotification);
+        bool found = false;
+        for (int i = 0; i < box.getNumItems(); ++i)
+            if (filter.isNotEmpty() && box.getItemText (i) == filter) { box.setSelectedItemIndex (i, juce::dontSendNotification); found = true; }
+        if (! found) filter = {};   // (a tag or author that's gone: back to Any)
+    };
+    fill (tagBox, "Any tag", cat.allTags(), tagFilter);
+    fill (authorBox, "Any author", cat.allAuthors(), authorFilter);
+}
+
+void PatchBrowser::fillAuthorBox (const juce::String& current)
+{
+    authorCb.clear (juce::dontSendNotification);
+    int id = 1;
+    for (auto& a : MegaSynthProcessor::getAuthorList (cat.allAuthors())) authorCb.addItem (a, id++);
+    authorCb.setText (current, juce::dontSendNotification);
+}
+
 void PatchBrowser::open()
 {
     cat.rescan();
@@ -363,17 +404,7 @@ void PatchBrowser::open()
     const auto prevCat = catList.getSelectedRow() >= 0 ? cats[catList.getSelectedRow()] : PatchCatalogue::kAll;
     cats = cat.categories();
     catList.updateContent();
-    // the tag and author filters list what's there now
-    tagBox.clear (juce::dontSendNotification); tagBox.addItem ("Any tag", 1);
-    int id = 2; for (auto& t : cat.allTags()) tagBox.addItem (t, id++);
-    tagBox.setSelectedId (1, juce::dontSendNotification);
-    for (int i = 0; i < tagBox.getNumItems(); ++i) if (tagFilter.isNotEmpty() && tagBox.getItemText (i) == tagFilter) tagBox.setSelectedItemIndex (i, juce::dontSendNotification);
-    if (tagBox.getSelectedId() <= 1) tagFilter = {};
-    authorBox.clear (juce::dontSendNotification); authorBox.addItem ("Any author", 1);
-    id = 2; for (auto& a : cat.allAuthors()) authorBox.addItem (a, id++);
-    authorBox.setSelectedId (1, juce::dontSendNotification);
-    for (int i = 0; i < authorBox.getNumItems(); ++i) if (authorFilter.isNotEmpty() && authorBox.getItemText (i) == authorFilter) authorBox.setSelectedItemIndex (i, juce::dontSendNotification);
-    if (authorBox.getSelectedId() <= 1) authorFilter = {};
+    refreshFilterMenus();
     suppressAudition = true;
     catList.selectRow (juce::jmax (0, cats.indexOf (prevCat)));
     refilter();
@@ -395,6 +426,8 @@ void PatchBrowser::rescanKeep()
     cat.rescan();
     cats = cat.categories();
     catList.updateContent();
+    catList.repaint();          // (the counts)
+    refreshFilterMenus();
     const bool was = suppressAudition;
     suppressAudition = true;
     catList.selectRow (juce::jmax (0, cats.indexOf (c)));
@@ -458,22 +491,43 @@ void PatchBrowser::selectionChanged()
                          juce::dontSendNotification);
         fillCategoryBox (catBox, e.meta.categoryShown());
         tagsEd.setText (e.meta.tagsText(), false);
-        authorEd.setText (e.meta.author, false);
+        fillAuthorBox (e.meta.author);
+        authorCb.setTextWhenNothingSelected ("your name");
         noteEd.setText (e.meta.note, false);
+        noteEd.setTextToShowWhenEmpty ("How to play it, what the macros do...", col::muted);
         favBtn.setToggleState (favs.contains (e.key()), juce::dontSendNotification);
     }
     else
     {
         infoTitle.setText (many ? juce::String (sel.size()) + " patches selected" : juce::String ("No patch selected"), juce::dontSendNotification);
-        infoSub.setText (many ? "Choose a category to move them all there; type tags to add or remove." : "", juce::dontSendNotification);
-        fillCategoryBox (catBox, {});
-        tagsEd.setText ({}, false); authorEd.setText ({}, false); noteEd.setText ({}, false);
+        infoSub.setText (many ? "Changes here apply to all of them." : "",
+                         juce::dontSendNotification);
+        // a value they all share is shown; otherwise "(mixed)"
+        auto shared = [&] (std::function<juce::String (const tg::PatchMeta&)> get, bool& same)
+        {
+            same = many; juce::String v;
+            for (int k = 0; k < sel.size(); ++k) { const auto x = get (cat[sel[k]].meta); if (k == 0) v = x; else if (x != v) same = false; }
+            return same ? v : juce::String();
+        };
+        bool sc, sa, sn;
+        const auto c = shared ([] (const tg::PatchMeta& m) { return m.categoryShown(); }, sc);
+        const auto a = shared ([] (const tg::PatchMeta& m) { return m.author; }, sa);
+        const auto n = shared ([] (const tg::PatchMeta& m) { return m.note; }, sn);
+        fillCategoryBox (catBox, sc ? c : juce::String());
+        catBox.setTextWhenNothingSelected (many ? "(mixed)" : "");
+        tagsEd.setText ({}, false);
+        fillAuthorBox (sa ? a : juce::String());
+        authorCb.setTextWhenNothingSelected (many && ! sa ? "(mixed)" : "your name");
+        noteEd.setText (sn ? n : juce::String(), false);
+        noteEd.setTextToShowWhenEmpty (many && ! sn ? "(mixed)" : "How to play it, what the macros do...", col::muted);
         bool allFav = many; for (int i : sel) allFav = allFav && favs.contains (cat[i].key());
         favBtn.setToggleState (allFav, juce::dontSendNotification);
     }
     const bool editable = (one && ! isInit && ! anyDeleted) || (many && ! anyDeleted);
     catBox.setEnabled (editable); tagsEd.setEnabled (editable);
-    authorEd.setEnabled (one && editable); noteEd.setEnabled (one && editable);
+    authorCb.setEnabled (editable); noteEd.setEnabled (editable);
+    setAuthorBtn.setVisible (many); setNoteBtn.setVisible (many);
+    setAuthorBtn.setEnabled (many && ! anyDeleted); setNoteBtn.setEnabled (many && ! anyDeleted);
     saveInfoBtn.setVisible (one); saveInfoBtn.setEnabled (one && editable);
     addTagsBtn.setVisible (many); removeTagsBtn.setVisible (many);
     addTagsBtn.setEnabled (many && ! anyDeleted); removeTagsBtn.setEnabled (many && ! anyDeleted);
@@ -493,10 +547,11 @@ void PatchBrowser::saveInfo()
     tg::PatchMeta m;
     m.category = catBox.getText().trim().isEmpty() ? tg::PatchMeta::uncategorised() : catBox.getText().trim();
     m.tags = tg::PatchMeta::splitTags (tagsEd.getText());
-    m.author = authorEd.getText().trim();
+    m.author = authorCb.getText().trim();
     m.note = noteEd.getText().trim();
     const bool ok = e.factory ? patchlib::saveFactoryMeta (e.index, m) : patchlib::writeMeta (e.file, m);
     if (ok && e.name == proc.getPatchName()) proc.setPatchMeta (m);   // (the patch that's playing: its information too)
+    if (ok && m.author.isNotEmpty()) MegaSynthProcessor::rememberAuthor (m.author);
     if (onStatus) onStatus (ok ? "Saved the information for " + e.name : "Couldn't save the information for " + e.name);
     rescanKeep();
 }
@@ -513,6 +568,41 @@ void PatchBrowser::setCategoryForSelection (const juce::String& category)
         if (e.name == proc.getPatchName()) proc.setPatchMeta (m);
     }
     if (onStatus) onStatus (juce::String (n) + (n == 1 ? " patch" : " patches") + " moved to " + category);
+    rescanKeep();
+}
+
+void PatchBrowser::setAuthorForSelection (const juce::String& authorIn)
+{
+    const auto author = authorIn.trim();
+    if (author == "(mixed)") return;
+    int n = 0;
+    for (int i : selectedEntries())
+    {
+        const auto& e = cat[i];
+        if (e.deleted || (e.factory && e.index < 0)) continue;
+        auto m = e.meta; m.author = author;
+        if (e.factory ? patchlib::saveFactoryMeta (e.index, m) : patchlib::writeMeta (e.file, m)) ++n;
+        if (e.name == proc.getPatchName()) proc.setPatchMeta (m);
+    }
+    if (author.isNotEmpty()) MegaSynthProcessor::rememberAuthor (author);
+    if (onStatus) onStatus ((author.isEmpty() ? juce::String ("Author cleared on ") : "Author set to " + author + " on ") + juce::String (n) + (n == 1 ? " patch" : " patches"));
+    rescanKeep();
+}
+
+void PatchBrowser::setNoteForSelection (const juce::String& noteIn)
+{
+    const auto note = noteIn.trim();
+    if (note.isEmpty()) return;   // (blank: each keeps its own)
+    int n = 0;
+    for (int i : selectedEntries())
+    {
+        const auto& e = cat[i];
+        if (e.deleted || (e.factory && e.index < 0)) continue;
+        auto m = e.meta; m.note = note;
+        if (e.factory ? patchlib::saveFactoryMeta (e.index, m) : patchlib::writeMeta (e.file, m)) ++n;
+        if (e.name == proc.getPatchName()) proc.setPatchMeta (m);
+    }
+    if (onStatus) onStatus ("Note set on " + juce::String (n) + (n == 1 ? " patch" : " patches"));
     rescanKeep();
 }
 
@@ -729,11 +819,13 @@ void PatchBrowser::resized()
     infoSub.setBounds (px, y, pw, 18); y += 24;
     catLbl.setBounds (px, y, 70, 24); catBox.setBounds (px + 72, y, pw - 72, 24); y += 30;
     tagsLbl.setBounds (px, y, 70, 24); tagsEd.setBounds (px + 72, y, pw - 72, 24); y += 30;
-    authorLbl.setBounds (px, y, 70, 24); authorEd.setBounds (px + 72, y, pw - 72, 24); y += 30;
+    authorLbl.setBounds (px, y, 70, 24); authorCb.setBounds (px + 72, y, pw - 72 - 64, 24); forgetAuthorBtn.setBounds (px + pw - 60, y, 60, 24); y += 30;
     noteLbl.setBounds (px, y, 70, 24); noteEd.setBounds (px + 72, y, pw - 72, 96); y += 102;
     favBtn.setBounds (px, y, 110, 26);
     saveInfoBtn.setBounds (px + pw - 110, y, 110, 26);
     addTagsBtn.setBounds (px + 112, y, 90, 26); removeTagsBtn.setBounds (px + 204, y, 90, 26);
+    y += 32;
+    setAuthorBtn.setBounds (px + 112, y, 90, 26); setNoteBtn.setBounds (px + 204, y, 90, 26);   // (several selected)
     y += 40;
     deleteBtn.setBounds (px, y, 110, 26);
     restoreBtn.setBounds (px, y, 110, 26); foreverBtn.setBounds (px + 118, y, 130, 26);

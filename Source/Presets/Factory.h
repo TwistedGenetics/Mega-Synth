@@ -817,10 +817,21 @@ namespace factory_detail
     }
 }
 
-inline const std::array<FactoryPreset, 36>& factoryPresets()
+} // namespace tg
+
+#include "FactoryDnb.h"
+#include "FactoryDnbTrims.h"
+
+namespace tg
+{
+
+constexpr int kFirstDnb = 36;   // the bank starts after the first 36
+
+inline const std::vector<FactoryPreset>& factoryPresets()
 {
     using namespace factory_detail;
-    static const std::array<FactoryPreset, 36> list { {
+    static const std::vector<FactoryPreset> list = [] {
+    std::vector<FactoryPreset> l { {
         { "Init Genome",           "Init",   "Two saws and a sub, with the eight macros wired to the main mutation engines.", initGenome },
         { "Reese Mutation",        "Bass",   "Detuned reese with slow wave-fold and filter drift plus Cell Instability.", reeseMutation },
         { "Sub Helix",             "Bass",   "Sine sub with an audio-rate FM blip at the front of each note.", subHelix },
@@ -858,7 +869,20 @@ inline const std::array<FactoryPreset, 36>& factoryPresets()
         { "Break Keys",            "Jungle / DnB", "Break: the demo break's 16 slices on C1 up to play by hand, no sequencer, E-mu colour, velocity on; one slice reversed, one loops.", breakKeys },
         { "Break Frankenstein",    "Jungle / DnB", "Break: three synthesised breaks (the demo break, a 2-step and a ghost-note roller) chopped together: chain A-B-A-D of the original and Frankenbreak edits. A0-B0 choose the break the keys play.", breakFrankenstein },
     } };
+    // then the jungle / drum & bass bank (100), in the browser's categories
+    for (auto& e : dnbBank()) l.push_back ({ e.name, "Jungle / DnB", e.description, e.build, e.category, e.tags });
+    return l;
+    }();
     return list;
+}
+
+// Builds factory preset index (with the bank's level matching)
+inline void buildFactoryPreset (int index, PresetBuilder& b)
+{
+    const auto& list = factoryPresets();
+    if (index < 0 || index >= (int) list.size()) return;
+    list[(size_t) index].build (b);
+    if (index >= kFirstDnb) b.v[(size_t) P_outGain] = dnbTrim (index - kFirstDnb);
 }
 
 

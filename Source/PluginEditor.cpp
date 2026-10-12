@@ -4003,9 +4003,17 @@ void MegaSynthEditor::refreshPatchList()
     const auto folder = MegaSynthProcessor::getPatchFolder();
     patchBox.clear (juce::dontSendNotification);
     const auto& factory = tg::factoryPresets();
-    patchBox.addSectionHeading ("Factory");
-    for (int i = 0; i < (int) factory.size(); ++i)
-        patchBox.addItem (juce::String (factory[(size_t) i].category) + " - " + factory[(size_t) i].name, kFactoryIdBase + i + 1);
+    // the factory presets under their categories (in the browser's order)
+    for (auto& c : tg::patchCategories())
+    {
+        bool heading = false;
+        for (int i = 0; i < (int) factory.size(); ++i)
+        {
+            if (tg::factoryMeta (i).categoryShown() != c) continue;
+            if (! heading) { patchBox.addSectionHeading ("Factory - " + c); heading = true; }
+            patchBox.addItem (factory[(size_t) i].name, kFactoryIdBase + i + 1);
+        }
+    }
     patchBox.addSeparator();
     if (patchFiles.size() > 0) patchBox.addSectionHeading ("Your patches");
     for (int i = 0; i < patchFiles.size(); ++i)

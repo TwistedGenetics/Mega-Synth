@@ -45,7 +45,7 @@ That Terminal step is needed because the build isn't signed with a paid Apple De
   - **Import / export:** *Import...* copies patch files from anywhere into your patch folder, with their information (a new name if one is taken; files that aren't patches are skipped and listed). *Export...* saves the selected patches, factory ones included, as patch files in a folder you choose.
   - *Load as you browse* lets the arrow keys audition patches. Enter or double-click loads and closes; Esc closes.
 - **Save** (header): asks for the name, category, tags, author and note, then saves into your patch folder (*Save As...* for anywhere else). It offers the current patch's category and tags. The author you type is remembered for next time; a factory preset's author ("Mega Synth") isn't copied.
-- **Host presets**: in AU hosts (Logic's preset menu) and the standalone app, the factory presets are also listed as programs. VST3 shows a single program, because VST3 makes programs an automatable parameter that could load a preset over your settings; use *Browse* instead. A MIDI Program Change (0-27) loads that factory preset in every format.
+- **Host presets**: in AU hosts (Logic's preset menu) and the standalone app, the factory presets are also listed as programs. VST3 shows a single program, because VST3 makes programs an automatable parameter that could load a preset over your settings; use *Browse* instead. A MIDI Program Change (0-127) loads that factory preset (the first 128) in every format.
 - **Patches**: *Save* writes a `.megasynth` file to `Music/Mega Synth/Patches` (subfolders work too). The patch menu lists everything in that folder, `<` / `>` step through them, and the menu can also open a patch file from anywhere. A patch includes the sequence and the Osc 4 sample.
 - **Copy Patch / Paste Patch** use the same JSON as the browser's Save Patch / Load Patch, including the wavetable sample.
 - Every control is automatable. Double-click a knob to reset it.
@@ -629,7 +629,7 @@ Each of the four LFOs has, on top of Wave, Rate and Depth:
 
 ## Factory presets
 
-The patch menu (and *Browse*) starts with 36 built-in presets (the last four play the Break Chopper), followed by your saved patches. The arrows step through both.
+There are 136 built-in presets: the first 36 (the last four play the Break Chopper), then a 100-preset jungle / drum & bass bank. The patch menu lists them under their categories, followed by your saved patches; *Browse* filters them by category, tag and author. The arrows step through both.
 Each preset is an ordinary patch - routes, macros (named), scenes, DNA steps and the effects rack included - so it can be
 edited, saved, mutated or bred. Loading one can be undone.
 
@@ -653,6 +653,22 @@ edited, saved, mutated or bred. Loading one can be undone.
   - *Liquid Arp*: one key plays a swung minor 9 arpeggio with probability steps.
 
   The sequenced and repeating presets follow your DAW's tempo, so set it to 160-175 BPM.
+- **The jungle / drum & bass bank (100):**
+  - Every preset has a category, tags and named macros (Macro 1, 2... on the Perform tab).
+  - The levels are matched: each peaks at about -12 dBFS on its audition phrase (a 2-bar phrase at 172 BPM suited to its category), so you can flick through without jumps.
+  - The Reese, Sub & Bass and Neuro presets keep everything under 120 Hz mono (Stereo Tools' Bass Mono).
+  - Many use the new Reese engine and Break React. *Kick-Locked Reese* and *Kick-Locked Sub* react to the kicks of a break, or to C0.
+  - The Breaks & Drums presets use the synthesised demo breaks, so no samples of anyone's record are included.
+  - *Reese* (15): Amen Brother Reese, Rolling Quarter Reese, Dark Matter Reese, Tech Reese Growl, Liquid Reese, Steppa Square Reese, Blend Reese 174, Reese Fold Stack, Ghost Reese, Rotating Reese, Classic 94 Reese, Kick-Locked Reese, Hoover Reese Hybrid, Sub Heavy Reese, Halftime Wide Reese.
+  - *Sub & Bass* (12): Pure Sine Sub, 808 Boom, Triangle Rumble, Square Sub Steppa, Warm Saw Bass, Jump Up Wobble Sub, Dub Pressure Sub, Plucky Sub, Ragga Bass, Kick-Locked Sub, Bubble Bass, Rollers Sub.
+  - *Neuro* (12): Fold Machine, Comb Growl, Formant Talker, FM Snarl, Ring Mod Neuro, Bit Grinder, Phaser Wub, Spectral Neuro, Neuro Reese Sequence, Resampled Mid, Tearout Squeal, Robot Voice.
+  - *Hoover & Rave* (8): Dominator 92, Mentasm Stab, Rave Organ, Hoover Glide Lead, Belgian Hoover, Alarm Hoover, Hardcore Hoover Chords, Arp Rave Pulse.
+  - *Stabs & Chords* (10): Minor 9 Stab, Dub Chord Delay, Open Rave Stab, Sus Skank, Power Stab, Glass Major 7, Jungle Horn Stab, Stutter Chord, Octave Sampler Stab, Reese Chord Stab.
+  - *Pads & Atmos* (10): Liquid Strings, Dark Atmos, Shimmer Heaven, Granular Haze, Spectral Choir Pad, Rainforest Pad, Amen Dream Pad, Detroit Strings, Ambient Reese Pad, Sub Drone.
+  - *Leads* (8): Pirate Square, Sine Whistle, Acid 303 Lead, Saw Lead 95, Ragga Horn Lead, SP Crunch Lead, FM Lead, Formant Lead.
+  - *Breaks & Drums* (10): Original Break 170, Two-Step Roller, Rollers 165 Swing, Chopped Frankenbreak, Reverse Edits, Halftime Break, SP Crunch Break, Break Keys 174, Fill Machine, Akai Cyclic Stretch.
+  - *FX & Risers* (8): Noise Riser, Downlifter, Laser Zap, Dub Siren, Impact Boom, Radio Static, Reverse Swell, Alarm Siren.
+  - *Keys & Plucks* (7): Rhodes Bed, Ragga Skank Pluck, Glass Bell, Marimba Roll, Liquid Pluck, Organ Bounce, Kalimba Drop.
 
 ## Quality (header)
 

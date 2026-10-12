@@ -2453,7 +2453,7 @@ bool MegaSynthProcessor::loadFactoryPreset (int index)
     if (index < 0 || index >= (int) list.size()) return false;
     curProgram.store (index);
     tg::PresetBuilder b;
-    list[(size_t) index].build (b);
+    tg::buildFactoryPreset (index, b);
 
     // Quality and the keyboard octave are the player's settings, not part of the sound.
     const float keepQuality = raw[tg::P_quality]->load(), keepOct = raw[tg::P_keyboardOctave]->load();

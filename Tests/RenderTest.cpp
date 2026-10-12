@@ -2635,7 +2635,7 @@ int main()
         // (the voices share one random sequence across instances, so the order matters: the first 32 presets in the
         // order the reference fingerprints were taken, then the presets added since)
         // (in batches, in the order they were added: 32 originals, the three Break presets, Break Frankenstein)
-        const int batches[] = { 0, 32, 35, (int) list.size() };
+        const int batches[] = { 0, 32, 35, 36, (int) list.size() };   // (... then the jungle / drum & bass bank)
         for (int bt = 0; bt + 1 < (int) (sizeof (batches) / sizeof (batches[0])); ++bt)
             for (int q = 0; q < 3; ++q)
                 for (int idx = batches[bt]; idx < batches[bt + 1]; ++idx)
@@ -4600,12 +4600,13 @@ int main()
         // 9. the factory presets with the synthesised break
         for (int i = 32; i < (int) tg::factoryPresets().size(); ++i)
         {
+            if (i >= 36 && tg::factoryMeta (i).category != "Breaks & Drums") continue;   // (the bank's break presets too)
             auto p = make(); p->loadFactoryPreset (i);
             const auto d = p->breakStore.get();
             bool anyStep = false; for (auto& st : d.step[0]) anyStep = anyStep || st.on;
             const auto out = runHost (*p, 172.0, 0.0, 2.0, { { 0, juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100) } });
             float pk = 0; bool finite = true; for (float v : out) { pk = std::max (pk, std::abs (v)); finite = finite && std::isfinite (v); }
-            CHECK (p->getSample (slot) != nullptr && d.brk[0].nSlices == 16 && finite && pk > 0.05f && pk < 1.5f && (i == 34 || anyStep),
+            CHECK (p->getSample (slot) != nullptr && d.brk[0].nSlices == 16 && finite && pk > 0.05f && pk < 1.5f && (i == 34 || anyStep || p->param (P_bsOn)->getValue() < 0.5f),
                    juce::String ("factory preset ") + tg::factoryPresets()[(size_t) i].name + " plays (" + juce::String (pk, 2) + ")");
         }
         // 11. three breaks: the shared zone, the Break Select keys, levels, layers, Frankenbreak, saving
@@ -6272,6 +6273,180 @@ int main()
         folder.deleteRecursively(); folder.createDirectory();
         MegaSynthProcessor::setDefaultAuthor ({});
     };
+    // ---- the jungle / drum & bass bank: each preset's audition phrase (by category), at 172 BPM with the host playing
+    struct Audition { juce::AudioBuffer<float> out; float peak = 0; bool finite = true; double sideDb = -200; };
+    auto auditionOf = [&] (int index)
+    {
+        struct Head : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+        const auto cat = tg::factoryMeta (index).category;
+        const double bpm = 172.0, spb = 60.0 / bpm;
+        // notes: { beat, length in beats, note }
+        std::vector<std::array<double, 3>> notes;
+        if (cat == "Reese" || cat == "Sub & Bass" || cat == "Neuro")
+            notes = { { 0, 1.5, 45 }, { 2, 0.5, 45 }, { 2.75, 1, 48 }, { 4, 2, 41 }, { 6.5, 1.25, 43 } };
+        else if (cat == "Hoover & Rave") notes = { { 0, 1.5, 57 }, { 2, 1, 60 }, { 3.5, 1.5, 55 }, { 5.5, 2, 57 } };
+        else if (cat == "Stabs & Chords") for (int k = 0; k < 8; ++k) notes.push_back ({ k + 0.5, 0.25, (double) (k == 2 ? 60 : (k == 3 || k == 7 ? 55 : (k == 6 ? 53 : 57))) });
+        else if (cat == "Pads & Atmos") notes = { { 0, 4, 57 }, { 0, 4, 60 }, { 0, 4, 64 }, { 0, 4, 67 }, { 4, 4, 53 }, { 4, 4, 57 }, { 4, 4, 60 }, { 4, 4, 64 } };
+        else if (cat == "Leads") notes = { { 0, 0.75, 69 }, { 1, 0.5, 72 }, { 1.75, 0.75, 74 }, { 2.75, 0.5, 72 }, { 3.5, 1.5, 69 }, { 5.5, 0.5, 67 }, { 6, 2, 69 } };
+        else if (cat == "FX & Risers") notes = { { 0, 6, 57 } };
+        else if (cat == "Keys & Plucks") { const int arp[] = { 57, 60, 64, 67, 69, 67, 64, 60 }; for (int k = 0; k < 16; ++k) notes.push_back ({ k * 0.5, 0.4, (double) arp[k % 8] }); }
+        auto p = std::make_unique<MegaSynthProcessor>();
+        p->setPlayConfigDetails (0, 2, sr, 256); p->prepareToPlay (sr, 256);
+        p->loadFactoryPreset (index);
+        if (cat == "Breaks & Drums" && p->param (P_bsOn)->getValue() < 0.5f)
+            for (int k = 0; k < 16; ++k) notes.push_back ({ k * 0.5, 0.4, (double) (36 + (k * 5) % 16) });   // (slices on keys: play them)
+        Head head; p->setPlayHead (&head);
+        juce::AudioBuffer<float> buf (2, 256);
+        for (int b = 0; b < 400; ++b)   // (the reverbs load their impulses in the background first)
+        {
+            head.info.setIsPlaying (false); head.info.setBpm (bpm); head.info.setPpqPosition (0.0);
+            buf.clear(); juce::MidiBuffer none; p->processBlock (buf, none); juce::Thread::sleep (1);
+        }
+        Audition a;
+        const int total = (int) ((8.0 * spb + 1.5) * sr);
+        a.out.setSize (2, total);
+        double ppq = 0.0; const double inc = bpm / 60.0 / sr;
+        for (int pos = 0; pos < total; pos += 256)
+        {
+            const int n = std::min (256, total - pos);
+            buf.setSize (2, n, false, false, true);
+            head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq); head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+            juce::MidiBuffer m;
+            for (auto& nt : notes)
+            {
+                const int on = (int) std::lround (nt[0] * spb * sr), offAt = (int) std::lround ((nt[0] + nt[1]) * spb * sr);
+                if (on >= pos && on < pos + n) m.addEvent (juce::MidiMessage::noteOn (1, (int) nt[2], (juce::uint8) 100), on - pos);
+                if (offAt >= pos && offAt < pos + n) m.addEvent (juce::MidiMessage::noteOff (1, (int) nt[2]), offAt - pos);
+            }
+            buf.clear(); p->processBlock (buf, m); ppq += n * inc;
+            for (int c = 0; c < 2; ++c) a.out.copyFrom (c, pos, buf, c, 0, n);
+        }
+        p->setPlayHead (nullptr);
+        for (int c = 0; c < 2; ++c) for (int i = 0; i < total; ++i) { const float v = a.out.getSample (c, i); if (! std::isfinite (v)) a.finite = false; else a.peak = std::max (a.peak, std::abs (v)); }
+        // the low end's width: side against mid, 30-100 Hz
+        const int N = 1 << 17;
+        std::vector<float> fm ((size_t) N * 2, 0.0f), fs ((size_t) N * 2, 0.0f);
+        for (int i = 0; i < N && i < total; ++i)
+        {
+            const float w = 0.5f - 0.5f * std::cos (2.0f * (float) kPi * i / (float) std::min (N, total));
+            fm[(size_t) i] = 0.5f * (a.out.getSample (0, i) + a.out.getSample (1, i)) * w; fs[(size_t) i] = 0.5f * (a.out.getSample (0, i) - a.out.getSample (1, i)) * w;
+        }
+        juce::dsp::FFT f (17); f.performFrequencyOnlyForwardTransform (fm.data()); f.performFrequencyOnlyForwardTransform (fs.data());
+        double em = 0, es = 0;
+        for (int k = 1; k < N / 2; ++k) { const double hz = k * sr / N; if (hz >= 30 && hz < 100) { em += (double) fm[(size_t) k] * fm[(size_t) k]; es += (double) fs[(size_t) k] * fs[(size_t) k]; } }
+        a.sideDb = 10.0 * std::log10 ((es + 1e-20) / (em + 1e-20));
+        return a;
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PRESETCAL", {}).isNotEmpty())
+    {
+        // the bank's Output trims: each audition phrase's peak brought to -12 dBFS (paste into FactoryDnbTrims.h)
+        juce::String table;
+        for (int i = 0; i < (int) tg::dnbBank().size(); ++i)
+        {
+            const int idx = tg::kFirstDnb + i;
+            const auto a = auditionOf (idx);
+            const float cur = tg::dnbTrim (i);
+            const float peakDb = 20.0f * std::log10 (std::max (1.0e-9f, a.peak));
+            const float trim = juce::jlimit (-24.0f, 12.0f, std::round ((cur + (-12.0f - peakDb)) * 10.0f) / 10.0f);
+            std::cout << "CAL " << i << " " << tg::dnbBank()[(size_t) i].name << " peak " << juce::String (peakDb, 2) << " dB (trim " << cur << ") -> " << trim
+                      << (cur + (-12.0f - peakDb) > 12.0f ? "  TOO QUIET" : "") << std::endl;
+            table << juce::String (trim, 1) << "f" << (i % 10 == 9 ? ",\n" : ", ");
+        }
+        std::cout << "TABLE\n" << table << std::endl;
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_AUDITION", {}).isNotEmpty())
+    {
+        // one reel per category: each preset's phrase, 0.4 s apart (renders/audition_<category>.wav)
+        auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+        for (auto& c : tg::patchCategories())
+        {
+            std::vector<juce::AudioBuffer<float>> parts;
+            for (int i = 0; i < (int) tg::dnbBank().size(); ++i)
+                if (juce::String (tg::dnbBank()[(size_t) i].category) == c) parts.push_back (auditionOf (tg::kFirstDnb + i).out);
+            if (parts.empty()) continue;
+            int len = 0; for (auto& b : parts) len += b.getNumSamples() + (int) (0.4 * sr);
+            juce::AudioBuffer<float> reel (2, len); reel.clear();
+            int at = 0; for (auto& b : parts) { for (int ch = 0; ch < 2; ++ch) reel.copyFrom (ch, at, b, ch, 0, b.getNumSamples()); at += b.getNumSamples() + (int) (0.4 * sr); }
+            auto f = dir.getChildFile ("audition_" + c.retainCharacters ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") + ".wav"); f.deleteFile();
+            std::unique_ptr<juce::FileOutputStream> os (f.createOutputStream());
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), sr, 2, 16, {}, 0));
+            if (w != nullptr) { os.release(); w->writeFromAudioSampleBuffer (reel, 0, len); }
+            std::cout << "REEL " << f.getFileName() << " " << parts.size() << " presets" << std::endl;
+        }
+        return 0;
+    }
+    // ---- the bank's checks: finite, peak below -1 dBFS, level within 3 dB of -12 dBFS, its information, mono low end
+    //      for the basses, macros, unique names, the 36 before it unchanged in place
+    auto presetBankTests = [&]
+    {
+        std::cout << "Jungle / DnB bank" << std::endl;
+        const auto& bank = tg::dnbBank();
+        CHECK (bank.size() == 100 && factoryPresets().size() == 136, "100 presets after the first 36");
+        std::map<juce::String, int> perCat; for (auto& e : bank) ++perCat[e.category];
+        CHECK (perCat["Reese"] == 15 && perCat["Sub & Bass"] == 12 && perCat["Neuro"] == 12 && perCat["Hoover & Rave"] == 8 && perCat["Stabs & Chords"] == 10
+               && perCat["Pads & Atmos"] == 10 && perCat["Leads"] == 8 && perCat["Breaks & Drums"] == 10 && perCat["FX & Risers"] == 8 && perCat["Keys & Plucks"] == 7,
+               "15 Reese, 12 Sub & Bass, 12 Neuro, 8 Hoover & Rave, 10 Stabs & Chords, 10 Pads & Atmos, 8 Leads, 10 Breaks & Drums, 8 FX & Risers, 7 Keys & Plucks");
+        std::set<juce::String> names; bool unique = true;
+        for (auto& f : factoryPresets()) unique = unique && names.insert (juce::String (f.name).toLowerCase()).second;
+        CHECK (unique, "every factory preset's name is unique");
+        CHECK (juce::String (factoryPresets()[35].name) == "Break Frankenstein" && juce::String (factoryPresets()[0].name) == "Init Genome", "the first 36 keep their places");
+        juce::StringArray bad, loud, quiet, wide, noMacro, notFinite;
+        float lo = 0, hi = -100, worstSide = -200;
+        for (int i = 0; i < (int) bank.size(); ++i)
+        {
+            const int idx = tg::kFirstDnb + i;
+            const auto m = tg::factoryMeta (idx);
+            if (m.category != bank[(size_t) i].category || m.tags.size() < 3 || m.author != "Mega Synth" || m.note.isEmpty()) bad.add (bank[(size_t) i].name);
+            tg::PresetBuilder pb; tg::buildFactoryPreset (idx, pb);
+            int named = 0; for (auto& n : pb.macroNames) named += n.isNotEmpty() ? 1 : 0;
+            if (named < 2) noMacro.add (bank[(size_t) i].name);
+            const auto a = auditionOf (idx);
+            const float db = 20.0f * std::log10 (std::max (1.0e-9f, a.peak));
+            lo = std::min (lo == 0 ? db : lo, db); hi = std::max (hi, db);
+            if (! a.finite) notFinite.add (bank[(size_t) i].name);
+            if (db > -1.0f) loud.add (juce::String (bank[(size_t) i].name) + " (" + juce::String (db, 1) + ")");
+            if (std::abs (db + 12.0f) > 3.0f) quiet.add (juce::String (bank[(size_t) i].name) + " (" + juce::String (db, 1) + ")");
+            const bool bassCat = m.category == "Reese" || m.category == "Sub & Bass" || m.category == "Neuro";
+            if (bassCat) { worstSide = std::max (worstSide, (float) a.sideDb); if (a.sideDb > -20.0) wide.add (juce::String (bank[(size_t) i].name) + " (" + juce::String (a.sideDb, 1) + " dB)"); }
+        }
+        std::cout << "  audition peaks " << juce::String (lo, 1) << " to " << juce::String (hi, 1) << " dBFS; basses' side / mid below 100 Hz at most " << juce::String (worstSide, 1) << " dB" << std::endl;
+        CHECK (notFinite.isEmpty(), "every preset's output is finite" + (notFinite.isEmpty() ? juce::String() : ": " + notFinite.joinIntoString (", ")));
+        CHECK (loud.isEmpty(), "every preset peaks below -1 dBFS" + (loud.isEmpty() ? juce::String() : ": " + loud.joinIntoString (", ")));
+        CHECK (quiet.isEmpty(), "every preset within 3 dB of -12 dBFS" + (quiet.isEmpty() ? juce::String() : ": " + quiet.joinIntoString (", ")));
+        CHECK (bad.isEmpty(), "every preset has its category, tags, author and note" + (bad.isEmpty() ? juce::String() : ": " + bad.joinIntoString (", ")));
+        CHECK (noMacro.isEmpty(), "every preset has named macros" + (noMacro.isEmpty() ? juce::String() : ": " + noMacro.joinIntoString (", ")));
+        CHECK (wide.isEmpty(), "the basses are mono below 120 Hz" + (wide.isEmpty() ? juce::String() : ": " + wide.joinIntoString (", ")));
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BANKCPU", {}).isNotEmpty())
+    {
+        // the bank's CPU at each Quality: a 4-note chord held 2 s (best of 2), per category average and the heaviest
+        for (int q = 0; q < 3; ++q)
+        {
+            double total = 0, top = 0; juce::String topName;
+            for (int i = 0; i < (int) tg::dnbBank().size(); ++i)
+            {
+                double best = 1e9;
+                for (int run = 0; run < 2; ++run)
+                {
+                    auto p = make(); p->loadFactoryPreset (tg::kFirstDnb + i); setP (*p, P_quality, (float) q);
+                    render (*p, 0.2, {});
+                    double cpu = 0; render (*p, 2.0, chord (0.0, 1.8, { 45, 52, 57, 60 }), nullptr, &cpu);
+                    best = std::min (best, cpu / 2.0 * 100.0);
+                }
+                total += best; if (best > top) { top = best; topName = tg::dnbBank()[(size_t) i].name; }
+            }
+            std::cout << "BANKCPU " << kQualityLabels[q] << ": average " << juce::String (total / 100.0, 2) << "% of a core, heaviest " << topName << " " << juce::String (top, 2) << "%" << std::endl;
+        }
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BANKONLY", {}).isNotEmpty())
+    {
+        presetBankTests();
+        std::cout << (failures == 0 ? "BANK TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_CATONLY", {}).isNotEmpty())
     {
         categoryTests();
@@ -6282,6 +6457,7 @@ int main()
     {
         reactTests();
     categoryTests();
+    presetBankTests();
         std::cout << (failures == 0 ? "REACT TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
@@ -7963,7 +8139,7 @@ int main()
     {
         std::cout << "Stage 17: factory presets" << std::endl;
         const auto& list = factoryPresets();
-        CHECK (list.size() == 36, "36 factory presets");
+        CHECK (list.size() == 136, "136 factory presets (36, then the jungle / drum & bass bank)");
         std::set<juce::String> names;
         for (auto& fp : list) names.insert (fp.name);
         CHECK (names.size() == list.size(), "factory preset names are unique");

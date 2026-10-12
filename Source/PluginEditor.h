@@ -424,6 +424,15 @@ private:
     std::unique_ptr<tgui::PatchBrowser> browser;
     void showBrowser (bool);
     void showSizeMenu();
+public:
+    void showSaveDialog();                       // Save: name, category, tags, author, note
+    struct SaveInfo { juce::String name; tg::PatchMeta meta; };
+    SaveInfo defaultSaveInfo() const;            // what the dialog offers
+    void saveWithInfo (const SaveInfo&, bool saveAs);
+private:
+    void finishSave (int button);
+    void savePatchAs (const juce::File&);
+    std::unique_ptr<juce::AlertWindow> saveWin;
     bool sizeReady = false;   // the window size is only remembered once the editor has opened at its size
     juce::Array<juce::File> patchFiles;
     juce::String lastShownName;

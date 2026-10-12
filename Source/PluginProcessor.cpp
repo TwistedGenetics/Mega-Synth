@@ -1599,6 +1599,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("lab", juce::JSON::toString (lab.toVar(), true), nullptr);
     state.setProperty ("labVariation", labVariation, nullptr);
     state.setProperty ("patchName", getPatchName(), nullptr);
+    state.setProperty ("patchMeta", juce::JSON::toString (getPatchMeta().toVar(), true), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
         for (int k = 0; k < kSampleSlots; ++k)
@@ -1658,6 +1659,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     curProgram.store (juce::jlimit (0, (int) tg::factoryPresets().size() - 1, (int) tree.getProperty ("program", 0)));
 
     if (tree.hasProperty ("patchName")) setPatchName (tree.getProperty ("patchName").toString());
+    setPatchMeta (tg::PatchMeta::fromVar (juce::JSON::parse (tree.getProperty ("patchMeta", {}).toString())));
     const juce::String stepStr = tree.getProperty ("seqSteps").toString();
     if (stepStr.isNotEmpty()) steps.fromString (stepStr);
     routes.fromVar (juce::JSON::parse (tree.getProperty ("modRoutes").toString()));   // none in v1 state
@@ -1718,6 +1720,7 @@ juce::String MegaSynthProcessor::exportBrowserPatch() const
     root->setProperty ("version", kStateVersion);
     root->setProperty ("params", juce::var (p));
     root->setProperty ("name", getPatchName());
+    root->setProperty ("meta", getPatchMeta().toVar());   // category, tags, author, note
     {
         // settings that only exist in the plugin (the browser ignores this block)
         auto* extra = new juce::DynamicObject();
@@ -1810,6 +1813,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
     // Browser patches and v0.1.x .megasynth files carry no "version" (= version 1).
     // They map onto version 2 unchanged; future versions add their migration here.
     if (! patch.isObject()) return "That isn't a patch (expected the JSON copied by Save Patch).";
+    setPatchMeta (tg::PatchMeta::fromVar (patch["meta"]));   // (none, from before categories: Uncategorised)
 
     auto setPlain = [this] (int idx, float plain)
     {
@@ -1956,6 +1960,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
 void MegaSynthProcessor::resetToDefaults()
 {
     resetPatchState();
+    setPatchMeta ({});
     setPatchName ("Init");
     pushHistory ("Init");
     markOriginal();
@@ -1981,6 +1986,7 @@ bool MegaSynthProcessor::hasUserInit() { return getUserInitFile().existsAsFile()
 
 void MegaSynthProcessor::applyFactoryInit()
 {
+    setPatchMeta ({});
     resetPatchState();
     auto set = [this] (int idx, float plain)
     {
@@ -2495,6 +2501,7 @@ bool MegaSynthProcessor::loadFactoryPreset (int index)
         if (b.breakEdit) breakStore.edit (b.breakEdit);
     }
     setPatchName (list[(size_t) index].name);
+    setPatchMeta (factoryMetaFor (index));
     pushHistory ("Load " + juce::String (list[(size_t) index].name));
     markOriginal();
     return true;
@@ -2502,14 +2509,41 @@ bool MegaSynthProcessor::loadFactoryPreset (int index)
 
 juce::File MegaSynthProcessor::getPatchFolder()
 {
-    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Mega Synth").getChildFile ("Patches");
+    const auto over = juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_PATCH_DIR", {});   // (tests)
+    auto dir = over.isNotEmpty() ? juce::File (over) : juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Mega Synth").getChildFile ("Patches");
     dir.createDirectory();
     return dir;
+}
+
+juce::String MegaSynthProcessor::getDefaultAuthor() { return getUserInitFile().getSiblingFile ("author.txt").loadFileAsString().trim(); }
+void MegaSynthProcessor::setDefaultAuthor (const juce::String& a)
+{
+    auto f = getUserInitFile().getSiblingFile ("author.txt");
+    f.getParentDirectory().createDirectory();
+    f.replaceWithText (a.trim());
+}
+
+juce::File MegaSynthProcessor::getDeletedFolder() { return getPatchFolder().getChildFile ("Deleted"); }
+juce::File MegaSynthProcessor::getFactoryMetaFile() { return getPatchFolder().getChildFile ("factory_meta.json"); }
+
+tg::PatchMeta MegaSynthProcessor::factoryMetaFor (int index)
+{
+    auto m = tg::factoryMeta (index);
+    const auto f = getFactoryMetaFile();
+    if (f.existsAsFile() && index >= 0 && index < (int) tg::factoryPresets().size())
+    {
+        const auto all = juce::JSON::parse (f.loadFileAsString());
+        const auto v = all.getProperty (juce::String ("factory:") + tg::factoryPresets()[(size_t) index].name, {});
+        if (v.isObject()) m = tg::PatchMeta::fromVar (v);
+    }
+    return m;
 }
 
 juce::Array<juce::File> MegaSynthProcessor::getPatchFiles()
 {
     auto files = getPatchFolder().findChildFiles (juce::File::findFiles, true, "*.megasynth");
+    const auto bin = getDeletedFolder();
+    files.removeIf ([&bin] (const juce::File& f) { return f.isAChildOf (bin); });   // (deleted patches aren't listed)
     std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
                { return a.getRelativePathFrom (getPatchFolder()).compareNatural (b.getRelativePathFrom (getPatchFolder())) < 0; });
     return files;
@@ -2532,6 +2566,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
     s.sceneEdit = getEditScene();
     s.macroNames = macroNamesJoined();
     s.patchName = getPatchName();
+    s.meta = getPatchMeta();
     s.label = label;
     const juce::ScopedLock sl (waveLock);
     for (int k = 0; k < kSampleSlots; ++k) { s.wave[k] = waveShared[k]; s.waveName[k] = waveName[k]; }
@@ -2541,7 +2576,7 @@ MegaSynthProcessor::Snapshot MegaSynthProcessor::captureSnapshot (const juce::St
 bool MegaSynthProcessor::sameState (const Snapshot& a, const Snapshot& b) const
 {
     return a.steps == b.steps && a.routes == b.routes && a.dnaSteps == b.dnaSteps && a.fxRack == b.fxRack && a.lfoShapes == b.lfoShapes && a.arpStore == b.arpStore && a.breakStore == b.breakStore && a.msegs == b.msegs && a.scenes == b.scenes && a.macroNames == b.macroNames
-        && a.sceneEdit == b.sceneEdit && a.patchName == b.patchName
+        && a.sceneEdit == b.sceneEdit && a.patchName == b.patchName && a.meta == b.meta
         && a.wave[0] == b.wave[0] && a.wave[1] == b.wave[1] && a.wave[2] == b.wave[2] && a.wave[3] == b.wave[3] && a.wave[4] == b.wave[4] && a.wave[5] == b.wave[5]
         && a.params.isEquivalentTo (b.params);
 }
@@ -2571,6 +2606,7 @@ void MegaSynthProcessor::restoreSnapshot (const Snapshot& s)
     setMacroNamesJoined (s.macroNames);
     lastMorph = raw[P_sceneMorph]->load() > 0.5f;
     setPatchName (s.patchName);
+    setPatchMeta (s.meta);
     for (int k = 0; k < kSampleSlots; ++k)
     {
         if (s.wave[k] == waveShared[k]) continue;

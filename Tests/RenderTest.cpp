@@ -120,6 +120,9 @@ int main()
     const auto testDataDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("megasynth_test_data");
     testDataDir.createDirectory();
     setenv ("MEGASYNTH_DATA_DIR", testDataDir.getFullPathName().toRawUTF8(), 1);
+    // (and a patch folder of its own, so the tests never touch your patches)
+    testDataDir.getChildFile ("Patches").deleteRecursively();
+    setenv ("MEGASYNTH_PATCH_DIR", testDataDir.getChildFile ("Patches").getFullPathName().toRawUTF8(), 1);
     MegaSynthProcessor::getUserInitFile().deleteFile();
 
     auto make = [&]
@@ -2204,7 +2207,7 @@ int main()
             tgui::PatchCatalogue c; c.rescan();
             const auto cats = c.categories();
             CHECK (cats[0] == "All" && cats[1] == "Favourites" && cats.contains ("Your patches"), "browser categories");
-            for (auto& f : factoryPresets()) CHECK (cats.contains (f.category), "factory category listed");
+            for (int i = 0; i < (int) factoryPresets().size(); ++i) CHECK (cats.contains (tg::factoryMeta (i).category), "factory category listed");
             auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("megasynth_favs_test.txt");
             tmp.deleteFile();
             tgui::Favourites fav (tmp);
@@ -2214,8 +2217,8 @@ int main()
             auto hit = c.filter ("All", juce::String (f0.name).toUpperCase(), fav);
             bool found = false; for (int i : hit) found |= c[i].factory && c[i].index == 0;
             CHECK (found, "search finds a preset by name (any case)");
-            auto cat0 = c.filter (f0.category, "", fav);
-            bool only = cat0.size() > 0; for (int i : cat0) only &= c[i].category == f0.category;
+            auto cat0 = c.filter (tg::factoryMeta (0).category, "", fav);
+            bool only = cat0.size() > 0; for (int i : cat0) only &= c[i].category == tg::factoryMeta (0).category;
             CHECK (only, "category filter");
             CHECK (c.filter ("All", "zzqq-no-such-patch", fav).isEmpty(), "search with no match");
             const auto words = juce::String (f0.category) + " " + juce::String (f0.name).upToFirstOccurrenceOf (" ", false, false);
@@ -6088,9 +6091,197 @@ int main()
             std::cout << "  CPU, 8 notes: " << juce::String (a, 2) << "% off, " << juce::String (b, 2) << "% reacting to every 16th (+" << juce::String (b - a, 2) << "% of a core)" << std::endl;
         }
     };
+    // ---- patch categories: category, tags, author, note; the browser's filters; many at once; Deleted; import / export
+    auto categoryTests = [&]
+    {
+        std::cout << "Patch categories" << std::endl;
+        const auto folder = MegaSynthProcessor::getPatchFolder();
+        folder.deleteRecursively(); folder.createDirectory();
+        CHECK (folder.isAChildOf (juce::File::getSpecialLocation (juce::File::tempDirectory)), "(the tests use their own patch folder)");
+        // 1. the factory presets: every one in a real category, by Mega Synth, its description as the note, the old grouping as tags
+        {
+            juce::StringArray bad;
+            for (int i = 0; i < (int) factoryPresets().size(); ++i)
+            {
+                const auto m = tg::factoryMeta (i);
+                if (! tg::patchCategories().contains (m.category) || m.category == tg::PatchMeta::uncategorised() || m.author != "Mega Synth"
+                    || m.note != factoryPresets()[(size_t) i].description || m.tags.isEmpty())
+                    bad.add (factoryPresets()[(size_t) i].name);
+            }
+            CHECK (bad.isEmpty(), "every factory preset has a category, tags, author and note" + (bad.isEmpty() ? juce::String() : ": " + bad.joinIntoString (", ")));
+            CHECK (tg::factoryMeta (1).category == "Reese" && tg::factoryMeta (1).tags.contains ("bass") && tg::factoryMeta (32).category == "Breaks & Drums"
+                   && tg::factoryMeta (32).tags.contains ("jungle") && tg::factoryMeta (32).tags.contains ("dnb"), "factory categories (Reese Mutation: Reese, tagged bass; Break Chop 170: Breaks & Drums)");
+        }
+        // 2. patch files carry the information; the sound is the same with or without it; old files are Uncategorised
+        tg::PatchMeta m1; m1.category = "Neuro"; m1.tags = { "dark", "rolling" }; m1.author = "Jamie"; m1.note = "Mod wheel opens it up";
+        {
+            auto p = make(); setP (*p, P_filterCutoff, 1234.0f); p->setPatchMeta (m1);
+            const auto json = p->exportBrowserPatch();
+            auto q = make(); CHECK (q->importBrowserPatch (json).isEmpty() && q->getPatchMeta() == m1, "a patch file keeps its category, tags, author and note");
+            auto v = juce::JSON::parse (json); v.getDynamicObject()->removeProperty ("meta");
+            auto o = make(); o->setPatchMeta (m1);
+            CHECK (o->importBrowserPatch (juce::JSON::toString (v)).isEmpty() && o->getPatchMeta().categoryShown() == "Uncategorised" && o->getPatchMeta().tags.isEmpty(),
+                   "a patch from before categories loads as Uncategorised");
+            CHECK (std::abs (o->param (P_filterCutoff)->convertFrom0to1 (o->param (P_filterCutoff)->getValue()) - 1234.0f) < 0.5f, "... with its sound");
+            // projects, undo, A/B
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto r = make(); r->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (r->getPatchMeta() == m1, "the information is saved with the project");
+            auto u = make(); u->loadFactoryPreset (1); u->loadFactoryPreset (18);
+            CHECK (u->getPatchMeta().category == "Reese" && u->getPatchMeta().note == factoryPresets()[18].description, "loading a factory preset brings its information");
+            u->loadInitPatch();
+            CHECK (u->getPatchMeta().categoryShown() == "Uncategorised", "Init is Uncategorised");
+        }
+        // 3. the catalogue: your patches under their categories, the tag and author filters, search in tags and notes,
+        //    an old patch file Uncategorised, folders still listed
+        auto savePatch = [&] (const juce::String& name, const tg::PatchMeta* m, const juce::String& sub = {})
+        {
+            auto p = make(); setP (*p, P_filterCutoff, 500.0f + 100.0f * (float) name.length());
+            auto dir = sub.isEmpty() ? folder : folder.getChildFile (sub); dir.createDirectory();
+            auto f = dir.getChildFile (name + ".megasynth");
+            if (m != nullptr) p->setPatchMeta (*m);
+            p->savePatchToFile (f);
+            if (m == nullptr) { auto v = juce::JSON::parse (f.loadFileAsString()); v.getDynamicObject()->removeProperty ("meta"); f.replaceWithText (juce::JSON::toString (v)); }
+            return f;
+        };
+        tg::PatchMeta m2; m2.category = "Reese"; m2.tags = { "dark", "174" }; m2.author = "Someone"; m2.note = "Wide and moving";
+        tg::PatchMeta m3; m3.category = "Pads & Atmos"; m3.tags = { "lush" }; m3.author = "Jamie";
+        const auto fA = savePatch ("Alpha", &m1), fB = savePatch ("Bravo", &m2), fC = savePatch ("Charlie", &m3, "Live set"), fOld = savePatch ("Oldie", nullptr);
+        tgui::Favourites fav (folder.getChildFile ("favourites.txt"));
+        {
+            tgui::PatchCatalogue c; c.rescan();
+            const auto cats = c.categories();
+            bool allCats = true; for (auto& k : tg::patchCategories()) allCats = allCats && cats.contains (k);
+            CHECK (allCats && cats.contains ("Factory") && cats.contains ("Your patches") && cats.contains ("Live set") && cats.contains ("Deleted"), "browser categories: the ten, Uncategorised, Factory, yours, folders, Deleted");
+            auto names = [&] (const juce::Array<int>& rows) { juce::StringArray n; for (int i : rows) if (! c[i].factory) n.add (c[i].name); n.sort (false); return n.joinIntoString (","); };
+            CHECK (names (c.filter ("Neuro", "", fav)) == "Alpha" && names (c.filter ("Reese", "", fav)) == "Bravo" && names (c.filter ("Uncategorised", "", fav)) == "Oldie",
+                   "your patches under their categories; an old one Uncategorised");
+            CHECK (names (c.filter ("All", "", fav, "dark")) == "Alpha,Bravo" && names (c.filter ("All", "", fav, {}, "Jamie")) == "Alpha,Charlie"
+                   && names (c.filter ("All", "", fav, "dark", "Jamie")) == "Alpha", "tag and author filters");
+            CHECK (names (c.filter ("All", "wheel", fav)) == "Alpha" && names (c.filter ("All", "174 wide", fav)) == "Bravo", "search covers notes and tags");
+            CHECK (names (c.filter ("Live set", "", fav)) == "Charlie" && names (c.filter ("Your patches", "", fav)) == "Alpha,Bravo,Charlie,Oldie", "folders and Your patches still work");
+            int factoryReese = 0; for (int i : c.filter ("Reese", "", fav)) factoryReese += c[i].factory ? 1 : 0;
+            CHECK (factoryReese >= 2 && c.filter ("Factory", "", fav).size() == (int) factoryPresets().size() + 1, "factory presets under the same categories");
+            CHECK (c.allTags().contains ("dark") && c.allTags().contains ("lush") && c.allAuthors().contains ("Jamie") && c.allAuthors().contains ("Mega Synth"), "the tag and author lists");
+            // favourites (a factory preset and one of yours)
+            int iB = -1, iF = -1; for (int i = 0; i < c.size(); ++i) { if (c[i].name == "Bravo") iB = i; if (c[i].factory && c[i].index == 3) iF = i; }
+            fav.toggle (c[iB].key()); fav.toggle (c[iF].key());
+            CHECK (c.filter ("Favourites", "", fav).size() == 2 && c.filter ("Favourites", "", fav, "dark").size() == 1, "favourites, also with the filters");
+        }
+        // 4. the information written into a file: the sound untouched
+        {
+            const auto before = juce::JSON::parse (fOld.loadFileAsString());
+            tg::PatchMeta m; m.category = "Leads"; m.tags = { "old" };
+            CHECK (tgui::patchlib::writeMeta (fOld, m) && tgui::patchlib::readMeta (fOld) == m, "writing a patch's information");
+            auto after = juce::JSON::parse (fOld.loadFileAsString());
+            after.getDynamicObject()->removeProperty ("meta");
+            CHECK (juce::JSON::toString (before) == juce::JSON::toString (after), "... and nothing else in the file changes");
+        }
+        // 5. many at once in the browser: a category, then tags added and removed
+        {
+            auto p = make();
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            ed->setSize (1200, 890);
+            tgui::PatchBrowser b (*p);
+            b.setSize (1200, 640);
+            b.open();
+            b.showCategory ("Your patches");
+            juce::Array<int> rows; for (int r = 0; r < b.shownCount(); ++r) if (b.shownEntry (r).name != "Bravo") rows.add (r);
+            b.selectRowsForTests (rows);
+            b.setCategoryForSelection ("Hoover & Rave");
+            CHECK (tgui::patchlib::readMeta (fA).category == "Hoover & Rave" && tgui::patchlib::readMeta (fC).category == "Hoover & Rave"
+                   && tgui::patchlib::readMeta (fOld).category == "Hoover & Rave" && tgui::patchlib::readMeta (fB).category == "Reese",
+                   "recategorise several patches at once (and only those)");
+            CHECK (tgui::patchlib::readMeta (fA).tags == m1.tags && tgui::patchlib::readMeta (fA).author == "Jamie", "... keeping their other information");
+            b.addTagsToSelection ({ "rave", "93" }, false);
+            CHECK (tgui::patchlib::readMeta (fC).tags.contains ("rave") && tgui::patchlib::readMeta (fOld).tags.contains ("93") && ! tgui::patchlib::readMeta (fB).tags.contains ("rave"), "tags added to several at once");
+            b.addTagsToSelection ({ "93" }, true);
+            CHECK (! tgui::patchlib::readMeta (fC).tags.contains ("93") && tgui::patchlib::readMeta (fC).tags.contains ("rave"), "tags removed from several at once");
+            // the same for factory presets: kept as your edits, the preset itself unchanged
+            b.showCategory ("Factory");
+            juce::Array<int> fr; for (int r = 0; r < b.shownCount(); ++r) if (b.shownEntry (r).index == 5 || b.shownEntry (r).index == 6) fr.add (r);
+            b.selectRowsForTests (fr);
+            b.setCategoryForSelection ("FX & Risers");
+            CHECK (MegaSynthProcessor::factoryMetaFor (5).category == "FX & Risers" && MegaSynthProcessor::factoryMetaFor (6).category == "FX & Risers"
+                   && tg::factoryMeta (5).category == "Keys & Plucks", "factory presets recategorised (as your edits)");
+            CHECK (tgui::patchlib::saveFactoryMeta (5, tg::factoryMeta (5)) && tgui::patchlib::saveFactoryMeta (6, tg::factoryMeta (6))
+                   && MegaSynthProcessor::factoryMetaFor (5) == tg::factoryMeta (5) && MegaSynthProcessor::factoryMetaFor (6) == tg::factoryMeta (6), "... and put back");
+        }
+        // 6. Deleted: out of the lists, restorable with its information, or gone for good
+        {
+            const auto d = tgui::patchlib::deletePatch (fC);
+            CHECK (d.existsAsFile() && ! fC.exists() && d.isAChildOf (MegaSynthProcessor::getDeletedFolder()) && ! MegaSynthProcessor::getPatchFiles().contains (d),
+                   "a deleted patch goes to Deleted and out of the patch lists");
+            tgui::PatchCatalogue c; c.rescan();
+            int inDeleted = 0; for (int i : c.filter ("Deleted", "", fav)) inDeleted += c[i].name == "Charlie" ? 1 : 0;
+            int elsewhere = 0; for (int i : c.filter ("All", "", fav)) elsewhere += c[i].name == "Charlie" ? 1 : 0;
+            CHECK (inDeleted == 1 && elsewhere == 0 && tgui::patchlib::originalPath (d) == "Live set/Charlie.megasynth", "the Deleted list (and where it came from)");
+            const auto back = tgui::patchlib::restorePatch (d);
+            CHECK (back == fC && fC.existsAsFile() && tgui::patchlib::readMeta (fC).category == "Hoover & Rave", "restored where it was, with its information");
+            const auto d2 = tgui::patchlib::deletePatch (fC);
+            CHECK (tgui::patchlib::deleteForever (d2) && ! d2.exists() && tgui::patchlib::deletedFiles().isEmpty(), "deleted for good");
+        }
+        // 7. export and import keep the information (a factory preset too); a file that isn't a patch is refused
+        {
+            const auto out = folder.getParentDirectory().getChildFile ("export_test"); out.deleteRecursively(); out.createDirectory();
+            const auto ef = out.getChildFile ("Amen Reese.megasynth");
+            CHECK (tgui::patchlib::exportFactory (18, ef) && tgui::patchlib::readMeta (ef) == MegaSynthProcessor::factoryMetaFor (18), "a factory preset exported with its information");
+            fB.copyFileTo (out.getChildFile ("Bravo.megasynth"));
+            out.getChildFile ("notes.txt").replaceWithText ("not a patch");
+            juce::StringArray errs;
+            const auto in = tgui::patchlib::importFiles ({ ef, out.getChildFile ("Bravo.megasynth"), out.getChildFile ("notes.txt") }, errs);
+            CHECK (in.size() == 2 && errs.size() == 1 && tgui::patchlib::readMeta (in[0]).category == "Reese" && tgui::patchlib::readMeta (in[1]) == m2
+                   && in[1] != fB && in[1].getFileNameWithoutExtension() == "Bravo 2", "imported with their information (a new name when one's taken; not-patches refused)");
+            auto p = make(); CHECK (p->loadPatchFromFile (in[0]).isEmpty() && p->getPatchMeta().category == "Reese", "an imported patch loads with its information");
+            out.deleteRecursively();
+        }
+        // 8. Save: the dialog's category, tags, author and note go into the file; the author is remembered
+        {
+            auto p = make(); p->loadFactoryPreset (20);   // (Hoover 93)
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+            // (the dialog itself needs a screen; what it offers and what it saves are tested here)
+            auto si = e->defaultSaveInfo();
+            CHECK (si.meta.category == "Hoover & Rave" && si.meta.author == MegaSynthProcessor::getDefaultAuthor() && si.name == "Hoover 93",
+                   "Save offers the patch's name and category (a factory preset's author isn't copied)");
+            si.name = "My Hoover"; si.meta.tags = tg::PatchMeta::splitTags ("hoover, 93 , Rave"); si.meta.author = "Jamie"; si.meta.note = "Wheel for vibrato";
+            e->saveWithInfo (si, false);
+            const auto f = folder.getChildFile ("My Hoover.megasynth");
+            const auto m = tgui::patchlib::readMeta (f);
+            CHECK (f.existsAsFile() && m.category == "Hoover & Rave" && m.tags == juce::StringArray ({ "hoover", "93", "rave" }) && m.author == "Jamie" && m.note == "Wheel for vibrato",
+                   "saved with its information");
+            CHECK (MegaSynthProcessor::getDefaultAuthor() == "Jamie" && e->defaultSaveInfo().meta.author == "Jamie", "the author is remembered for next time");
+        }
+        // 9. the browser opens with all this (and draws)
+        {
+            auto p = make();
+            tgui::PatchBrowser b (*p); b.setSize (1200, 640); b.open();
+            b.showCategory ("All");
+            b.selectRowsForTests ({ 3 });
+            auto img = b.createComponentSnapshot (b.getLocalBounds(), true, 1.0f);
+            auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
+            auto f = dir.getChildFile ("page_PatchBrowser.png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+            b.showCategory ("Your patches");
+            juce::Array<int> two { 0, 1 }; b.selectRowsForTests (two);
+            auto img2 = b.createComponentSnapshot (b.getLocalBounds(), true, 1.0f);
+            auto f2 = dir.getChildFile ("page_PatchBrowser_multi.png"); f2.deleteFile();
+            juce::FileOutputStream os2 (f2); juce::PNGImageFormat().writeImageToStream (img2, os2);
+            CHECK (b.shownCount() > 0, "the browser lists them");
+        }
+        folder.deleteRecursively(); folder.createDirectory();
+        MegaSynthProcessor::setDefaultAuthor ({});
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_CATONLY", {}).isNotEmpty())
+    {
+        categoryTests();
+        std::cout << (failures == 0 ? "CATEGORY TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_REACTONLY", {}).isNotEmpty())
     {
         reactTests();
+    categoryTests();
         std::cout << (failures == 0 ? "REACT TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }

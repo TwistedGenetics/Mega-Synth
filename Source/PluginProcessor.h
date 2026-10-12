@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PatchMeta.h"
 #include "Params.h"
 #include "Engine.h"
 #include "Break/BreakAnalysis.h"
@@ -213,6 +214,14 @@ public:
     bool savePatchToFile (const juce::File&);
     juce::String loadPatchFromFile (const juce::File&);   // error message, or empty on success
     juce::String getPatchName() const { const juce::ScopedLock sl (nameLock); return patchName; }
+    // the patch's category, tags, author and note (not sound: saved in patch files and projects)
+    tg::PatchMeta getPatchMeta() const { const juce::ScopedLock sl (nameLock); return patchMeta; }
+    void setPatchMeta (const tg::PatchMeta& m) { const juce::ScopedLock sl (nameLock); patchMeta = m; }
+    static tg::PatchMeta factoryMetaFor (int index);                  // a factory preset's, with your edits to it
+    static juce::File getFactoryMetaFile();                           // those edits (factory_meta.json in the patch folder)
+    static juce::File getDeletedFolder();                             // deleted patches wait here to be restored
+    static juce::String getDefaultAuthor();                           // the author last typed when saving (remembered)
+    static void setDefaultAuthor (const juce::String&);
     void setPatchName (const juce::String& n) { const juce::ScopedLock sl (nameLock); patchName = n; }
     void generateRandomPhrase();
 
@@ -274,6 +283,7 @@ private:
     struct Snapshot
     {
         juce::ValueTree params;
+        tg::PatchMeta meta;
         juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps, fxRack, lfoShapes, arpStore, msegs, breakStore;
         int sceneEdit = 0;
         std::shared_ptr<const juce::MemoryBlock> wave[6];
@@ -410,6 +420,7 @@ private:
     int lastEuclid[4] { -1, -1, -1, -1 };
     juce::Random rng;
     juce::String patchName { "Init" };
+    tg::PatchMeta patchMeta;
     juce::String uiTabs;
     mutable juce::CriticalSection nameLock;
 

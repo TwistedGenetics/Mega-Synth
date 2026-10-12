@@ -1346,21 +1346,8 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     };
     patchPrev.onClick = [this] { stepPatch (-1); };
     patchNext.onClick = [this] { stepPatch (1); };
-    saveBtn.onClick = [this]
-    {
-        juce::String name = proc.getPatchName();
-        if (name.isEmpty() || name == "Init" || name == "Imported patch") name = "My Patch";
-        chooser = std::make_unique<juce::FileChooser> ("Save patch", MegaSynthProcessor::getPatchFolder().getChildFile (juce::File::createLegalFileName (name) + ".megasynth"), "*.megasynth");
-        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
-                              [this] (const juce::FileChooser& fc)
-                              {
-                                  auto f = fc.getResult();
-                                  if (f == juce::File()) return;
-                                  f = f.withFileExtension (".megasynth");
-                                  setStatus (proc.savePatchToFile (f) ? "Saved " + f.getFileNameWithoutExtension() : "Couldn't save the patch there");
-                                  refreshPatchList();
-                              });
-    };
+    saveBtn.onClick = [this] { showSaveDialog(); };
+    saveBtn.setTooltip ("Save the patch into your patch folder, with a category, tags, author and note (or anywhere with Save As...)");
     refreshPatchList();
 
     copyBtn.onClick = [this]
@@ -4047,6 +4034,7 @@ void MegaSynthEditor::showBrowser (bool show)
             browser->onLoadFile = [this] (const juce::File& f) { loadPatch (f); };
             browser->onLoadInit = [this] { proc.loadInitPatch(); setStatus ("Init loaded"); refreshPatchList(); };
             browser->onClose = [this] { showBrowser (false); };
+            browser->onStatus = [this] (const juce::String& t) { setStatus (t); refreshPatchList(); };
             content.addChildComponent (*browser);
             browser->setBounds (0, 88, kDesignW, 640);
         }
@@ -4054,6 +4042,88 @@ void MegaSynthEditor::showBrowser (bool show)
     }
     else if (browser != nullptr) browser->setVisible (false);
     browseBtn.setToggleState (show, juce::dontSendNotification);
+}
+
+MegaSynthEditor::SaveInfo MegaSynthEditor::defaultSaveInfo() const
+{
+    SaveInfo si;
+    si.name = proc.getPatchName();
+    if (si.name.isEmpty() || si.name == "Init" || si.name == "Imported patch") si.name = "My Patch";
+    si.meta = proc.getPatchMeta();
+    // (a factory preset's author is "Mega Synth": a patch saved from it is yours)
+    if (si.meta.author.isEmpty() || si.meta.author == "Mega Synth") si.meta.author = MegaSynthProcessor::getDefaultAuthor();
+    return si;
+}
+
+void MegaSynthEditor::showSaveDialog()
+{
+    const auto si = defaultSaveInfo();
+    saveWin = std::make_unique<juce::AlertWindow> ("Save patch", "Into your patch folder. The category, tags, author and note go with it "
+                                                   "(edit them later in the browser).", juce::MessageBoxIconType::NoIcon, this);
+    saveWin->addTextEditor ("name", si.name, "Name");
+    saveWin->addComboBox ("category", tg::patchCategories(), "Category");
+    if (auto* cb = saveWin->getComboBoxComponent ("category"))
+    {
+        const int i = tg::patchCategories().indexOf (si.meta.categoryShown());
+        if (i >= 0) cb->setSelectedItemIndex (i, juce::dontSendNotification);
+        else { cb->addItem (si.meta.categoryShown(), cb->getNumItems() + 1); cb->setSelectedItemIndex (cb->getNumItems() - 1, juce::dontSendNotification); }
+    }
+    saveWin->addTextEditor ("tags", si.meta.tagsText(), "Tags (commas or spaces)");
+    saveWin->addTextEditor ("author", si.meta.author, "Author");
+    saveWin->addTextEditor ("note", si.meta.note, "Note");
+    saveWin->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    saveWin->addButton ("Save As...", 2);
+    saveWin->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    saveWin->enterModalState (true, juce::ModalCallbackFunction::create ([safe = juce::Component::SafePointer<MegaSynthEditor> (this)] (int r)
+                              { if (safe != nullptr) safe->finishSave (r); }), false);
+}
+
+void MegaSynthEditor::finishSave (int button)
+{
+    if (saveWin == nullptr) return;
+    auto w = std::move (saveWin);
+    if (button == 0) return;
+    SaveInfo si;
+    si.meta.category = w->getComboBoxComponent ("category") != nullptr ? w->getComboBoxComponent ("category")->getText() : tg::PatchMeta::uncategorised();
+    si.meta.tags = tg::PatchMeta::splitTags (w->getTextEditorContents ("tags"));
+    si.meta.author = w->getTextEditorContents ("author").trim();
+    si.meta.note = w->getTextEditorContents ("note").trim();
+    si.name = w->getTextEditorContents ("name").trim();
+    saveWithInfo (si, button == 2);
+}
+
+void MegaSynthEditor::saveWithInfo (const SaveInfo& si, bool saveAs)
+{
+    if (si.meta.author.isNotEmpty()) MegaSynthProcessor::setDefaultAuthor (si.meta.author);
+    proc.setPatchMeta (si.meta);
+    const auto name = si.name.trim().isEmpty() ? juce::String ("My Patch") : si.name.trim();
+    const auto f = MegaSynthProcessor::getPatchFolder().getChildFile (juce::File::createLegalFileName (name) + ".megasynth");
+    if (saveAs)
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Save patch", f, "*.megasynth");
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+                              [this] (const juce::FileChooser& fc)
+                              {
+                                  auto r = fc.getResult();
+                                  if (r != juce::File()) savePatchAs (r.withFileExtension (".megasynth"));
+                              });
+        return;
+    }
+    if (f.existsAsFile())
+    {
+        auto opts = juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::QuestionIcon).withTitle ("Replace it?")
+                        .withMessage (f.getFileNameWithoutExtension() + " is already saved. Replace it?").withButton ("Replace").withButton ("Cancel")
+                        .withAssociatedComponent (this);
+        juce::AlertWindow::showAsync (opts, [safe = juce::Component::SafePointer<MegaSynthEditor> (this), f] (int r) { if (safe != nullptr && r == 1) safe->savePatchAs (f); });
+        return;
+    }
+    savePatchAs (f);
+}
+
+void MegaSynthEditor::savePatchAs (const juce::File& f)
+{
+    setStatus (proc.savePatchToFile (f) ? "Saved " + f.getFileNameWithoutExtension() + " (" + proc.getPatchMeta().categoryShown() + ")" : "Couldn't save the patch there");
+    refreshPatchList();
 }
 
 void MegaSynthEditor::showSizeMenu()

@@ -16,6 +16,7 @@
 #include "../Registry.h"
 #include "../ModMatrix.h"
 #include "../Seq/DnaSequencer.h"
+#include "../PatchMeta.h"
 
 namespace tg
 {
@@ -167,9 +168,11 @@ struct PresetBuilder
 struct FactoryPreset
 {
     const char* name;
-    const char* category;
+    const char* category;      // (the original grouping; it's kept as a tag)
     const char* description;
     void (*build) (PresetBuilder&);
+    const char* browserCategory = nullptr;   // one of patchCategories() (the first 36 use the table in factoryMeta)
+    const char* tags = nullptr;              // space-separated
 };
 
 namespace factory_detail
@@ -858,5 +861,30 @@ inline const std::array<FactoryPreset, 36>& factoryPresets()
     return list;
 }
 
+
+// A factory preset's category, tags, author and note (before any edits of yours: see factoryMetaFor)
+inline PatchMeta factoryMeta (int index)
+{
+    PatchMeta m;
+    const auto& fp = factoryPresets();
+    if (index < 0 || index >= (int) fp.size()) { m.category = PatchMeta::uncategorised(); return m; }
+    const auto& p = fp[(size_t) index];
+    // the first 36 (from before categories): their place in the jungle / drum & bass categories
+    static const char* const firstCats[36] = {
+        "Sub & Bass", "Reese", "Sub & Bass", "Neuro", "Sub & Bass", "Keys & Plucks", "Pads & Atmos", "Pads & Atmos", "Pads & Atmos",
+        "Keys & Plucks", "Breaks & Drums", "FX & Risers", "Pads & Atmos", "Neuro", "FX & Risers", "Stabs & Chords", "Leads", "Neuro",
+        "Reese", "Neuro", "Hoover & Rave", "Stabs & Chords", "Sub & Bass", "Pads & Atmos", "Neuro", "Leads", "Keys & Plucks",
+        "Pads & Atmos", "Stabs & Chords", "Neuro", "Hoover & Rave", "Keys & Plucks", "Breaks & Drums", "Breaks & Drums", "Breaks & Drums", "Breaks & Drums" };
+    m.category = p.browserCategory != nullptr ? juce::String (p.browserCategory) : (index < 36 ? juce::String (firstCats[index]) : PatchMeta::uncategorised());
+    juce::StringArray t;
+    if (p.tags != nullptr) t.addTokens (p.tags, " ", "");
+    // the old grouping as tags, so searching for "bass" or "jungle" still finds them
+    juce::StringArray old; old.addTokens (juce::String (p.category).replace ("/", " "), " ", "");
+    t.addArray (old);
+    m.tags = PatchMeta::cleanTags (t);
+    m.author = "Mega Synth";
+    m.note = p.description;
+    return m;
+}
 
 } // namespace tg

@@ -1575,7 +1575,7 @@ void MegaSynthEditor::buildPages()
     struct TabDef { const char* name; juce::StringArray subs; juce::Colour colour; };
     const TabDef layout[] = {
         { "Perform", { "Perform", "Performance FX" }, col::accent }, { "Overview", {}, col::accent },
-        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Break Chopper", "Reese" }, col::osc },
+        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Break Chopper", "Reese", "Break React" }, col::osc },
         { "Mixer", {}, col::mixer }, { "Filters", {}, col::filter },
         { "Envelopes", { "Amp & Filter", "Mod Envelopes", "Pitch Envelope", "MSEG 1 & 2" }, col::env },
         { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Space", "Dirt", "Motion", "Rack" }, col::fx },
@@ -2514,6 +2514,91 @@ void MegaSynthEditor::buildPages()
             mv->setBounds (g, g + 140, 560, 130);
             nt->setBounds (g, g + 280, 560, 130);
             ch->setBounds (g + 570, g + 210, W - 2 * g - 570, 130);
+        };
+    }
+
+    // ---------------------------------------------------------------- Oscillators > Break React
+    {
+        auto* page = addPage ("Break React");
+        const auto c = juce::Colour (0xffffb347);
+        auto* top = sec (page, "Break React", c);
+        top->addInfo ("Break-Reactive mode: the synth listens to the breaks (and, if you like, a MIDI note or the host's sidechain) and "
+                      "reacts on the hits you choose: the oscillators' phases reset, the pitch and drive kick, the level ducks, the Reese's "
+                      "notch jumps. Off, it changes nothing. A slice counts as a kick, snare or hat from the Break Chopper's analysis; "
+                      "Sensitivity lets in weaker ones (ghost notes).");
+        top->addTitleChip (new ModSourceChip (MS_BreakHit, "Hit"), 34);
+        top->addTitleChip (new ModSourceChip (MS_BreakHitType, "Type"), 40);
+        top->add (new ParamToggle (proc, P_rxOn, "On", c), 56, 40);
+        top->choice (P_rxListen, "Listen to", 110);
+        top->choice (P_rxBreak, "From", 110);
+        top->knob (P_rxSens, "Sensitivity", 70);
+        auto* trg = sec (page, "Triggers", c);
+        trg->addInfo ("Where hits come from. Breaks: every slice the Break Sequencer, the slice keys or a fill plays. Note: a key of your own "
+                      "(it isn't played) - put it in a MIDI clip to fire the reactions anywhere. Sidechain: drum hits found in the host's "
+                      "sidechain input (a rough guess at kick / snare / hat from its low and high end).");
+        trg->add (new ParamToggle (proc, P_rxFromBreaks, "Breaks", c), 80, 40);
+        trg->add (new ParamToggle (proc, P_rxFromNote, "Note", c), 70, 40);
+        auto* kNote = trg->knob (P_rxNote, "Key", 64);
+        trg->add (new ParamToggle (proc, P_rxFromSc, "Sidechain", c), 96, 40);
+        auto* kSc = trg->knob (P_rxScSens, "SC Sens", 64);
+        auto* act = sec (page, "Actions", c);
+        act->addInfo ("What a hit does. Phase Reset: the ticked oscillators start their cycle again exactly on the hit (faded over 1.5 ms "
+                      "so it doesn't click) - the bass locks to the drums. Pitch Kick: a jump (up or down) that falls back over the Decay. "
+                      "Drive Kick: a burst of saturation. Level Duck: a dip, like sidechain compression. Notch Jump: the Reese's notch leaps "
+                      "up (two octaves at 100%) and slides back.");
+        act->add (new ParamToggle (proc, P_rxReset, "Phase Reset", c), 116, 40);
+        act->knob (P_rxPitch, "Pitch Kick", 66);
+        act->knob (P_rxDrive, "Drive Kick", 66);
+        act->knob (P_rxDuck, "Level Duck", 66);
+        act->knob (P_rxNotch, "Notch Jump", 66);
+        auto* shp = sec (page, "Shape & Timing", c);
+        shp->addInfo ("The kicks' shape: Attack, then down to 1% over the Decay (the Break Hit source follows it too). Offset moves the "
+                      "reaction later (or earlier: then the breaks play that much later, as the synth can't know a hit is coming). "
+                      "Humanise: a random few ms either way on each hit.");
+        shp->knob (P_rxAttack, "Attack", 62);
+        shp->knob (P_rxDecay, "Decay", 62);
+        shp->knob (P_rxOffset, "Offset", 62);
+        shp->knob (P_rxHuman, "Humanise", 66);
+        auto* osc = sec (page, "Oscillators", c);
+        osc->addInfo ("Which oscillators react (to all the actions; the Notch Jump is the Reese's own).");
+        osc->add (new ParamToggle (proc, P_rxOsc1, "Osc 1", c), 72, 40);
+        osc->add (new ParamToggle (proc, P_rxOsc2, "Osc 2", c), 72, 40);
+        osc->add (new ParamToggle (proc, P_rxOsc3, "Osc 3", c), 72, 40);
+        osc->add (new ParamToggle (proc, P_rxSub, "Sub", c), 62, 40);
+        osc->add (new ParamToggle (proc, P_rxReese, "Reese", c), 76, 40);
+        auto* info = page->own (new juce::Label());
+        info->setColour (juce::Label::textColourId, col::muted);
+        info->setFont (juce::Font (juce::FontOptions (12.0f)));
+        info->setJustificationType (juce::Justification::topLeft);
+        auto* ticker = page->own (new StoreTicker());
+        ticker->tick = [this, kNote, kSc, info]
+        {
+            auto plain = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+            kNote->setAlpha (plain (P_rxFromNote) > 0.5f ? 1.0f : 0.4f);
+            kSc->setAlpha (plain (P_rxFromSc) > 0.5f ? 1.0f : 0.4f);
+            juce::String t;
+            if (plain (P_rxOn) < 0.5f) t << "Off: switch it on to react.";
+            else
+            {
+                const auto& en = proc.getEngine();
+                const float ty = en.rxTypeShown.load();
+                t << "Hits so far: " << en.rxHitsShown.load() << "    last: " << (en.rxHitsShown.load() == 0 ? "-" : (ty < 0.25f ? "kick" : (ty < 0.75f ? "snare" : "hat")))
+                  << "    envelope: " << juce::String (juce::roundToInt (en.rxEnvShown.load() * 100.0f)) << "%";
+                if (plain (P_rxFromBreaks) > 0.5f && plain (P_rxOffset) - plain (P_rxHuman) < 0.0f)
+                    t << "\nThe breaks play " << juce::String (plain (P_rxHuman) - plain (P_rxOffset), 1) << " ms late, so the synth can react first.";
+            }
+            info->setText (t, juce::dontSendNotification);
+        };
+        ticker->tick();
+        page->onResize = [page, top, trg, act, shp, osc, info]
+        {
+            const int g = 10, W = page->getWidth();
+            top->setBounds (g, g, 560, 130);
+            trg->setBounds (g + 570, g, W - 2 * g - 570, 130);
+            act->setBounds (g, g + 140, 560, 130);
+            shp->setBounds (g + 570, g + 140, W - 2 * g - 570, 130);
+            osc->setBounds (g, g + 280, 560, 100);
+            info->setBounds (g + 580, g + 290, W - 2 * g - 590, 60);
         };
     }
 

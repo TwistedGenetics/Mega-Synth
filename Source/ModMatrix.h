@@ -83,7 +83,9 @@ enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_
     X(BsSlice,     "Break Slice",       K_SEQ,    false) \
     X(BsBreak,     "Break Slot",        K_SEQ,    false) \
     X(BsFill,      "Fill Active",       K_SEQ,    false) \
-    X(ReesePhase,  "Reese Phase",       K_LFO,    false)
+    X(ReesePhase,  "Reese Phase",       K_LFO,    false) \
+    X(BreakHit,    "Break Hit",         K_ENV,    false) \
+    X(BreakHitType,"Break Hit Type",    K_SEQ,    false)
 
 enum ModSource
 {

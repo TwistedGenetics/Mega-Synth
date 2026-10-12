@@ -54,7 +54,7 @@ void Segmented::paint (juce::Graphics& g)
         }
         g.setColour (on ? juce::Colours::white : (allowed ? col::text : col::muted.withAlpha (0.35f)));
         g.setFont (juce::Font (juce::FontOptions (12.5f, on ? juce::Font::bold : juce::Font::plain)));
-        g.drawText (labels[i], r, juce::Justification::centred);
+        g.drawFittedText (labels[i], r.toNearestInt(), juce::Justification::centred, 1, 0.72f);   // (squeezed a little rather than cut short)
     }
 }
 

@@ -150,6 +150,10 @@ inline const char* const kRsBeatLabels[] = { "4 bars","2 bars","1 bar","1/2","1/
 inline constexpr double kRsBeatBeats[]   = { 16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 3.0, 1.5, 0.75, 4.0 / 3.0, 2.0 / 3.0, 1.0 / 3.0 };
 inline const char* const kRsRatioKeys[]   = { "x3","x5","golden" };
 inline const char* const kRsRatioLabels[] = { "x3 (locked)","x5 (locked)","Golden (free)" };
+inline const char* const kRxListenKeys[]   = { "all","kicks","snares","hats" };
+inline const char* const kRxListenLabels[] = { "All hits","Kicks","Snares","Hats" };
+inline const char* const kRxBreakKeys[]    = { "any","b1","b2","b3" };
+inline const char* const kRxBreakLabels[]  = { "Any break","Break 1","Break 2","Break 3" };
 inline const char* const kRsRetrigKeys[]   = { "free","reset","random" };
 inline const char* const kRsRetrigLabels[] = { "Free","Reset","Random" };
 inline const char* const kMfModelKeys[]   = { "clean","lp","sallenkey","ladder","steiner","svf","ota","polivoks","swcap","acid","ms20","oberheim","sem","tb303","moogfat","arpodyssey","cs15","sh2" };
@@ -386,6 +390,8 @@ inline const ChoiceList kListRsMode     = TG_LIST(kRsMode);
 inline const ChoiceList kListRsBeat     = TG_LIST(kRsBeat);
 inline const ChoiceList kListRsRatio    = TG_LIST(kRsRatio);
 inline const ChoiceList kListRsRetrig   = TG_LIST(kRsRetrig);
+inline const ChoiceList kListRxListen   = TG_LIST(kRxListen);
+inline const ChoiceList kListRxBreak    = TG_LIST(kRxBreak);
 inline const ChoiceList kListPfAkaiMode = TG_LIST(kPfAkaiMode);
 inline const ChoiceList kListPfAkaiSpeed = TG_LIST(kPfAkaiSpeed);
 inline const ChoiceList kListPfAkaiSync = TG_LIST(kPfAkaiSync);
@@ -1187,7 +1193,30 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(rsTone,      "Reese Tone", 0, 1, 1, 0.01, 0) \
     F(mxReesePan,  "Reese Pan", -1, 1, 0, 0.01, 0) \
     B(mxReeseMute, "Reese Mute", false) \
-    B(mxReeseSolo, "Reese Solo", false)
+    B(mxReeseSolo, "Reese Solo", false) \
+    B(rxOn,        "Break React On", false) \
+    C(rxListen,    "Break React Listen", kListRxListen, 1) \
+    C(rxBreak,     "Break React Break", kListRxBreak, 0) \
+    F(rxSens,      "Break React Sensitivity", 0, 1, 0.5, 0.01, 0) \
+    B(rxFromBreaks,"Break React From Breaks", true) \
+    B(rxFromNote,  "Break React From Note", false) \
+    F(rxNote,      "Break React Trigger Note", 0, 127, 24, 1, 0) \
+    B(rxFromSc,    "Break React From Sidechain", false) \
+    F(rxScSens,    "Break React Sidechain Sens", 0, 1, 0.5, 0.01, 0) \
+    B(rxReset,     "Break React Phase Reset", true) \
+    F(rxPitch,     "Break React Pitch Kick", -24, 24, 0, 0.1, 0) \
+    F(rxDrive,     "Break React Drive Kick", 0, 1, 0, 0.01, 0) \
+    F(rxDuck,      "Break React Level Duck", 0, 1, 0, 0.01, 0) \
+    F(rxNotch,     "Break React Notch Jump", 0, 1, 0, 0.01, 0) \
+    F(rxAttack,    "Break React Attack", 0, 100, 0.5, 0.1, 10) \
+    F(rxDecay,     "Break React Decay", 5, 2000, 120, 1, -1) \
+    F(rxOffset,    "Break React Offset", -10, 30, 0, 0.1, 0) \
+    F(rxHuman,     "Break React Humanise", 0, 10, 0, 0.1, 0) \
+    B(rxOsc1,      "Break React Osc 1", true) \
+    B(rxOsc2,      "Break React Osc 2", true) \
+    B(rxOsc3,      "Break React Osc 3", true) \
+    B(rxSub,       "Break React Sub", true) \
+    B(rxReese,     "Break React Reese", true)
 
 enum ParamIndex
 {

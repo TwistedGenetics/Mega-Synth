@@ -56,6 +56,7 @@ namespace
         if (id.startsWith ("wm")) return "Wave Mutation";
         if (id.startsWith ("dna")) return "DNA Splice";
         if (id.startsWith ("rs")) return "Reese";
+        if (id.startsWith ("rx")) return "Break React";
         if (id.startsWith ("res")) return "Resonator";
         if (id.startsWith ("gr")) return "Granular";
         if (id.startsWith ("sp")) return "Spectral";
@@ -195,6 +196,7 @@ namespace
             if (id.startsWith ("pf")) { m.category = Category::Fx; m.group = MutGroup::None; }   // Performance FX: played, not mutated
             if (id.startsWith ("gs")) { m.category = Category::Osc; m.group = MutGroup::None; }
             if (id.startsWith ("rs")) { m.category = Category::Osc; m.group = MutGroup::None; }   // the Reese engine: not mutated (old patches mutate as before)
+            if (id.startsWith ("rx")) { m.category = Category::Osc; m.group = MutGroup::None; }   // Break-Reactive mode: not mutated
             if (id.startsWith ("bc")) { m.category = Category::Fx; m.group = MutGroup::None; }    // Break Chopper: on the bus, before the effects
             if (id.startsWith ("bs")) { m.category = Category::Seq; m.group = MutGroup::None; }
             if (id == "subRoute" || id == "subMono") { m.category = Category::Mixer; m.group = MutGroup::None; }   // routing: chosen, not mutated  // Granular Synth: per voice; not mutated (old patches mutate as before)
@@ -204,6 +206,7 @@ namespace
             if (id.startsWith ("bc") || id.startsWith ("bs")) m.unit = id == "bcChopLatency" ? "ms" : id.startsWith ("bcTempo") ? "BPM" : id == "bcCycle" ? "ms" : id == "bcPitch" ? "st" : (id == "bcKeyBase" || id == "bsFillKey") ? "note" : juce::String();
             if (id.startsWith ("pf")) m.unit = id == "pfCrushRate" ? "Hz" : id == "pfPitchGlide" ? "s" : (id == "pfPitchAmt" || id == "pfAkaiPitch") ? "st" : id == "pfTapeTime" ? "beats" : id == "pfAkaiCycle" ? "ms" : juce::String();
             if (id.startsWith ("rs")) m.unit = id == "rsCents" ? "cents" : (id == "rsHz" || id.endsWith ("Rate") || id == "rsMonoBelow" || id == "rsNotchFreq") ? "Hz" : id == "rsOct" ? "oct" : id == "rsSemi" ? "st" : juce::String();
+            if (id.startsWith ("rx")) m.unit = (id == "rxAttack" || id == "rxDecay" || id == "rxOffset" || id == "rxHuman") ? "ms" : id == "rxPitch" ? "st" : id == "rxNote" ? "note" : juce::String();
             if (id == "mfCutoff") m.unit = "Hz";
             if (id == "mfDrive" || id == "outGain") m.unit = "dB";
             m.path = juce::String (categoryName (m.category)).toLowerCase() + "." + id;
@@ -212,7 +215,7 @@ namespace
             const bool admin = isAny (id, { "polyphony", "keyboardOctave", "bendRange", "seqLength", "seqEuclidPulses",
                                             "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum", "mutSeed", "dsSteps",
                                             "chdSpread", "chdInversion", "arpOctaves", "arpVelFixed", "arpRepeats", "arpSteps",
-                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot", "bcKeyBase", "bcTempo", "bcTempo2", "bcTempo3", "bcChopLatency", "bsFillKey", "bsVarAmount", "bsAutoFillProb", "rsOct", "rsSemi" });
+                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot", "bcKeyBase", "bcTempo", "bcTempo2", "bcTempo3", "bcChopLatency", "bsFillKey", "bsVarAmount", "bsAutoFillProb", "rsOct", "rsSemi", "rxNote" });
             m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin
                             && ! isAny (id, { "pfX1", "pfY1", "pfX2", "pfY2" });   // the XY pads are sources, not destinations
             float adScale;

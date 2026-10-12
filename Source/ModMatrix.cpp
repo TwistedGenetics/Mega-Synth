@@ -135,7 +135,8 @@ const NormTable& normTable()
                           || m.module == "Master Filter" || i == P_outGain   // bus stages
                          || m.id.startsWith ("ds")    // the DNA Sequencer runs once for all voices
                          || m.id.startsWith ("arp")   // ... and so does the arpeggiator
-                         || m.id.startsWith ("bs");   // ... and the Break Sequencer
+                         || m.id.startsWith ("bs")    // ... and the Break Sequencer
+                         || m.id == "rxSens" || m.id == "rxScSens" || m.id == "rxAttack" || m.id == "rxDecay" || m.id == "rxOffset" || m.id == "rxHuman";   // ... and Break-Reactive mode's listening and shape (the amounts are per voice)
             t.envTime[i] = m.category == Category::Env && m.unit == "s";
             t.modulatable[i] = m.modulatable;
             t.audioRate[i] = m.audioRate;

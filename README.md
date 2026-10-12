@@ -187,6 +187,21 @@ A second oscillator built for jungle and drum & bass basses: 2, 3 or 4 detuned v
 - **Measured** (our build machine, 48 kHz): the beating period within 0.04% of the note value across 90/140/172/174 BPM and C1-C5 (1% allowed); at C7 on High, aliasing at -114 dB without the drive, -64 dB (2 saws, drive 60%) and -70 dB (2 squares, drive 100%); with full drive on Normal it's about -48 dB and on Eco about -25 dB. Mono Below 120 Hz takes the side signal under 70 Hz from -5 dB to -34 dB. The sub stays locked to voice 1 (no measurable drift over 18 s).
 - **CPU** (8 notes held): about 3-6% of one core for the Reese on top of Init at 2-4 voices; with the Drive at 4 voices, about 5% on Eco, 9% on Normal and 15% on High. The numbers vary a few percent from run to run.
 
+## Break React (Oscillators > Break React)
+
+Break-Reactive mode: the synth listens to the breaks and reacts on the hits you choose, so a bass locks to the drums. It's **off by default**; off, the sound is bit-for-bit what it was, and older patches and projects load with it off.
+
+- **Listen to** All hits, Kicks, Snares or Hats, **From** any break or one of the three. A slice counts as a kick, snare or hat from the Break Chopper's analysis of its first few milliseconds (a rough guess, not a drum detector); **Sensitivity** lets in weaker ones (ghost notes).
+- **Triggers:** **Breaks** (every slice played by the Break Sequencer, the slice keys or a fill), a **Note** of your own (Key; it isn't played, so a MIDI clip can fire the reactions anywhere), and the host's **Sidechain** (drum hits found in the sidechain input, with SC Sens). With the sidechain, listening for kicks, snares or hats needs 5 ms to tell them apart, so those hits land 5 ms after the transient; listening to all hits, they land on it.
+- **Actions:**
+  - **Phase Reset:** the ticked oscillators start their cycle again exactly on the hit (the old phase fades out over 1.5 ms so it doesn't click). For the Reese, its beating starts again too (Reese Phase goes back to 0).
+  - **Pitch Kick** (±24 st), **Drive Kick** (a burst of saturation), **Level Duck** (smoothed over about 1 ms) and **Notch Jump** (the Reese's notch leaps up, two octaves at 100%, and slides back).
+- **Oscillators:** Osc 1, Osc 2, Osc 3, Sub and Reese each have a tick box. Unticked ones don't react at all. The wavetables, Complex, SuperSaw and Granular Synth don't react.
+- **Shape & Timing:** **Attack**, then **Decay** (down to 1% over that time) shapes the kicks and the **Break Hit** source. **Offset** (-10 to +30 ms) moves the reaction later, or earlier. Earlier works by playing the breaks that much later, because the synth can't know a hit is coming; the page says when that's happening. **Humanise** moves each hit a random few ms: either way for the breaks, only later for a note or the sidechain.
+- **Mod Matrix:** two new sources, **Break Hit** (the attack/decay envelope, 0 to 1) and **Break Hit Type** (the last hit: 0 kick, 0.5 snare, 1 hat). Drag them from the chips in the title. The amounts are per voice, so they can be modulated; Sensitivity, the shape and the timing follow the global sources, like the arpeggiator's settings.
+- **Measured:** the reaction lands on the slice's first sample, from the slice keys and from the Break Sequencer (0 samples apart); Offset +10 ms is 480 samples later at 48 kHz and -5 ms plays the break 240 samples late. After a MIDI trigger, the oscillator's phase is within 0.005 samples of a note started on that sample. The reset's largest step is about the same as the sine's own steepest step, so no click; the duck's is smaller.
+- **CPU:** small. With 8 notes and a reaction on every 16th at 172 BPM it measured 1-3% of a core more, within run-to-run noise.
+
 ## Granular Synth (Oscillators > Granular Synth)
 
 A playable granular oscillator. Each note plays its own cloud of grains from a sample you load. It's separate from the **Granular** bus stage (FX & Mutation > Bus Mutation), which grains the whole mix.

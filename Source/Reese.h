@@ -56,7 +56,7 @@ public:
         for (auto& s : notchSt) s = {};
         toneLp[0] = toneLp[1] = 0.0f;
         notchCount = 0;
-        for (auto& x : upA) x.clear(); for (auto& x : upB) x.clear(); for (auto& x : dnA) x.clear(); for (auto& x : dnB) x.clear(); adaPrev[0] = adaPrev[1] = 0.0f; adaF[0] = adaF[1] = 1.0f; driveLatched = false; panCount = 0;
+        for (auto& x : upA) x.clear(); for (auto& x : upB) x.clear(); for (auto& x : dnA) x.clear(); for (auto& x : dnB) x.clear(); adaPrev[0] = adaPrev[1] = 0.0f; adaF[0] = adaF[1] = 1.0f; driveLatched = false; xfN = 0; pitchMul = 1.0; notchJump = 0.0f; panCount = 0;
     }
 
     // the voices' frequencies for this block: f = the note, tempo in BPM
@@ -147,7 +147,7 @@ public:
             if ((notchCount++ & 15) == 0)
             {
                 const double mp = st.notchSync ? beatPh : notchPh;
-                const double fc = std::clamp ((double) st.notchFreq * std::pow (2.0, 2.0 * st.notchMove * std::sin (2.0 * kPi * mp)), 30.0, sr * 0.45);
+                const double fc = std::clamp ((double) st.notchFreq * std::pow (2.0, 2.0 * st.notchMove * std::sin (2.0 * kPi * mp) + (double) notchJump), 30.0, sr * 0.45);
                 notchG = (float) std::tan (kPi * fc * isr);
             }
             const float k = 0.8f;   // (fairly wide)
@@ -187,6 +187,17 @@ public:
         outL = l; outR = r;
     }
 
+    // ---- Break-Reactive mode
+    // every voice (and the sub) back to the start of its cycle now, the old phases faded out over xfade samples
+    void resetPhases (int xfade)
+    {
+        std::copy (std::begin (ph), std::end (ph), std::begin (oldPh)); oldAcc = acc0;
+        for (auto& p : ph) p = 0.0;
+        acc0 = 0.0; beatPh = 0.0;
+        xfLen = std::max (1, xfade); xfN = xfLen;
+    }
+    void setPitchMul (double m) { pitchMul = m; }          // a pitch kick (1 = none)
+    void setNotchJump (float octaves) { notchJump = octaves; }   // the notch moved up (read every 16 samples)
     double beatPhase() const { return beatPh; }     // where the beat cycle is (0..1): the "Reese Phase" Mod Matrix source
     double beatRate() const { return beatHz; }      // the beating between voices 1 and 2, in Hz
     double voiceFrequency (int k) const { return freq[std::clamp (k, 0, 3)]; }
@@ -196,15 +207,28 @@ private:
     // the voices (and the sub) for one sample at the rate sr / step
     inline void voicesAndSub (float& outL, float& outR, float tw, float tw2, double step)
     {
+        sumVoices (ph, acc0, outL, outR, tw, tw2, step);
+        if (xfN > 0)
+        {
+            // just after a phase reset (Break-Reactive mode): the old phases fade out over a moment, so it doesn't click
+            float a, b; sumVoices (oldPh, oldAcc, a, b, tw, tw2, step);
+            const float w = (float) xfN / (float) xfLen;
+            outL += (a - outL) * w; outR += (b - outR) * w;
+            --xfN;
+        }
+    }
+    inline void sumVoices (double* phs, double& acc, float& outL, float& outR, float tw, float tw2, double step)
+    {
         const WaveBank& bank = WaveBank::get();
         const float twistAmt = 0.25f * std::clamp (st.twist, 0.0f, 1.0f);
         float l = 0.0f, r = 0.0f;
         for (int k = 0; k < n; ++k)
         {
-            const float fos = (float) (freq[k] * isr);   // (the table for the real rate: nothing above its Nyquist)
+            const double f = freq[k] * pitchMul;
+            const float fos = (float) (f * isr);   // (the table for the real rate: nothing above its Nyquist)
             // phase twist: voices pushed in alternate directions (k even: sine, odd: cosine)
             const float off = twistAmt * ((k & 1) ? tw2 : tw) * (k < 2 ? 1.0f : -1.0f);
-            double p = ph[k] + off; p -= std::floor (p);
+            double p = phs[k] + off; p -= std::floor (p);
             float x;
             switch (st.wave)
             {
@@ -213,13 +237,17 @@ private:
                 default: x = bank.sample (W_SAW, p, fos); break;
             }
             l += x * gL[k]; r += x * gR[k];
-            ph[k] += freq[k] * isr * step; if (ph[k] >= 1.0) ph[k] -= std::floor (ph[k]);
+            phs[k] += f * isr * step; if (phs[k] >= 1.0) phs[k] -= std::floor (phs[k]);
         }
         // the sub: a sine an octave down, locked to voice 1 (its phase runs over two of voice 1's cycles)
-        acc0 += freq[0] * isr * step; if (acc0 >= 2.0) acc0 -= 2.0;
-        if (st.sub > 0.0f) { const float sb = st.sub * 0.8f * (float) std::sin (kPi * acc0); l += sb; r += sb; }
+        acc += freq[0] * pitchMul * isr * step; if (acc >= 2.0) acc -= 2.0;
+        if (st.sub > 0.0f) { const float sb = st.sub * 0.8f * (float) std::sin (kPi * acc); l += sb; r += sb; }
         outL = l; outR = r;
     }
+    double oldPh[4] {}, oldAcc = 0.0;
+    int xfN = 0, xfLen = 1;
+    double pitchMul = 1.0;
+    float notchJump = 0.0f;
     // the drive's curve: k x / sqrt (1 + (k x)^2), a smooth saturation like tanh whose antiderivative
     // (sqrt (1 + (k x)^2) / k) is cheap; anti-aliased: the mean of the curve between this sample and the last
     inline float shape (float x) const { const float z = driveK * x; return z / std::sqrt (1.0f + z * z) * driveN; }

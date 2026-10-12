@@ -2364,6 +2364,14 @@ int main()
                 juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
             }
         }
+        {
+            // Break React on, listening to snares, with a negative Offset (the line under it explains)
+            setP (*p, P_rxOn, 1.0f); setP (*p, P_rxListen, 2.0f); setP (*p, P_rxPitch, 5.0f); setP (*p, P_rxDuck, 0.3f); setP (*p, P_rxOffset, -4.0f);
+            e->showPage ("Break React"); e->timerCallbackForTests();
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto f = dir.getChildFile ("page_BreakReact_on.png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        }
         return 0;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_UICONTROLS", {}).isNotEmpty())
@@ -5723,6 +5731,369 @@ int main()
             auto r = make(); CHECK (r->importBrowserPatch (patch).isEmpty() && std::abs (plainOf (*r, P_rsLevel) - 0.6f) < 1e-4f, "Reese settings in patch files");
         }
     };
+    // ---- Break-Reactive mode
+    auto reactTests = [&]
+    {
+        std::cout << "Break-Reactive mode" << std::endl;
+        auto plainOf = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+        // a clean synth: Osc 1 alone (a sine unless asked), filter open, no effects, flat amp envelope
+        auto clean = [&] (int wave = 3)
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain, P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain })
+                setP (*p, i, 0.0f);
+            setP (*p, P_osc1Gain, 0.8f); setP (*p, P_osc1Wave, (float) wave);
+            setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_lfoAssignAmt0, 0.0f); setP (*p, P_envAssignAmt0, 0.0f); setP (*p, P_ampA, 0.001f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.01f);
+            return p;
+        };
+        auto reactOn = [&] (MegaSynthProcessor& p) { setP (p, P_rxOn, 1.0f); setP (p, P_rxFromNote, 1.0f); setP (p, P_rxNote, 24.0f); setP (p, P_rxFromBreaks, 0.0f); };
+        auto on = [] (double t, int n) { return std::pair<double, juce::MidiMessage> { t, juce::MidiMessage::noteOn (1, n, (juce::uint8) 100) }; };
+        auto off = [] (double t, int n) { return std::pair<double, juce::MidiMessage> { t, juce::MidiMessage::noteOff (1, n) }; };
+        const int T = (int) (0.5 * sr) + 37;          // the trigger: on no block boundary
+        const double tT = (T + 0.25) / sr;            // (as a time that lands on that sample)
+        auto maxDiff = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, int from, int to)
+        {
+            double d = 0; for (int c = 0; c < 2; ++c) for (int i = from; i < to; ++i) d = std::max (d, (double) std::abs (a.getSample (c, i) - b.getSample (c, i))); return d;
+        };
+        auto firstDiff = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, int from)
+        {
+            for (int i = from; i < a.getNumSamples(); ++i) if (std::abs (a.getSample (0, i) - b.getSample (0, i)) > 1.0e-7f) return i;
+            return -1;
+        };
+        // 1. the MIDI trigger: the phase is reset on that exact sample (after it, the same as a note started there)
+        {
+            juce::AudioBuffer<float> a, b, c;
+            { auto p = clean(); reactOn (*p); tg::resetVoiceRandom(); render (*p, 0.7, { on (0.0, 57), on (tT, 24), off (tT + 0.01, 24) }, &a); }
+            { auto p = clean(); reactOn (*p); tg::resetVoiceRandom(); render (*p, 0.7, { on (0.0131, 57), on (tT, 24), off (tT + 0.01, 24) }, &b); }
+            { auto p = clean(); tg::resetVoiceRandom(); render (*p, 0.7, { on (tT, 57) }, &c); }
+            juce::AudioBuffer<float> d;
+            { auto p = clean(); reactOn (*p); tg::resetVoiceRandom(); render (*p, 0.7, { on (0.0, 57) }, &d); }
+            // the fundamental's phase after the reset, against a note started on the hit (and one started 13 ms later)
+            auto phaseOf = [&] (const juce::AudioBuffer<float>& x) { std::complex<double> acc {}; for (int i = T + 1000; i < T + 5800; ++i) acc += (double) x.getSample (0, i) * std::polar (1.0, -2.0 * kPi * 220.0 * i / sr); return std::arg (acc); };
+            auto apart = [&] (const juce::AudioBuffer<float>& x, const juce::AudioBuffer<float>& y)
+            { double dp = phaseOf (x) - phaseOf (y); while (dp > kPi) dp -= 2 * kPi; while (dp < -kPi) dp += 2 * kPi; return dp / (2 * kPi * 220.0) * sr; };
+            const double ac = apart (a, c), ab = apart (a, b);
+            std::cout << "  MIDI trigger: after the reset the phase is " << juce::String (ac, 3) << " samples from a note started on the hit ("
+                      << juce::String (ab, 3) << " for a note held from a different time)" << std::endl;
+            CHECK (std::abs (ac) < 1.0 && std::abs (ab) < 1.0, "phase reset on the trigger's own sample (within 1 sample)");
+            const int fd = firstDiff (a, d, T - 2000);
+            CHECK (fd >= T && fd <= T + 2, "nothing changes before the hit");
+            // declicked: around the reset no step bigger than the sine's own (allowing the fade)
+            float natural = 0; for (int i = T - 3000; i < T - 100; ++i) natural = std::max (natural, std::abs (a.getSample (0, i + 1) - a.getSample (0, i)));
+            float around = 0; for (int i = T - 2; i < T + 200; ++i) around = std::max (around, std::abs (a.getSample (0, i + 1) - a.getSample (0, i)));
+            std::cout << "  the reset's largest step " << around << " (the sine's own " << natural << ")" << std::endl;
+            CHECK (around < natural * 2.5f, "the phase reset is declicked");
+        }
+        // 2. the slice keys and the Break Sequencer: the reaction on the slice's first sample; Offset; negative Offset
+        auto breakPatch = [&] (bool rx, float offsetMs)
+        {
+            auto p = clean(); setP (*p, P_bcOn, 1.0f); setP (*p, P_bcSliceMode, 3.0f);
+            p->loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, 0), 44100.0), "demo.wav", MegaSynthProcessor::kSlotBreak);
+            if (rx) { setP (*p, P_rxOn, 1.0f); setP (*p, P_rxListen, 0.0f); setP (*p, P_rxOffset, offsetMs); }
+            return p;
+        };
+        for (float offsetMs : { 0.0f, 10.0f, -5.0f })
+        {
+            // A: the synth with the break muted (reacting); C: the same not reacting; B: the break alone
+            juce::AudioBuffer<float> a, b, c;
+            const int key = 36 + 4;   // (a slice key)
+            { auto p = breakPatch (true, offsetMs); setP (*p, P_mxBreakMute, 1.0f); tg::resetVoiceRandom(); render (*p, 0.8, { on (0.0, 69), on (tT, key), off (tT + 0.05, key) }, &a); }
+            { auto p = breakPatch (false, 0.0f); setP (*p, P_mxBreakMute, 1.0f); tg::resetVoiceRandom(); render (*p, 0.8, { on (0.0, 69), on (tT, key), off (tT + 0.05, key) }, &c); }
+            { auto p = breakPatch (true, offsetMs); setP (*p, P_osc1Gain, 0.0f); tg::resetVoiceRandom(); render (*p, 0.8, { on (tT, key), off (tT + 0.05, key) }, &b); }
+            const int H = firstDiff (a, c, 1000) - 1;   // (the reset's first sample is still all old phase; it shows from the next)
+            int onset = -1; for (int i = 1000; i < b.getNumSamples(); ++i) if (std::abs (b.getSample (0, i)) > 1.0e-7f) { onset = i; break; }
+            const int want = (int) std::lround (offsetMs * 0.001 * sr);
+            std::cout << "  slice key, Offset " << offsetMs << " ms: the slice starts at " << onset << ", the reset at " << H << " (" << (H - onset) << " samples, want " << want << ")" << std::endl;
+            CHECK (H > 0 && onset > 0 && std::abs ((H - onset) - want) <= 1, "slice keys: the reaction within 1 sample of the hit (+ Offset " + juce::String (offsetMs) + " ms)");
+            if (offsetMs == 0.0f) CHECK (std::abs (onset - T) <= 1, "Offset 0: the break plays on time");
+            if (offsetMs < 0.0f) CHECK (std::abs (onset - T - 240) <= 1 && std::abs (H - T) <= 1, "negative Offset: the breaks play 5 ms late, the synth on the hit");
+        }
+        {
+            // the Break Sequencer, started by the host on a known sample (its first step on that sample)
+            struct Head : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+            auto runSeq = [&] (MegaSynthProcessor& p, juce::AudioBuffer<float>& out, int startAt, bool noteOn)
+            {
+                Head head; p.setPlayHead (&head);
+                const int total = (int) (1.2 * sr);
+                out.setSize (2, total); juce::AudioBuffer<float> buf (2, 256);
+                const double inc = 172.0 / 60.0 / sr; double ppq = 0.0;
+                for (int pos = 0; pos < total; pos += 256)
+                {
+                    const bool playing = pos >= startAt;
+                    head.info.setIsPlaying (playing); head.info.setBpm (172.0); head.info.setPpqPosition (ppq); head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+                    juce::MidiBuffer m; if (pos == 0 && noteOn) m.addEvent (juce::MidiMessage::noteOn (1, 69, (juce::uint8) 100), 0);
+                    buf.clear(); p.processBlock (buf, m);
+                    for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, pos, buf, ch, 0, 256);
+                    if (playing) ppq += 256 * inc;
+                }
+                p.setPlayHead (nullptr);
+            };
+            const int startAt = 256 * 90;
+            juce::AudioBuffer<float> a, b, c;
+            auto seqOn = [] (MegaSynthProcessor& p) { setP (p, P_bsOn, 1.0f); p.breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::original (d, 0, 16); }); };
+            { auto p = breakPatch (true, 0.0f); seqOn (*p); setP (*p, P_mxBreakMute, 1.0f); tg::resetVoiceRandom(); runSeq (*p, a, startAt, true); }
+            { auto p = breakPatch (false, 0.0f); seqOn (*p); setP (*p, P_mxBreakMute, 1.0f); tg::resetVoiceRandom(); runSeq (*p, c, startAt, true); }
+            { auto p = breakPatch (false, 0.0f); seqOn (*p); setP (*p, P_osc1Gain, 0.0f); tg::resetVoiceRandom(); runSeq (*p, b, startAt, false); }
+            const int H = firstDiff (a, c, 1000) - 1;
+            int onset = -1; for (int i = 1000; i < b.getNumSamples(); ++i) if (std::abs (b.getSample (0, i)) > 1.0e-7f) { onset = i; break; }
+            std::cout << "  Break Sequencer: first step at " << onset << ", the reset at " << H << std::endl;
+            CHECK (H > 0 && std::abs (H - onset) <= 1 && std::abs (onset - startAt) <= 1, "Break Sequencer: the reaction within 1 sample of the hit");
+        }
+        // 3. which hits: all / kicks / snares / hats, a chosen break, from the Break Sequencer playing the demo break
+        {
+            auto count = [&] (int listen, int brk, float sens = 0.5f)
+            {
+                auto p = breakPatch (true, 0.0f); setP (*p, P_bsOn, 1.0f); setP (*p, P_rxListen, (float) listen); setP (*p, P_rxBreak, (float) brk); setP (*p, P_rxSens, sens);
+                p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::original (d, 0, 32); });
+                const int before = p->getEngine().rxHitsShown.load();
+                render (*p, 60.0 / 170.0 * 8.0, chord (0.0, 2.8, { 57 }));
+                return p->getEngine().rxHitsShown.load() - before;
+            };
+            const int all = count (0, 0), kicks = count (1, 0), snares = count (2, 0), hats = count (3, 0), b2 = count (0, 2), loose = count (1, 0, 1.0f), strict = count (1, 0, 0.0f);
+            std::cout << "  two bars of the demo break: " << all << " hits, " << kicks << " kicks, " << snares << " snares, " << hats << " hats; Break 2 only: " << b2
+                      << "; kicks at sensitivity 100% / 0%: " << loose << " / " << strict << std::endl;
+            CHECK (all >= 8 && kicks > 0 && snares > 0 && kicks + snares + hats <= all && kicks < all && b2 == 0 && loose >= kicks && strict <= kicks,
+                   "listening for kicks, snares, hats or all hits, from the chosen break");
+        }
+        // 4. the MIDI note and the sidechain
+        {
+            auto p = clean(); reactOn (*p);
+            render (*p, 1.0, { on (0.0, 57), on (0.2, 24), off (0.25, 24), on (0.5, 24), off (0.55, 24), on (0.7, 24) });
+            CHECK (p->getEngine().rxHitsShown.load() == 3, "the trigger note: one hit per press (" + juce::String (p->getEngine().rxHitsShown.load()) + ")");
+            juce::AudioBuffer<float> c; auto q = clean(); reactOn (*q); render (*q, 0.3, { on (0.0, 57), on (0.1, 24) }, &c);
+            CHECK (c.getMagnitude (0, 0, c.getNumSamples()) > 0.1f, "the trigger note isn't played, the synth is");
+        }
+        {
+            auto makeSc = [&]
+            {
+                auto p = std::make_unique<MegaSynthProcessor>();
+                juce::AudioProcessor::BusesLayout l; l.outputBuses.add (juce::AudioChannelSet::stereo()); l.inputBuses.add (juce::AudioChannelSet::stereo());
+                p->setBusesLayout (l); p->setRateAndBufferSizeDetails (sr, 512); p->prepareToPlay (sr, 512);
+                return p;
+            };
+            auto kicksSig = [&] (int i) { const int per = (int) (0.37 * sr), k = i % per; return k < 2400 ? 0.9f * std::exp (-k / 600.0f) * (float) std::sin (k * 0.012) : 0.0f; };
+            auto hatsSig = [&] (int i) { const int per = (int) (0.25 * sr), k = i % per; static uint32_t r = 1; static float prev = 0.0f; r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+                                         const float nz = (float) (r & 0xffff) / 32768.0f - 1.0f, hp = nz - prev; prev = nz;   // (bright noise: mostly above 5 kHz)
+                                         return k < 1500 ? 0.4f * std::exp (-k / 200.0f) * hp : 0.0f; };
+            auto run = [&] (std::function<float (int)> sig, int listen)
+            {
+                auto p = makeSc(); setP (*p, P_rxOn, 1.0f); setP (*p, P_rxFromSc, 1.0f); setP (*p, P_rxFromBreaks, 0.0f); setP (*p, P_rxListen, (float) listen);
+                juce::AudioBuffer<float> buf (2, 512);
+                for (int pos = 0; pos < (int) (2.0 * sr); pos += 512)
+                {
+                    for (int i = 0; i < 512; ++i) { const float x = sig (pos + i); buf.setSample (0, i, x); buf.setSample (1, i, x); }
+                    juce::MidiBuffer midi; if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100), 0);
+                    p->processBlock (buf, midi);
+                }
+                return p->getEngine().rxHitsShown.load();
+            };
+            const int kAll = run (kicksSig, 0), kKick = run (kicksSig, 1), kHat = run (kicksSig, 3), hAll = run (hatsSig, 0), hHat = run (hatsSig, 3), hKick = run (hatsSig, 1);
+            std::cout << "  sidechain, 2 s: kick-like hits every 0.37 s (6 due): " << kAll << " (as kicks " << kKick << ", as hats " << kHat << "); hat-like every 0.25 s: "
+                      << hAll << " (as hats " << hHat << ", as kicks " << hKick << ")" << std::endl;
+            CHECK (kAll == 6 && kKick == 6 && kHat == 0 && hAll == 9 && hHat == 9 && hKick == 0, "sidechain transients trigger it, roughly told apart");
+        }
+        // 5. shapes: the envelope (attack, then down to 1% over the Decay), and each action in the synth
+        {
+            tg::BreakReact r; r.prepare (sr, 512);
+            tg::BreakReact::Settings st; st.on = true; st.attackMs = 10.0f; st.decayMs = 100.0f;
+            r.noteHit (st, 1.0f);
+            std::vector<float> env;
+            for (int b = 0; b < 40; ++b) { r.begin (512, st, nullptr, nullptr); for (int i = 0; i < 512; ++i) env.push_back (r.envelope()[i]); }
+            const int pk = (int) (std::max_element (env.begin(), env.end()) - env.begin());
+            const float at50 = env[(size_t) (pk + (int) (0.05 * sr))], at100 = env[(size_t) (pk + (int) (0.1 * sr))];
+            std::cout << "  envelope: peak at " << juce::String (pk / sr * 1000.0, 2) << " ms, " << juce::String (at50, 4) << " 50 ms later, " << juce::String (at100, 4) << " 100 ms later" << std::endl;
+            CHECK (std::abs (pk - 480) <= 2 && std::abs (at50 - 0.1f) < 0.01f && std::abs (at100 - 0.01f) < 0.002f, "the envelope's attack and decay");
+        }
+        auto freqAt = [&] (const juce::AudioBuffer<float>& b, int from, int len)
+        {
+            // the frequency from upward zero crossings (interpolated) over that stretch
+            double first = -1, last = -1; int n = 0;
+            for (int i = from; i < from + len; ++i)
+            {
+                const float x0 = b.getSample (0, i), x1 = b.getSample (0, i + 1);
+                if (x0 < 0.0f && x1 >= 0.0f) { const double t = i + x0 / (x0 - x1); if (first < 0) first = t; else ++n; last = t; }
+            }
+            return n > 0 ? n / ((last - first) / sr) : 0.0;
+        };
+        {
+            juce::AudioBuffer<float> a;
+            auto p = clean(); reactOn (*p); setP (*p, P_rxReset, 0.0f); setP (*p, P_rxPitch, 12.0f); setP (*p, P_rxDecay, 1000.0f);
+            render (*p, 2.4, { on (0.0, 57), on (tT, 24) }, &a);
+            const double f0 = freqAt (a, T - 4800, 4700), f1 = freqAt (a, T + 2, 480), f2 = freqAt (a, T + (int) (1.6 * sr), 4800);
+            std::cout << "  pitch kick +12 st (1 s decay): " << juce::String (f0, 1) << " Hz before, " << juce::String (f1, 1) << " Hz in the first 10 ms, " << juce::String (f2, 1) << " Hz 1.6 s later" << std::endl;
+            CHECK (std::abs (f1 / f0 - 2.0) < 0.1 && std::abs (f2 / f0 - 1.0) < 0.01, "pitch kick: up an octave on the hit, back over the decay");
+        }
+        {
+            juce::AudioBuffer<float> a;
+            auto p = clean(); reactOn (*p); setP (*p, P_rxReset, 0.0f); setP (*p, P_rxDuck, 1.0f); setP (*p, P_rxAttack, 0.0f); setP (*p, P_rxDecay, 100.0f);
+            render (*p, 1.0, { on (0.0, 57), on (tT, 24) }, &a);
+            const float before = a.getRMSLevel (0, T - 4800, 4800), dip = a.getRMSLevel (0, T + 48, 240), after = a.getRMSLevel (0, T + (int) (0.25 * sr), 4800);
+            float natural = 0; for (int i = T - 3000; i < T - 100; ++i) natural = std::max (natural, std::abs (a.getSample (0, i + 1) - a.getSample (0, i)));
+            float around = 0; for (int i = T - 2; i < T + 400; ++i) around = std::max (around, std::abs (a.getSample (0, i + 1) - a.getSample (0, i)));
+            std::cout << "  level duck 100%: " << juce::String (20 * std::log10 (dip / before + 1e-9), 1) << " dB just after, " << juce::String (20 * std::log10 (after / before + 1e-9), 2)
+                      << " dB 250 ms later; largest step " << around << " (the sine's own " << natural << ")" << std::endl;
+            CHECK (dip < before * 0.2f && after > before * 0.98f && around < natural * 1.5f, "level duck: a dip on the hit, back over the decay, no click");
+        }
+        {
+            auto thirdHarm = [&] (const juce::AudioBuffer<float>& b, int from, int len)
+            {
+                std::complex<double> h1 {}, h3 {};
+                const double f = 220.0;
+                for (int i = from; i < from + len; ++i)
+                {
+                    const double w = 0.5 - 0.5 * std::cos (2.0 * kPi * (i - from) / len), x = b.getSample (0, i) * w;
+                    h1 += x * std::polar (1.0, -2.0 * kPi * f * i / sr); h3 += x * std::polar (1.0, -2.0 * kPi * 3.0 * f * i / sr);
+                }
+                return 20.0 * std::log10 (std::abs (h3) / std::abs (h1) + 1e-12);
+            };
+            juce::AudioBuffer<float> a;
+            auto p = clean(); reactOn (*p); setP (*p, P_rxReset, 0.0f); setP (*p, P_rxDrive, 1.0f); setP (*p, P_rxDecay, 300.0f); setP (*p, P_osc1Gain, 1.0f);
+            render (*p, 1.0, { on (0.0, 57), on (tT, 24) }, &a);
+            const double before = thirdHarm (a, T - 4800, 4400), during = thirdHarm (a, T + 10, 2400);
+            std::cout << "  drive kick: 3rd harmonic " << juce::String (before, 1) << " dB before, " << juce::String (during, 1) << " dB on the hit" << std::endl;
+            CHECK (during > before + 20.0, "drive kick: saturation on the hit");
+        }
+        {
+            // the Reese's notch jumps on the hit and comes back
+            auto run = [&] (float jump)
+            {
+                juce::AudioBuffer<float> a;
+                auto p = clean(); reactOn (*p); setP (*p, P_rxReset, 0.0f); setP (*p, P_osc1Gain, 0.0f); setP (*p, P_rsLevel, 0.7f); setP (*p, P_rsNotch, 1.0f); setP (*p, P_rsNotchMove, 0.0f);
+                setP (*p, P_rsRetrig, 1.0f); setP (*p, P_rsTwist, 0.0f); setP (*p, P_rxNotch, jump); setP (*p, P_rxDecay, 100.0f);
+                tg::resetVoiceRandom(); render (*p, 1.4, { on (0.0, 45), on (tT, 24) }, &a);
+                return a;
+            };
+            const auto a = run (1.0f), b = run (0.0f);
+            const double during = maxDiff (a, b, T + 100, T + 2400), later = maxDiff (a, b, T + (int) (0.7 * sr), T + (int) (0.8 * sr));
+            std::cout << "  Reese notch jump: changes the sound by " << during << " on the hit, " << later << " 700 ms later" << std::endl;
+            CHECK (during > 0.05 && later < 0.002, "notch jump: the Reese's notch moves on the hit and comes back");
+            // and the Reese's phase reset (Reset: every note's voices start at 0) lands exactly on the hit
+            juce::AudioBuffer<float> x, y;
+            { auto p = clean(); reactOn (*p); setP (*p, P_osc1Gain, 0.0f); setP (*p, P_rsLevel, 0.7f); setP (*p, P_rsRetrig, 1.0f); setP (*p, P_rsTwist, 0.0f); setP (*p, P_rsRotate, 0.0f);
+              setP (*p, P_rsMonoBelow, 0.0f); tg::resetVoiceRandom(); render (*p, 0.8, { on (0.0, 45), on (tT, 24) }, &x); }
+            { auto p = clean(); setP (*p, P_osc1Gain, 0.0f); setP (*p, P_rsLevel, 0.7f); setP (*p, P_rsRetrig, 1.0f); setP (*p, P_rsTwist, 0.0f); setP (*p, P_rsRotate, 0.0f);
+              setP (*p, P_rsMonoBelow, 0.0f); tg::resetVoiceRandom(); render (*p, 0.8, { on (tT, 45) }, &y); }
+            int best = 99; double bestD = 1e9;
+            for (int sh = -4; sh <= 4; ++sh)
+            {
+                double d = 0; for (int i = T + 300; i < T + 5000; ++i) d = std::max (d, (double) std::abs (x.getSample (0, i) - y.getSample (0, i + sh)));
+                if (d < bestD) { bestD = d; best = sh; }
+            }
+            std::cout << "  Reese phase reset vs a note started on the hit: " << bestD << " (alignment " << best << ")" << std::endl;
+            CHECK (best == 0 && bestD < 0.06, "the Reese's phases reset on the hit");
+        }
+        // 6. the oscillator tick boxes: an unticked oscillator doesn't react
+        {
+            juce::AudioBuffer<float> a, c;
+            { auto p = clean(); reactOn (*p); setP (*p, P_rxOsc1, 0.0f); setP (*p, P_rxPitch, 12.0f); setP (*p, P_rxDuck, 1.0f); tg::resetVoiceRandom(); render (*p, 0.8, { on (0.0, 57), on (tT, 24) }, &a); }
+            { auto p = clean(); tg::resetVoiceRandom(); render (*p, 0.8, { on (0.0, 57) }, &c); }
+            CHECK (maxDiff (a, c, 0, a.getNumSamples()) == 0.0, "Osc 1 unticked: untouched");
+        }
+        // 7. Humanise: each hit moved a random few ms; the breaks either way (they play late enough), a note only later
+        {
+            auto spread = [&] (bool fromBreak)
+            {
+                tg::BreakReact r; r.prepare (sr, 512);
+                tg::BreakReact::Settings st; st.on = true; st.listen = 0; st.humanMs = 5.0f;
+                int lo = 1 << 30, hi = -(1 << 30); std::set<int> seen;
+                for (int k = 0; k < 40; ++k)
+                {
+                    const int64_t at = r.now();
+                    if (fromBreak) r.breakHit (st, 0, 1.0f, 0.0f, 0.0f, 1.0f); else r.noteHit (st, 1.0f);
+                    for (int b = 0; b < 2; ++b)
+                    {
+                        const int64_t blockStart = r.now();
+                        r.begin (512, st, nullptr, nullptr);
+                        for (int i = 0; i < 512; ++i) if (r.hits()[i]) { const int d = (int) (blockStart + i - at); lo = std::min (lo, d); hi = std::max (hi, d); seen.insert (d); }
+                    }
+                }
+                std::cout << "  Humanise 5 ms, " << (fromBreak ? "breaks (played 5 ms late)" : "the trigger note") << ": hits " << lo << " to " << hi << " samples after the trigger (" << seen.size() << " different)" << std::endl;
+                return fromBreak ? (lo >= 0 && hi <= 480 && lo < 120 && hi > 360 && seen.size() >= 20) : (lo >= 0 && hi <= 240 && hi > 180 && seen.size() >= 20);
+            };
+            CHECK (spread (true) && spread (false), "Humanise: hits moved randomly within the setting");
+        }
+        // 8. off: bit-exact; on with no hits: unchanged too
+        {
+            juce::AudioBuffer<float> ref, alt, alt2;
+            auto prep = [&] (MegaSynthProcessor& p) { setP (p, P_reverbMix, 0.0f); };
+            { auto p = make(); prep (*p); tg::resetVoiceRandom(); render (*p, 0.8, chord (0.0, 0.6, { 45, 52 }), &ref); }
+            { auto p = make(); prep (*p);
+              for (auto pr : std::initializer_list<std::pair<int, float>> { { P_rxListen, 0 }, { P_rxPitch, 12 }, { P_rxDrive, 1 }, { P_rxDuck, 1 }, { P_rxNotch, 1 }, { P_rxOffset, -10 }, { P_rxFromNote, 1 }, { P_rxNote, 52 } })
+                  setP (*p, pr.first, pr.second);
+              tg::resetVoiceRandom(); render (*p, 0.8, chord (0.0, 0.6, { 45, 52 }), &alt); }
+            CHECK (maxDiff (ref, alt, 0, ref.getNumSamples()) == 0.0, "Break React off: bit-identical, whatever its settings");
+            { auto p = make(); prep (*p); setP (*p, P_rxOn, 1.0f); setP (*p, P_rxPitch, 12.0f); setP (*p, P_rxDuck, 1.0f); tg::resetVoiceRandom(); render (*p, 0.8, chord (0.0, 0.6, { 45, 52 }), &alt2); }
+            CHECK (maxDiff (ref, alt2, 0, ref.getNumSamples()) == 0.0, "Break React on, no hits: unchanged");
+        }
+        // 9. the sources: Break Hit moves a route; Break Hit Type says what the last hit was
+        {
+            juce::AudioBuffer<float> a, c;
+            { auto p = clean(); reactOn (*p); setP (*p, P_rxReset, 0.0f); setP (*p, P_osc1Gain, 0.3f); p->addRoute (MS_BreakHit, P_osc1Gain, 0.7f); setP (*p, P_rxDecay, 200.0f);
+              render (*p, 0.8, { on (0.0, 57), on (tT, 24) }, &a); }
+            { auto p = clean(); setP (*p, P_osc1Gain, 0.3f); render (*p, 0.8, { on (0.0, 57) }, &c); }
+            CHECK (a.getRMSLevel (0, T + 480, 2400) > c.getRMSLevel (0, T + 480, 2400) * 1.8f && std::abs (a.getRMSLevel (0, T - 4000, 3000) - c.getRMSLevel (0, T - 4000, 3000)) < 1e-4f,
+                   "Break Hit as a Mod Matrix source");
+            auto p = breakPatch (true, 0.0f); setP (*p, P_bsOn, 1.0f); setP (*p, P_rxListen, 2.0f);
+            p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::original (d, 0, 32); });
+            render (*p, 1.0, chord (0.0, 1.0, { 57 }));
+            CHECK (p->getEngine().rxHitsShown.load() > 0 && std::abs (p->getEngine().breakReact().hitType() - 0.5f) < 1e-6f, "Break Hit Type: 0.5 after a snare");
+        }
+        // 10. saved: projects, patches; older projects load with it off
+        {
+            auto p = make(); setP (*p, P_rxOn, 1.0f); setP (*p, P_rxListen, 2.0f); setP (*p, P_rxOffset, -4.0f); setP (*p, P_rxOsc2, 0.0f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (plainOf (*q, P_rxOn) > 0.5f && juce::roundToInt (plainOf (*q, P_rxListen)) == 2 && std::abs (plainOf (*q, P_rxOffset) + 4.0f) < 1e-3f && plainOf (*q, P_rxOsc2) < 0.5f,
+                   "Break React settings saved with the project");
+            auto x = juce::parseXML (getXmlFromBinaryForTest (mb));
+            if (x != nullptr)
+            {
+                x->setAttribute ("stateVersion", 24);
+                for (int i = P_rxOn; i <= P_rxReese; ++i) if (auto* el = x->getChildByAttribute ("id", kParamIds[i])) x->removeChildElement (el, true);
+                juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*x, old);
+                auto o = make(); setP (*o, P_rxOn, 1.0f); o->setStateInformation (old.getData(), (int) old.getSize());
+                CHECK (plainOf (*o, P_rxOn) < 0.5f, "older projects load with Break React off");
+            }
+            auto r = make(); CHECK (r->importBrowserPatch (p->exportBrowserPatch()).isEmpty() && plainOf (*r, P_rxOn) > 0.5f && juce::roundToInt (plainOf (*r, P_rxListen)) == 2,
+                                    "Break React settings in patch files");
+            juce::StringArray notMod;
+            for (int i = P_rxOn; i <= P_rxReese; ++i)
+            {
+                const auto& mt = tg::meta (i);
+                if (mt.scale != tg::Scale::Choice && mt.scale != tg::Scale::Toggle && i != P_rxNote && ! mt.modulatable) notMod.add (kParamIds[i]);
+            }
+            CHECK (notMod.isEmpty(), "every continuous Break React control is a Mod Matrix destination" + (notMod.isEmpty() ? juce::String() : ": " + notMod.joinIntoString (", ")));
+        }
+        // 11. CPU: 8 notes, every action, a hit every 16th at 172 BPM (MIDI trigger)
+        {
+            auto cost = [&] (bool rx)
+            {
+                double best = 1e9;
+                for (int run = 0; run < 3; ++run)
+                {
+                    auto q = make(); for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix }) setP (*q, i, 0.0f);
+                    std::vector<std::pair<double, juce::MidiMessage>> ev;
+                    for (int n : { 36, 40, 43, 47, 48, 52, 55, 59 }) ev.push_back (on (0.0, n));
+                    if (rx)
+                    {
+                        reactOn (*q); setP (*q, P_rxPitch, 5.0f); setP (*q, P_rxDrive, 0.5f); setP (*q, P_rxDuck, 0.5f); setP (*q, P_rxNote, 100.0f);
+                        for (double t = 0.0; t < 3.0; t += 60.0 / 172.0 / 4.0) { ev.push_back (on (t, 100)); ev.push_back (off (t + 0.01, 100)); }
+                    }
+                    double cpu = 0; render (*q, 3.0, ev, nullptr, &cpu);
+                    best = std::min (best, cpu / 3.0 * 100.0);
+                }
+                return best;
+            };
+            const double a = cost (false), b = cost (true);
+            std::cout << "  CPU, 8 notes: " << juce::String (a, 2) << "% off, " << juce::String (b, 2) << "% reacting to every 16th (+" << juce::String (b - a, 2) << "% of a core)" << std::endl;
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_REACTONLY", {}).isNotEmpty())
+    {
+        reactTests();
+        std::cout << (failures == 0 ? "REACT TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_REESEONLY", {}).isNotEmpty())
     {
         reeseTests();
@@ -5878,6 +6249,28 @@ int main()
             renderTo (*p, "reese_demo_beats_then_cents_172.wav", ev);
             onBeat = nullptr;
         }
+        // 9. Break-Reactive mode: the same Reese bass over the break, bars 1-4 as it is, bars 5-8 reacting to the
+        //    kicks (phase reset, a +5 st pitch kick, a drive kick, a little duck)
+        {
+            auto p = make(); p->loadFactoryPreset (32);
+            for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_supersawGain, P_complexGain }) setP (*p, i, 0.0f);
+            setP (*p, P_ampA, 0.003f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.06f); setP (*p, P_filterCutoff, 20000.0f);
+            setP (*p, P_bcKeyBase, 96.0f);
+            setP (*p, P_rsLevel, 0.4f); setP (*p, P_rsVoices, 0.0f); setP (*p, P_rsDetMode, 2.0f); setP (*p, P_rsBeat, 3.0f); setP (*p, P_rsOct, -1.0f);
+            setP (*p, P_rsTwist, 0.2f); setP (*p, P_rsNotch, 0.5f); setP (*p, P_rsNotchFreq, 600.0f); setP (*p, P_rsSub, 0.5f); setP (*p, P_rsDrive, 0.3f);
+            setP (*p, P_rsTone, 0.7f); setP (*p, P_rsWidth, 0.6f); setP (*p, P_rsRetrig, 1.0f); setP (*p, P_quality, 2.0f);
+            setP (*p, P_rxListen, 1.0f); setP (*p, P_rxReset, 1.0f); setP (*p, P_rxPitch, 5.0f); setP (*p, P_rxDrive, 0.4f); setP (*p, P_rxDuck, 0.25f);
+            setP (*p, P_rxNotch, 0.5f); setP (*p, P_rxDecay, 90.0f);
+            std::vector<std::pair<int, juce::MidiMessage>> ev;
+            const int notes[] = { 45, 45, 41, 43, 45, 45, 41, 43 };
+            for (int b = 0; b < 8; ++b) { ev.push_back ({ (int) (b * 4.0 / inc), juce::MidiMessage::noteOn (1, notes[b], (juce::uint8) 100) });
+                                          ev.push_back ({ (int) ((b * 4.0 + 3.75) / inc), juce::MidiMessage::noteOff (1, notes[b]) }); }
+            bool switched = false;
+            onBeat = [&] (double beat) { if (! switched && beat >= 16.0 - 0.02) { switched = true; setP (*p, P_rxOn, 1.0f); } };
+            renderTo (*p, "react_demo_off_then_on_172.wav", ev);
+            onBeat = nullptr;
+            std::cout << "  (react demo: " << p->getEngine().rxHitsShown.load() << " kicks reacted to)" << std::endl;
+        }
         // 5. fills: Break Frankenstein's chain with an Auto Fill every 4 bars (one bar long, ending the
         //    phrase), each fill played from Break 3 over the groove, and the pattern back on the downbeat
         {
@@ -5955,11 +6348,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.61.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.62.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.61 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch and the Reese engine added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.62 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine and Break React added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",
@@ -7365,6 +7758,7 @@ int main()
     charTests();
     perfTests();
     reeseTests();
+    reactTests();
     granTests();
     breakTests();
     hardTests();

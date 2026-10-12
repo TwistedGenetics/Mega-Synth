@@ -874,6 +874,8 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         {
             computeSources (s, mc.in, lastDt);
             srcV[MS_DnaSeq] = mc.dnaSeq; srcV[MS_DnaSeq2] = mc.dnaSeq2; srcV[MS_DnaGate] = mc.dnaGate;
+            srcV[MS_BreakHit] = mc.rx != nullptr ? mc.rx->envelope()[done] : 0.0f;
+            srcV[MS_BreakHitType] = mc.rx != nullptr ? mc.rx->hitType() : 0.0f;
             modSnap = s;
             if (mc.morph && mc.scenes != nullptr && mc.routes->anySceneXY)
             {
@@ -1013,6 +1015,26 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         const bool subSplit = subOut[0][0] != nullptr && (subRoute != 0 || subRG[1] > 0.0f || subRG[2] > 0.0f);
         const float subRc = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
         float sdb[2][2][kCtrl];
+        // ---- Break-Reactive mode: which oscillators react, and how much (this voice's own amounts)
+        const BreakReact* rx = mc.rx;
+        bool rxT[5] { false, false, false, false, false };
+        float rxPitchAmt = 0.0f, rxDriveAmt = 0.0f, rxDuckAmt = 0.0f, rxNotchAmt = 0.0f;
+        bool rxResetOn = false;
+        const int rxXfLen = std::max (1, (int) std::lround (0.0015 * sr));   // (a phase reset fades the old phase out over 1.5 ms)
+        const float rxDuckC = 1.0f - std::exp (-1.0f / (0.001f * (float) sr));
+        if (rx != nullptr)
+        {
+            rxT[0] = ps.v[P_rxOsc1] > 0.5f; rxT[1] = ps.v[P_rxOsc2] > 0.5f; rxT[2] = ps.v[P_rxOsc3] > 0.5f; rxT[3] = ps.v[P_rxSub] > 0.5f; rxT[4] = ps.v[P_rxReese] > 0.5f;
+            rxResetOn = ps.v[P_rxReset] > 0.5f;
+            rxPitchAmt = clampv (ps.f (P_rxPitch), -24.0f, 24.0f); rxDriveAmt = clampv (ps.f (P_rxDrive), 0.0f, 1.0f);
+            rxDuckAmt = clampv (ps.f (P_rxDuck), 0.0f, 1.0f); rxNotchAmt = clampv (ps.f (P_rxNotch), 0.0f, 1.0f);
+        }
+        auto kickSat = [] (float x, float d)
+        {
+            // the drive kick: pushed into a soft curve, faded in from nothing
+            const float z = x * (1.0f + 6.0f * d), y = z / std::sqrt (1.0f + z * z);
+            return x + (y - x) * std::min (1.0f, 4.0f * d);
+        };
         if (subSplit) subDryUsed = true;
 
         // ---- Resonator (after the filter and amp envelope; it rings on after the note)
@@ -1059,6 +1081,37 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 }
             }
             mb[i] = m;
+            // Break-Reactive mode: a hit here resets the ticked oscillators' phases; its envelope kicks the
+            // pitch, the drive and the level, and moves the Reese's notch
+            float rxPm = 1.0f, rxG = 1.0f, rxD = 0.0f;
+            if (rx != nullptr)
+            {
+                const int gi = done + i;
+                if (rxResetOn && rx->hits()[gi] != 0)
+                {
+                    double* phs[4] = { &ph1, &ph2, &ph3, &phSub };
+                    for (int k = 0; k < 4; ++k) if (rxT[k]) { rxOldPh[k] = *phs[k]; *phs[k] = 0.0; rxXf[k] = rxXfLen; }
+                    if (rxT[4] && rsRun) reese.resetPhases (rxXfLen);
+                }
+                const float e = rx->envelope()[gi];
+                if (e > 0.0f)
+                {
+                    if (rxPitchAmt != 0.0f) rxPm = (float) pow2 ((double) (rxPitchAmt * e) / 12.0);
+                    rxG = 1.0f - rxDuckAmt * e; rxD = rxDriveAmt * e;
+                }
+                if (rsRun) { reese.setPitchMul (rxT[4] ? rxPm : 1.0); reese.setNotchJump (rxT[4] ? 2.0f * rxNotchAmt * e : 0.0f); }
+                rxDuckSm += (rxG - rxDuckSm) * rxDuckC;   // (the duck smoothed over about 1 ms, so it doesn't click)
+                if (std::abs (rxDuckSm - rxG) < 1.0e-6f) rxDuckSm = rxG;
+                rxG = rxDuckSm;
+            }
+            // (a reset oscillator's old phase, fading out)
+            auto rxFade = [&] (int k, float now, int wave, double f)
+            {
+                const float old = bank.sample (wave, rxOldPh[k], (float) std::abs (f) * fisr);
+                rxOldPh[k] = wrap01 (rxOldPh[k] + f * isr);
+                const float w = (float) rxXf[k] / (float) rxXfLen; --rxXf[k];
+                return now + (old - now) * w;
+            };
             if constexpr (ARType::value)
             {
                 std::fill (ad, ad + AD_COUNT, 0.0f);
@@ -1084,7 +1137,9 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
 
             // Osc 2 and 3 first so Osc 1's legacy FM uses this sample's Osc 2 (as in Web Audio)
             double fr = ! ARType::value ? (double) (f2.v * peRatio[1] + fmIn (1)) : f2.v * peRatio[1] * pm (AD_P2) + fmIn (1);
-            const float o2 = bank.sample (wave2, ph2, (float) std::abs (fr) * fisr);
+            if (rx != nullptr && rxT[1]) fr *= rxPm;
+            float o2 = bank.sample (wave2, ph2, (float) std::abs (fr) * fisr);
+            if (rxXf[1] > 0) o2 = rxFade (1, o2, wave2, fr);
             ph2 = wrap01 (ph2 + fr * isr); srcVals[1] = o2;
             float uL[kUniOscs] {}, uR[kUniOscs] {};
             auto uniOsc = [&] (int k, int wave, double f0)
@@ -1100,12 +1155,16 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             if (uniN[1] > 1) uniOsc (1, wave2, fr);
 
             fr = ! ARType::value ? (double) (f3.v * peRatio[2] + fmIn (2)) : f3.v * peRatio[2] * pm (AD_P3) + fmIn (2);
-            const float o3 = bank.sample (wave3, ph3, (float) std::abs (fr) * fisr);
+            if (rx != nullptr && rxT[2]) fr *= rxPm;
+            float o3 = bank.sample (wave3, ph3, (float) std::abs (fr) * fisr);
+            if (rxXf[2] > 0) o3 = rxFade (2, o3, wave3, fr);
             ph3 = wrap01 (ph3 + fr * isr); srcVals[2] = o3;
             if (uniN[2] > 1) uniOsc (2, wave3, fr);
 
-            const double fsub = ! ARType::value ? (double) (fSub.v * peRatio[3]) : fSub.v * peRatio[3] * pm (AD_PSub);
-            const float osub = bank.sample (waveSub, phSub, (float) fsub * fisr);
+            double fsub = ! ARType::value ? (double) (fSub.v * peRatio[3]) : fSub.v * peRatio[3] * pm (AD_PSub);
+            if (rx != nullptr && rxT[3]) fsub *= rxPm;
+            float osub = bank.sample (waveSub, phSub, (float) fsub * fisr);
+            if (rxXf[3] > 0) osub = rxFade (3, osub, waveSub, fsub);
             phSub = wrap01 (phSub + fsub * isr);
 
             // Osc 4 (WT 1) and WT 2: sample playback
@@ -1195,7 +1254,9 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             // Osc 1 (with the legacy Osc2 -> Osc1 FM)
             fr = ! ARType::value ? (double) (f1.v * peRatio[0] + legacyFm.v * o2 + fmIn (0))
                           : f1.v * peRatio[0] * pm (AD_P1) + std::max (0.0f, legacyFm.v + ad[AD_LegFm]) * o2 + fmIn (0);
-            const float o1 = bank.sample (wave1, ph1, (float) std::abs (fr) * fisr);
+            if (rx != nullptr && rxT[0]) fr *= rxPm;
+            float o1 = bank.sample (wave1, ph1, (float) std::abs (fr) * fisr);
+            if (rxXf[0] > 0) o1 = rxFade (0, o1, wave1, fr);
             ph1 = wrap01 (ph1 + fr * isr); srcVals[0] = o1;
             if (uniN[0] > 1) uniOsc (0, wave1, fr);
             aPrev[0] = o1; aPrev[1] = o2; aPrev[2] = o3; aPrev[3] = osub;
@@ -1210,8 +1271,9 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             }
 
             // mixer
-            const float g1 = lvl (l1.v, AD_L1), g2 = lvl (l2.v, AD_L2), g3 = lvl (l3.v, AD_L3);
+            float g1 = lvl (l1.v, AD_L1), g2 = lvl (l2.v, AD_L2), g3 = lvl (l3.v, AD_L3);
             float gs = lvl (lSub.v, AD_LSub);
+            if (rx != nullptr && rxG != 1.0f) { if (rxT[0]) g1 *= rxG; if (rxT[1]) g2 *= rxG; if (rxT[2]) g3 *= rxG; if (rxT[3]) gs *= rxG; }
             float subD = 0.0f;
             if (subSplit)
             {
@@ -1257,11 +1319,29 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                     mL = a; mR = b;
                 }
             }
+            if (rx != nullptr && rxD > 0.0f && (rxT[0] || rxT[1] || rxT[2] || rxT[3]))
+            {
+                // the drive kick on the ticked oscillators (through their strips, as they're heard)
+                float tl = 0.0f, tr = 0.0f;
+                auto add = [&] (int strip, float l, float r) { if (mxActive) { l *= mxL[strip]; r *= mxR[strip]; } tl += l; tr += r; };
+                const float* oo[3] = { &o1, &o2, &o3 };
+                const float gg[3] = { g1, g2, g3 };
+                for (int k = 0; k < 3; ++k)
+                    if (rxT[k])
+                    {
+                        float l = *oo[k] * gg[k] * uniGc[k], r = l;
+                        if (uniN[k] > 1) { l += uL[k] * gg[k] * uniGs[k]; r += uR[k] * gg[k] * uniGs[k]; }
+                        add (k, l, r);
+                    }
+                if (rxT[3]) add (3, osub * gs, osub * gs);
+                mL += kickSat (tl, rxD) - tl; mR += kickSat (tr, rxD) - tr;
+            }
             if (rsRun)
             {
                 // the Reese engine, through its own Mixer strip, into the mix before the filters
                 float a, b; reese.tick (a, b);
                 a *= lRs.v; b *= lRs.v;
+                if (rx != nullptr && rxT[4]) { a *= rxG; b *= rxG; if (rxD > 0.0f) { a = kickSat (a, rxD); b = kickSat (b, rxD); } }
                 if (mc.meters) mxPeak[kMxReeseStrip] = std::max (mxPeak[kMxReeseStrip], std::max (std::abs (a), std::abs (b)));
                 if (mxActive) { a *= mxL[kMxReeseStrip]; b *= mxR[kMxReeseStrip]; }
                 mL += a; mR += b;
@@ -1421,6 +1501,18 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
 }
 
 //==============================================================================
+BreakReact::Settings Engine::reactSettings (const Snapshot& s) const
+{
+    BreakReact::Settings r;
+    r.on = s.v[P_rxOn] > 0.5f;
+    r.listen = clampv (s.i (P_rxListen), 0, 3); r.brk = clampv (s.i (P_rxBreak), 0, 3);
+    r.sens = clampv (s.f (P_rxSens), 0.0f, 1.0f);
+    r.fromBreaks = s.v[P_rxFromBreaks] > 0.5f; r.fromSc = s.v[P_rxFromSc] > 0.5f; r.scSens = clampv (s.f (P_rxScSens), 0.0f, 1.0f);
+    r.attackMs = clampv (s.f (P_rxAttack), 0.0f, 100.0f); r.decayMs = clampv (s.f (P_rxDecay), 5.0f, 2000.0f);
+    r.offsetMs = clampv (s.f (P_rxOffset), -10.0f, 30.0f); r.humanMs = clampv (s.f (P_rxHuman), 0.0f, 10.0f);
+    return r;
+}
+
 BreakChopper::Settings Engine::breakSettings (const Snapshot& s) const
 {
     BreakChopper::Settings st;
@@ -1443,7 +1535,7 @@ void Engine::prepare (double sampleRate, int maxBlock)
     sr = sampleRate;
     for (auto& v : voices) v.prepare (sr);
     fxBus.prepare (sr, maxBlock);
-    masterFilter.prepare (sr); outTrim.prepare (sr); perfFx.prepare (sr); chopper.prepare (sr, maxBlock);
+    masterFilter.prepare (sr); outTrim.prepare (sr); perfFx.prepare (sr); chopper.prepare (sr, maxBlock); react.prepare (sr, maxBlock);
     gran.prepare (sr);
     spec.prepare (sr);
     fbm.prepare (sr, maxBlock);
@@ -1466,6 +1558,7 @@ void Engine::reset()
     fxBus.reset();
     perfFx.reset();
     chopper.reset();
+    react.reset();
     masterFilter.reset();
     gran.reset();
     spec.reset();
@@ -1631,6 +1724,38 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     }
     std::fill (std::begin (liveScratch), std::end (liveScratch), 0.0f);
 
+    // ---- Break-Reactive mode: the slices started since the last call (and the sidechain) become hits
+    BreakReact::Settings rxs;
+    {
+        BreakChopper::HitLogEntry hl[BreakChopper::kHitLog];
+        const int nh = chopper.takeHits (hl);
+        if (s.v[P_rxOn] > 0.5f)
+        {
+            // (its listening and shape settings follow last block's global sources, like the arpeggiator's)
+            const Snapshot* rs = &s;
+            if (routeStore != nullptr && routeSet.n > 0 && routeSet.anyGlobal)
+            {
+                rxModSnap = s;
+                applyRoutes (routeSet, s.v, rxModSnap.v, lastSrc, rxRouteState, (float) (numSamples / sr), RF_Global);
+                rs = &rxModSnap;
+            }
+            rxs = reactSettings (*rs);
+            const BreakData& bd = chopper.data();
+            for (int k = 0; k < nh; ++k)
+            {
+                const BreakSlot& b = bd.brk[clampv (hl[k].brk, 0, BreakChopper::kBreaks - 1)];
+                const int sl = clampv (hl[k].slice, 0, BreakSlot::kSlices - 1);
+                react.breakHit (rxs, hl[k].brk, b.kick[sl], b.snare[sl], b.hat[sl], hl[k].vel);
+            }
+            react.begin (numSamples, rxs, scL, scR);
+            mc.rx = &react;
+            if (react.hitCount() > 0) rxHitsShown.fetch_add (react.hitCount(), std::memory_order_relaxed);
+            rxTypeShown.store (react.hitType(), std::memory_order_relaxed);
+            rxEnvShown.store (react.envelope()[numSamples - 1], std::memory_order_relaxed);
+        }
+        else react.idle (numSamples);
+    }
+
     ModState scratch;
     const bool dryReady = (int) dryBus[0][0].size() >= numSamples;
     if (dryReady) for (int b = 0; b < 3; ++b) for (int c = 0; c < 2; ++c) std::fill (dryBus[b][c].begin(), dryBus[b][c].begin() + numSamples, 0.0f);
@@ -1712,6 +1837,8 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         for (int k = 0; k < 8; ++k) globalSrc[MS_Macro1 + k] = s.v[P_macro1 + k];
         for (int k = 0; k < 4; ++k) globalSrc[MS_PfX1 + k] = 2.0f * s.v[P_pfX1 + k] - 1.0f;
         globalSrc[MS_DnaSeq] = dsValue; globalSrc[MS_DnaSeq2] = dsValue2; globalSrc[MS_DnaGate] = dsGate;
+        globalSrc[MS_BreakHit] = mc.rx != nullptr ? react.envelope()[numSamples - 1] : 0.0f;
+        globalSrc[MS_BreakHitType] = mc.rx != nullptr ? react.hitType() : 0.0f;
     }
     float* srcW = newest != nullptr ? newest->srcV : globalSrc;
     if (mc.any() && (routeSet.anyGlobal || (mc.morph && scenes != nullptr && routeSet.anySceneXY)))
@@ -1758,11 +1885,14 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         // Break FX Route: through the effects (as always), or past them into a dry bus, ramped over 10 ms
         const int route = dryReady ? clampv (fs->i (P_bcFxRoute), 0, 3) : 0;
         if (! breakWasRunning) for (int k = 0; k < 4; ++k) brkRG[k] = k == route ? 1.0f : 0.0f;   // (nothing playing: start on the route)
-        if (route == 0 && brkRG[0] == 1.0f) chopper.process (L, R, numSamples, st, fs->v);
+        // Break-Reactive mode with a negative Offset: the breaks play that much later (the synth reacts first)
+        const int rxDelay = react.breakDelay (rxs);
+        if (route == 0 && brkRG[0] == 1.0f && rxDelay == 0) chopper.process (L, R, numSamples, st, fs->v);
         else
         {
             std::fill (brkTmp[0].begin(), brkTmp[0].begin() + numSamples, 0.0f); std::fill (brkTmp[1].begin(), brkTmp[1].begin() + numSamples, 0.0f);
             chopper.process (brkTmp[0].data(), brkTmp[1].data(), numSamples, st, fs->v);
+            if (rxDelay > 0) react.delayBreaks (brkTmp[0].data(), brkTmp[1].data(), numSamples, rxDelay);
             const float rc = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
             float* dst[4][2] = { { L, R }, { dryBus[0][0].data(), dryBus[0][1].data() }, { dryBus[1][0].data(), dryBus[1][1].data() }, { dryBus[2][0].data(), dryBus[2][1].data() } };
             for (int i = 0; i < numSamples; ++i)

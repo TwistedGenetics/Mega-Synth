@@ -10,6 +10,7 @@
 #include "Mut/DnaSplice.h"
 #include "Mut/Resonator.h"
 #include "Reese.h"
+#include "BreakReact.h"
 #include "Fx/MasterFilter.h"
 #include "Fx/PerfFx.h"
 #include "GranSynth.h"
@@ -51,6 +52,7 @@ struct ModContext
     const double* lfoFree = nullptr;            // shared "Free" LFO phases (Hz mode) at the start of this render call
     const MsegStore* msegs = nullptr;           // multi-stage envelope shapes
     bool meters = false;                        // the Mixer is on screen: measure each source's level
+    const BreakReact* rx = nullptr;             // Break-Reactive mode on: this call's hits and envelope
     bool any() const { return routes != nullptr && routes->n > 0; }
 };
 
@@ -171,6 +173,10 @@ private:
     ReeseOsc reese;          // the Reese engine
     S lRs;                   // its level (smoothed)
     bool rsRun = false;      // on, or still fading out
+    // Break-Reactive mode: Osc 1-3 and the sub's old phases, faded out just after a phase reset
+    double rxOldPh[4] {};
+    int rxXf[4] {};
+    float rxDuckSm = 1.0f;   // the level duck, smoothed
     GranVoice::Params gsP;
     const WaveSample* gsWav = nullptr;
     S lGs;
@@ -323,7 +329,13 @@ public:
     int activeVoiceCount() const;
     void setLfoShapes (const LfoShapeStore* st) { lfoShapes = st; }
     void setMsegs (const MsegStore* st) { msegStore = st; }
-    void setSidechain (const float* l, const float* r) { fxBus.setSidechain (l, r); }   // for the next render call
+    void setSidechain (const float* l, const float* r) { fxBus.setSidechain (l, r); scL = l; scR = r; }   // for the next render call
+    // Break-Reactive mode: its trigger note played now (the processor calls this between renders)
+    void reactNoteHit (const Snapshot& s, float vel) { react.noteHit (reactSettings (s), vel); }
+    BreakReact::Settings reactSettings (const Snapshot& s) const;
+    const BreakReact& breakReact() const { return react; }
+    std::atomic<int> rxHitsShown { 0 };          // for the page: hits so far, the last one's type, the envelope now
+    std::atomic<float> rxTypeShown { 0.0f }, rxEnvShown { 0.0f };
     int polyFloor = 0;   // chord memory: a chord's notes always get their own voices, even in mono
     // Arpeggiator Swing / Gate as moved by the Mod Matrix last block (offsets; 0 when unmodulated)
     float arpModOffset (int which) const { return arpMod[juce::jlimit (0, 1, which)]; }
@@ -383,6 +395,10 @@ private:
     float arpMod[2] { 0, 0 };
     Snapshot arpModSnap;
     RouteState arpRouteState;   // last block's Mod Matrix offsets for Swing, Start Offset, Free Rate
+    BreakReact react;               // Break-Reactive mode
+    const float* scL = nullptr; const float* scR = nullptr;   // the host's sidechain for this render call
+    Snapshot rxModSnap;             // its listening and shape settings with last block's global routes
+    RouteState rxRouteState;
     Snapshot dnaModSnap;            // the DNA Sequencer's own settings with any Mod Matrix routes applied
     RouteState dnaRouteState;
     float lastSrc[MS_COUNT] {};     // last block's global sources (for routes onto the DNA settings)

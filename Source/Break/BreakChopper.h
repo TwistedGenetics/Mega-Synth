@@ -77,6 +77,7 @@ public:
         const int k = ((t.slice % bs.nSlices) + bs.nSlices) % bs.nSlices;
         const BreakSlice& sl = bs.slice[k];
         lastSlice = k; lastBreak = bi;
+        if (nHitLog < kHitLog) hitLog[nHitLog++] = { bi, k, t.vel * t.level };   // (for Break-Reactive mode)
         // the choke group cuts the others off (fast fade), whichever break they're from
         if (sl.choke > 0 && ! t.noChoke) for (auto& v : voices) if (v.on && v.choke == sl.choke) v.stop (sr);
         Voice* slot = nullptr;
@@ -123,6 +124,10 @@ public:
     int previewBreak() const { return pv.brk; }
     double previewFrame() const { return pv.on ? pv.head : -1.0; }   // the frame being played now
     double previewFileRate() const { return wav[pv.brk] != nullptr ? wav[pv.brk]->sampleRate / sr : 1.0; }
+    // the slices started since the last call (Break-Reactive mode listens to them)
+    struct HitLogEntry { int brk, slice; float vel; };
+    static constexpr int kHitLog = 32;
+    int takeHits (HitLogEntry* out) { const int n = nHitLog; std::copy (hitLog, hitLog + n, out); nHitLog = 0; return n; }
     int lastSlicePlayed() const { return lastSlice; }
     int lastBreakPlayed() const { return lastBreak; }
     int activeVoices() const { int n = 0; for (auto& v : voices) n += v.on ? 1 : 0; return n; }
@@ -399,6 +404,8 @@ private:
     FilterUnit filter;
     int fModel = -1, fType = -1, fSlope = -1, fChar = -1;
     int tail[kBreaks] {}, lastSlice = 0, lastBreak = 0;
+    HitLogEntry hitLog[kHitLog] {};
+    int nHitLog = 0;
     float peakShown = 0.0f;
 };
 

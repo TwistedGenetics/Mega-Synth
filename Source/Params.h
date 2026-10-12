@@ -129,6 +129,8 @@ inline const char* const kMfTypeKeys[]   = { "lp","hp","bp","notch" };
 inline const char* const kCharModelKeys[]   = { "off","formant","formant2","allpass","powerlp","powerbp","waveshaper","resonator","resampler","lpresample","shifter","analoguelp","dj","comb","vowelmorph","phaser","ring","decimatorlp","dualpeak" };
 inline const char* const kCharModelLabels[] = { "Off (Model)","Formant","Formant 2","All Pass","Power LP","Power BP","Wave Shaper","Resonator","Resampler","LP + Resample","Shifter","Analogue LP","DJ Filter","Comb +/-","Vowel Morph","Phaser Filter","Ring Filter","Decimator LP","Dual Peak" };
 inline const char* const kMfTypeLabels[] = { "Low Pass","High Pass","Band Pass","Notch" };
+inline const char* const kMfModelKeys[]   = { "clean","lp","sallenkey","ladder","steiner","svf","ota","polivoks","swcap","acid","ms20","oberheim","sem","tb303","moogfat","arpodyssey","cs15","sh2" };
+inline const char* const kMfModelLabels[] = { "Clean (SVF)","Standard LP","Sallen-Key LP","Ladder","Steiner-Parker","State Variable","Discrete OTA","Polivoks","Switched Capacitor","Acid Filter Approx","MS-20","Oberheim","SEM","TB-303","Minimoog - Fat Cat","Arp Odyssey","CS-15","SH-2" };
 inline const char* const kMfSlopeKeys[]   = { "12","24" };
 inline const char* const kMfSlopeLabels[] = { "12 dB/oct","24 dB/oct" };
 // Performance FX (state version 14)
@@ -353,6 +355,7 @@ inline const ChoiceList kListBsAlt     = TG_LIST(kBsAlt);
 inline const ChoiceList kListBcSnap    = TG_LIST(kBcSnap);
 inline const ChoiceList kListBsAltBreak = TG_LIST(kBsAltBreak);
 inline const ChoiceList kListBsToolSrc  = TG_LIST(kBsToolSrc);
+inline const ChoiceList kListMfModel    = TG_LIST(kMfModel);
 inline const ChoiceList kListBsFillMode = TG_LIST(kBsFillMode);
 inline const ChoiceList kListBsFillLen  = TG_LIST(kBsFillLen);
 inline const ChoiceList kListBsFillStart = TG_LIST(kBsFillStart);
@@ -1109,7 +1112,8 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(bsFillStart, "Break Fill Start", kListBsFillStart, 1) \
     C(bsFillReturn,"Break Fill Return", kListBsFillRet, 0) \
     C(bsAutoFill,  "Break Auto Fill", kListBsAutoFill, 0) \
-    F(bsAutoFillProb,"Break Auto Fill Chance", 0, 1, 1, 0.01, 0)
+    F(bsAutoFillProb,"Break Auto Fill Chance", 0, 1, 1, 0.01, 0) \
+    C(mfModel,     "Master Filter Model", kListMfModel, 0)
 
 enum ParamIndex
 {

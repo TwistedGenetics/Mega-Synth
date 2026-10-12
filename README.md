@@ -113,7 +113,19 @@ Moved from earlier versions:
 
 ## Filter character models (Filters tab: Filter 1, Filter 2 and the Master Filter)
 
-Each filter has a **Character** menu next to its Model. *Off* uses the classic Model, Type and Slope exactly as before; choosing a character model replaces them (Type and Slope lock), and the **Character** knob does what the model needs. Ideas from Beep Street's Sunrizer, plus extras:
+Each filter has **one Filter list**. It holds every classic model and every character model, grouped by family:
+- **Clean:** Standard LP, Sallen-Key, State Variable and Switched Capacitor. The Master Filter also has **Clean (SVF)**, its original filter.
+- **Analogue models.**
+- **Acid:** Acid Filter Approx and TB-303.
+- **Drive & character**, **Formant & vowel**, **Comb, phaser & peaks** and **Digital / lo-fi:** the character models.
+
+How the list behaves:
+- **A classic model:** chooses that model at its own slope, exactly as the old Model menu did.
+- **A character model:** replaces Type and Slope, and the **Character** knob does what the model needs.
+- **Greyed controls:** a control the chosen filter doesn't use is greyed out but keeps its setting. That's Type and Slope for the character models, Character for the classic models, Resonance for Resampler, and Cutoff (and what moves it) for DJ Filter.
+- **Old patches:** the list stores the same two settings as before (Model and Character), so old patches and automation are unchanged.
+
+The character models, with ideas from Beep Street's Sunrizer plus extras:
 
 | Model | What it is | Character knob |
 |---|---|---|
@@ -405,10 +417,16 @@ Thirteen pads to play live on the whole mix. They sit after the effects rack and
 
 - A stereo filter at the very end of the chain: everything the synth makes, every effect included, passes through it, then the **Output** level.
 - **On** (off by default: the sound passes straight through, untouched), **Type** (Low Pass, High Pass, Band Pass, Notch), **Slope** (12 or 24 dB/oct), **Cutoff**, **Resonance**, **Drive** and **Mix** (dry / wet). Its response is drawn next to the controls.
+- **Filter:** the same list as Filter 1 and 2.
+  - **Clean (SVF)** is the original Master Filter and the default, so older projects sound the same.
+  - **A classic model** (Ladder, MS-20, TB-303...) runs the same code as Filter 1, at the Master Filter's Type and Slope. Low Pass at the model's own slope is the original circuit. Its Drive is the model's own input stage.
+  - **A character model** works as before.
+  - Switching between filters crossfades over 10 ms.
+- **Type and Slope:** they stay Low Pass, High Pass, Band Pass or Notch at 12 or 24 dB. Peak, All Pass, 6 and 18 dB aren't added, so existing automation of these two settings keeps its meaning.
 - Cutoff, Resonance, Drive, Mix and Output are Mod Matrix destinations. Because the filter comes after all the notes are mixed, routes onto it follow the newest note's sources, or the mod wheel, macros, aftertouch, CCs and the sidechain when no note is held.
 - **Output** (-24 to +12 dB, 0 dB = untouched) is the last thing before the plug-in's output. **Master Volume** stays where it has always been, before the effects, so older patches with drive or clipping effects sound exactly the same.
 - Not part of Mutate or the scenes' Output level; saved in patches, projects, undo and A/B. Older patches load with the filter off and Output at 0 dB.
-- CPU: nothing when off; about 0.7% of one core at 24 dB with Drive on.
+- CPU: nothing when off; about 0.7% of one core at 24 dB with Drive on. The heaviest model (Analogue LP) is about 1% of a core. The Master Filter runs once for the whole mix, so it costs the same at every Quality.
 
 ## Note Mutation (FX & Mutation > Note Mutation)
 

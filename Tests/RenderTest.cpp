@@ -2335,6 +2335,14 @@ int main()
             auto f = dir.getChildFile ("page_BreakChopper_zoom.png"); f.deleteFile();
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
         }
+        {
+            // the Filters page with a character model on Filter 1 and a classic model (TB-303) on the Master Filter
+            setP (*p, P_flt1Char, (float) tg::CM_Resampler); setP (*p, P_mfOn, 1.0f); setP (*p, P_mfModel, 13.0f); setP (*p, P_mfRes, 0.7f);
+            e->showPage ("Filters"); e->timerCallbackForTests();
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto f = dir.getChildFile ("page_Filters_models.png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        }
         return 0;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_UICONTROLS", {}).isNotEmpty())
@@ -2349,6 +2357,7 @@ int main()
             if (auto* k = dynamic_cast<tgui::Knob*> (c)) ids.insert (kParamIds[k->paramIndex]);
             if (auto* sg = dynamic_cast<tgui::Segmented*> (c); sg != nullptr && sg->getParam() >= 0) ids.insert (kParamIds[sg->getParam()]);
             if (c->getProperties().contains ("megaParam")) ids.insert (kParamIds[(int) c->getProperties()["megaParam"]]);
+            if (c->getProperties().contains ("megaParam2")) ids.insert (kParamIds[(int) c->getProperties()["megaParam2"]]);   // (the Filter list: model and character)
             if (auto* xy = dynamic_cast<tgui::PerfXY*> (c)) { ids.insert (kParamIds[xy->px()]); ids.insert (kParamIds[xy->py()]); }
             for (auto* ch : c->getChildren()) walk (ch);
         };
@@ -3134,6 +3143,112 @@ int main()
             auto n2 = make(); setP (*n2, P_wheelLfo1, 0.0f); setP (*n2, P_mfOn, 1.0f);
             n2->importBrowserPatch (juce::JSON::toString (patchJson));
             CHECK (plain (*n2, P_wheelLfo1) > 0.5f && plain (*n2, P_mfOn) < 0.5f, "old patches: wheel to LFO 1 on, Master Filter off");
+        }
+        // ---- the one Filter list, and the Master Filter's models
+        {
+            auto plain = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+            // every model, type and slope on the Master Filter: stable (finite, bounded) at every cutoff and resonance, swept
+            juce::StringArray bad;
+            juce::Random rnd (7);
+            std::vector<float> noise (8192); for (auto& v : noise) v = rnd.nextFloat() * 2.0f - 1.0f;
+            double worstMs = 0.0; juce::String worstName;
+            for (int model = 0; model <= 17; ++model)
+                for (int cm = 0; cm < (model == 0 ? (int) tg::CM_COUNT : 1); ++cm)
+                    for (int type = 0; type < 4; ++type)
+                        for (int steep = 0; steep < 2; ++steep)
+                        {
+                            if (cm > 0 && (type > 0 || steep > 0)) continue;
+                            for (float res : { 0.0f, 0.5f, 1.0f })
+                            {
+                                tg::MasterFilter mf; mf.prepare (sr);
+                                tg::MasterFilter::Settings st; st.on = true; st.model = model; st.charModel = cm; st.type = type; st.steep = steep == 1; st.res = res; st.driveDb = 12.0f;
+                                std::vector<float> l (noise), r (noise);
+                                for (int i = 0; i < (int) r.size(); ++i) r[(size_t) i] *= -0.7f;   // (stereo: different left and right)
+                                float pk = 0.0f; bool finite = true;
+                                const auto t0 = juce::Time::getHighResolutionTicks();
+                                for (int pos = 0, b = 0; pos < (int) l.size(); pos += 128, ++b)
+                                {
+                                    st.cutoff = 20.0f * std::pow (1000.0f, 0.5f + 0.5f * std::sin ((float) b * 0.37f));   // 20 Hz .. 20 kHz and back
+                                    mf.process (l.data() + pos, r.data() + pos, 128, st);
+                                }
+                                const double ms = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0) * 1000.0;
+                                for (size_t i = 0; i < l.size(); ++i) { finite = finite && std::isfinite (l[i]) && std::isfinite (r[i]); pk = std::max (pk, std::max (std::abs (l[i]), std::abs (r[i]))); }
+                                const juce::String name = cm > 0 ? juce::String (tg::charModelInfo (cm).name) : juce::String (kMfModelLabels[model]) + " " + kMfTypeLabels[type] + (steep ? " 24" : " 12");
+                                if (! finite || pk > 12.0f) bad.add (name + " res " + juce::String (res) + " (peak " + juce::String (pk, 1) + ")");
+                                if (ms > worstMs) { worstMs = ms; worstName = name; }
+                            }
+                        }
+            CHECK (bad.isEmpty(), "every Master Filter model, type and slope is stable when swept, at every resonance" + (bad.isEmpty() ? juce::String() : ": " + bad.joinIntoString (", ")));
+            std::cout << "  CPU, the heaviest Master Filter model (" << worstName << ", stereo): " << juce::String (100.0 * worstMs / 1000.0 / (8192.0 / sr), 2) << "% of a core" << std::endl;
+            // a classic model on the Master Filter sounds like it does on Filter 1: a Ladder low pass at 1 kHz cuts 4 kHz hard and keeps 100 Hz
+            tg::MasterFilter::Settings ms; ms.on = true; ms.model = 3; ms.type = tg::MasterFilter::LP; ms.cutoff = 1000.0f; ms.res = 0.0f;
+            CHECK (gainDb (ms, 4000.0) < -15.0 && std::abs (gainDb (ms, 100.0)) < 4.0, "a classic model (Ladder) on the Master Filter: " + juce::String (gainDb (ms, 4000.0), 1) + " dB at 4 kHz, "
+                   + juce::String (gainDb (ms, 100.0), 1) + " dB at 100 Hz");
+            ms.type = tg::MasterFilter::HP;
+            CHECK (gainDb (ms, 100.0) < -15.0, "... and as a high pass");
+            // the greyed controls are the ones a filter doesn't use: Resampler ignores Resonance, DJ Filter ignores Cutoff
+            auto renderMf = [&] (tg::MasterFilter::Settings st2)
+            {
+                tg::MasterFilter mf; mf.prepare (sr);
+                std::vector<float> l (noise), r (noise);
+                for (int pos = 0; pos < (int) l.size(); pos += 256) mf.process (l.data() + pos, r.data() + pos, 256, st2);
+                return l;
+            };
+            tg::MasterFilter::Settings rs; rs.on = true; rs.charModel = tg::CM_Resampler; rs.cutoff = 3000.0f; rs.res = 0.0f;
+            auto a = renderMf (rs); rs.res = 1.0f; auto b = renderMf (rs);
+            // (after the 10 ms crossfade in from the clean filter, which does use them)
+            float d1 = 0; for (size_t i = 2048; i < a.size(); ++i) d1 = std::max (d1, std::abs (a[i] - b[i]));
+            tg::MasterFilter::Settings dj; dj.on = true; dj.charModel = tg::CM_DJ; dj.cutoff = 300.0f; dj.charAmt = 0.2f;
+            auto c = renderMf (dj); dj.cutoff = 9000.0f; auto e = renderMf (dj);
+            float d2 = 0; for (size_t i = 2048; i < c.size(); ++i) d2 = std::max (d2, std::abs (c[i] - e[i]));
+            CHECK (d1 < 1e-6f && d2 < 1e-6f && ! tg::charModelInfo (tg::CM_Resampler).usesRes, "greyed controls: Resampler ignores Resonance (" + juce::String (d1) + "), DJ Filter ignores Cutoff (" + juce::String (d2) + ")");
+            if (false) CHECK (! tg::charModelInfo (tg::CM_Resampler).usesRes, "greyed controls: Resampler ignores Resonance, DJ Filter ignores Cutoff");
+            // the drop-downs: one list writes the model and the character together
+            auto p = make();
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            ed->setSize (1200, 890);
+            std::vector<tgui::FilterPicker*> pickers;
+            std::function<void (juce::Component*)> walk = [&] (juce::Component* comp) { if (auto* fp = dynamic_cast<tgui::FilterPicker*> (comp)) pickers.push_back (fp); for (auto* ch : comp->getChildren()) walk (ch); };
+            if (auto* me = dynamic_cast<MegaSynthEditor*> (ed.get())) { me->showPage ("Filters"); me->timerCallbackForTests(); }
+            walk (ed.get());
+            tgui::FilterPicker *f1 = nullptr, *mfp = nullptr;
+            for (auto* fp : pickers) { const int mp = (int) fp->getProperties()["megaParam"]; if (mp == P_filterMode) f1 = fp; if (mp == P_mfModel) mfp = fp; }
+            CHECK (f1 != nullptr && mfp != nullptr && pickers.size() == 3, "one Filter list each for Filter 1, Filter 2 and the Master Filter (" + juce::String ((int) pickers.size()) + ")");
+            if (f1 != nullptr && mfp != nullptr)
+            {
+                CHECK (f1->getNumItems() == 17 + 18 && mfp->getNumItems() == 18 + 18, "the lists hold every model and every character model");
+                f1->setSelectedId (200 + tg::CM_Comb, juce::sendNotificationSync);
+                CHECK (juce::roundToInt (plain (*p, P_flt1Char)) == tg::CM_Comb && juce::roundToInt (plain (*p, P_filterMode)) == 0, "choosing a character model sets Character (the model stays)");
+                f1->setSelectedId (100 + 9, juce::sendNotificationSync);
+                CHECK (juce::roundToInt (plain (*p, P_flt1Char)) == 0 && juce::roundToInt (plain (*p, P_filterMode)) == 9 && juce::roundToInt (plain (*p, P_filterSlope)) == nativeFilterSlope (9),
+                       "choosing a model: Character off, the model at its own slope");
+                mfp->setSelectedId (100 + 12, juce::sendNotificationSync);
+                CHECK (juce::roundToInt (plain (*p, P_mfModel)) == 13 && juce::roundToInt (plain (*p, P_mfChar)) == 0, "the Master Filter's list: a classic model");
+                mfp->setSelectedId (1, juce::sendNotificationSync);
+                CHECK (juce::roundToInt (plain (*p, P_mfModel)) == 0, "... and Clean (SVF), as before");
+                // every old (model, character) pair shows as one entry
+                bool allShown = true;
+                for (int m = 0; m < 17; ++m)
+                    for (int cmd = 0; cmd < (int) tg::CM_COUNT; ++cmd)
+                    {
+                        setP (*p, P_filterMode, (float) m); setP (*p, P_flt1Char, (float) cmd);
+                        f1->sync();
+                        allShown = allShown && f1->getSelectedId() == tgui::FilterPicker::idFor (false, m, cmd) && f1->indexOfItemId (f1->getSelectedId()) >= 0;
+                    }
+                CHECK (allShown, "every old (model, character) pair shows as its one entry in the list");
+            }
+            // old projects: the Master Filter keeps its clean filter
+            setP (*p, P_mfModel, 5.0f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto x = juce::parseXML (getXmlFromBinaryForTest (mb));
+            if (x != nullptr)
+            {
+                x->setAttribute ("stateVersion", 20);
+                if (auto* el = x->getChildByAttribute ("id", "mfModel")) x->removeChildElement (el, true);
+                juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*x, old);
+                auto o = make(); setP (*o, P_mfModel, 7.0f); o->setStateInformation (old.getData(), (int) old.getSize());
+                CHECK (juce::roundToInt (plain (*o, P_mfModel)) == 0, "older projects: the Master Filter stays Clean");
+            }
         }
     };
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_MFCPU", {}).isNotEmpty())
@@ -5048,6 +5163,7 @@ int main()
             if (auto* k = dynamic_cast<tgui::Knob*> (c)) ids.insert (kParamIds[k->paramIndex]);
             if (auto* sg = dynamic_cast<tgui::Segmented*> (c); sg != nullptr && sg->getParam() >= 0) ids.insert (kParamIds[sg->getParam()]);
             if (c->getProperties().contains ("megaParam")) ids.insert (kParamIds[(int) c->getProperties()["megaParam"]]);
+            if (c->getProperties().contains ("megaParam2")) ids.insert (kParamIds[(int) c->getProperties()["megaParam2"]]);   // (the Filter list: model and character)
             if (auto* xy = dynamic_cast<tgui::PerfXY*> (c)) { ids.insert (kParamIds[xy->px()]); ids.insert (kParamIds[xy->py()]); }
             for (auto* ch : c->getChildren()) walk (ch);
         };
@@ -5063,11 +5179,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.56.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.57.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.56 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools and fills added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.57 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills and the one Filter list added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",

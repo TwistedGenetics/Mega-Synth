@@ -1635,6 +1635,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 18) setChopDefaultsForOldPatch();
     if (version < 19) setToolDefaultsForOldPatch();
     if (version < 20) setFillDefaultsForOldPatch();
+    if (version < 21) setMfModelDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1865,6 +1866,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("bcChopMode")) setChopDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bsToolSource")) setToolDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bsFillMode")) setFillDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("mfModel")) setMfModelDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2133,6 +2135,12 @@ void MegaSynthProcessor::setChopDefaultsForOldPatch()
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
     }
+}
+
+void MegaSynthProcessor::setMfModelDefaultsForOldPatch()
+{
+    auto* prm = params[(size_t) P_mfModel];
+    prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
 }
 
 void MegaSynthProcessor::setFillDefaultsForOldPatch()

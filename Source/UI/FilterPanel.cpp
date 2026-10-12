@@ -84,6 +84,71 @@ void Segmented::mouseDown (const juce::MouseEvent& e)
 }
 
 //==============================================================================
+// ids: Clean = 1 (Master Filter only); classic model m = 100 + m; character model c = 200 + c
+FilterPicker::FilterPicker (MegaSynthProcessor& p, int mp, int cp, bool m) : proc (p), modelParam (mp), charParam (cp), master (m)
+{
+    struct Entry { int id; const char* name; };
+    auto classic = [] (int k) { return Entry { 100 + k, kFilterLabels[k] }; };
+    auto charM = [] (int c) { return Entry { 200 + c, charModelInfo (c).name }; };
+    auto group = [this] (const char* heading, std::initializer_list<Entry> items)
+    {
+        addSectionHeading (heading);
+        for (auto& e : items) addItem (e.name, e.id);
+    };
+    if (master) group ("Clean", { Entry { 1, "Clean (SVF)" }, classic (0), classic (1), classic (4), classic (7) });
+    else group ("Clean", { classic (0), classic (1), classic (4), classic (7) });
+    group ("Analogue models", { classic (2), classic (3), classic (5), classic (6), classic (9), classic (10), classic (11), classic (13), classic (14), classic (15), classic (16) });
+    group ("Acid", { classic (8), classic (12) });
+    group ("Drive & character", { charM (CM_PowerLP), charM (CM_PowerBP), charM (CM_WaveShaper), charM (CM_AnalogueLP), charM (CM_DJ) });
+    group ("Formant & vowel", { charM (CM_Formant), charM (CM_Formant2), charM (CM_VowelMorph) });
+    group ("Comb, phaser & peaks", { charM (CM_AllPass), charM (CM_Resonator), charM (CM_Comb), charM (CM_Phaser), charM (CM_DualPeak) });
+    group ("Digital / lo-fi", { charM (CM_Resampler), charM (CM_LPResample), charM (CM_Shifter), charM (CM_Ring), charM (CM_DecimatorLP) });
+    getProperties().set ("megaParam", modelParam);
+    getProperties().set ("megaParam2", charParam);
+    setTooltip (master ? "The Master Filter: Clean (the state-variable filter, as before), one of the classic models of Filter 1 and 2, "
+                         "or a character model. Controls a filter doesn't use are greyed out."
+                       : "The filter: a classic model (as a Low Pass at its own slope it is the original circuit; with other types and "
+                         "slopes it gives the multimode filter its character) or a character model, which replaces Type and Slope. "
+                         "Controls a filter doesn't use are greyed out.");
+    onChange = [this] { picked(); };
+    sync();
+    startTimerHz (10);
+}
+
+int FilterPicker::idFor (bool master, int model, int charModel)
+{
+    if (charModel > 0) return 200 + charModel;
+    if (master) return model <= 0 ? 1 : 100 + model - 1;
+    return 100 + juce::jlimit (0, 16, model);
+}
+
+void FilterPicker::sync()
+{
+    auto plain = [this] (int i) { auto* prm = proc.param (i); return juce::roundToInt (prm->convertFrom0to1 (prm->getValue())); };
+    const int id = idFor (master, plain (modelParam), plain (charParam));
+    if (getSelectedId() != id) setSelectedId (id, juce::dontSendNotification);
+}
+
+void FilterPicker::picked()
+{
+    const int id = getSelectedId();
+    if (id <= 0) return;
+    auto set = [this] (int i, float v)
+    {
+        auto* prm = proc.param (i);
+        if (std::abs (prm->convertFrom0to1 (prm->getValue()) - v) < 1.0e-4f) return;
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (v)); prm->endChangeGesture();
+    };
+    if (id >= 200) { set (charParam, (float) (id - 200)); return; }   // a character model (the model underneath stays)
+    set (charParam, 0.0f);
+    if (master) { set (modelParam, id == 1 ? 0.0f : (float) (id - 100 + 1)); return; }
+    const int m = id - 100;
+    set (modelParam, (float) m);
+    const auto& f = filterParams (modelParam == P_filter2Mode ? 1 : 0);
+    set (f.slope, (float) nativeFilterSlope (m));   // (choosing a model also selects its own slope, as before)
+}
+
+//==============================================================================
 void FilterResponse::update (int selected)
 {
     auto pv = [this] (int i) { auto* p = proc.param (i); return p->convertFrom0to1 (p->getValue()); };
@@ -288,11 +353,7 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
     }
     typeCap.setText ("Type", juce::dontSendNotification);
     slopeCap.setText ("Slope (dB / octave)", juce::dontSendNotification);
-    modelCap.setText ("Model", juce::dontSendNotification);
-    charCap.setColour (juce::Label::textColourId, col::muted);
-    charCap.setFont (juce::Font (juce::FontOptions (11.5f)));
-    charCap.setText ("Character", juce::dontSendNotification);
-    addAndMakeVisible (charCap);
+    modelCap.setText ("Filter", juce::dontSendNotification);
     lfoCap.setText ("LFO", juce::dontSendNotification);
     info.setColour (juce::Label::textColourId, col::muted);
     info.setFont (juce::Font (juce::FontOptions (11.5f)));
@@ -317,19 +378,6 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
     balance->slider.setTooltip ("Parallel / stereo split: Filter 1 <> Filter 2. In the middle both play at full level.");
     addAndMakeVisible (*balance);
 
-    for (int i = 0; i < kListFilter.size; ++i) model.addItem (kListFilter.labels[i], i + 1);
-    model.setTooltip ("The analogue model: as a Low Pass at its own slope it is the original circuit; "
-                      "with other types and slopes it gives the multimode filter its character (input stage, resonance, saturation). "
-                      "Choosing a model also selects its own slope.");
-    model.onChange = [this]
-    {
-        const int m = model.getSelectedId() - 1;
-        if (m < 0) return;
-        const auto& f = filterParams (sel);
-        setParam (f.mode, (float) m);
-        setParam (f.slope, (float) nativeFilterSlope (m));
-    };
-    addAndMakeVisible (model);
 
     for (int w = 0; w < 2; ++w)
     {
@@ -348,13 +396,7 @@ FilterPanel::FilterPanel (MegaSynthProcessor& p)
         box->setTooltip ("Which LFO LFO Amt uses (rate, shape and depth are on Modulation > LFOs)");
         addChildComponent (box);
 
-        auto* cb = charBox.add (new juce::ComboBox());
-        for (int i = 0; i < kListCharModel.size; ++i) cb->addItem (kListCharModel.labels[i], i + 1);
-        cb->addSeparator();
-        charAtt.add (new juce::AudioProcessorValueTreeState::ComboBoxAttachment (proc.apvts, kParamIds[f.charModel], tagParam (*cb, f.charModel)));
-        cb->setTooltip ("Character models (Formant, Power LP, Resonator, DJ Filter...): Off uses the Model, Type and Slope. "
-                        "A character model replaces them; the Character knob does what the model says below.");
-        addChildComponent (cb);
+        addChildComponent (picker.add (new FilterPicker (proc, f.mode, f.charModel, false)));
         const std::pair<int, const char*> ks[] = { { f.cutoff, "Cutoff" }, { f.res, "Resonance" }, { f.drive, "Drive" }, { f.mix, "Mix" },
                                                    { f.env, "Env Amt" }, { f.lfoAmt, "LFO Amt" }, { f.keyTrack, "Key Track" }, { f.charAmt, "Character" } };
         for (auto& [idx, cap] : ks)
@@ -394,7 +436,7 @@ void FilterPanel::show (int w)
     for (int i = 0; i < 2; ++i)
     {
         const bool v = i == sel;
-        type[i]->setVisible (v); slope[i]->setVisible (v); lfoSrc[i]->setVisible (v); charBox[i]->setVisible (v);
+        type[i]->setVisible (v); slope[i]->setVisible (v); lfoSrc[i]->setVisible (v); picker[i]->setVisible (v);
         for (auto* k : knobs[i]) k->setVisible (v);
     }
     sync();
@@ -412,7 +454,7 @@ void FilterPanel::sync()
     slope[sel]->setMask (filterSlopeMask (t));
     slope[sel]->setShown (filterSlopeMask (t) == 0 ? -2 : effectiveFilterSlope (t, s));
     type[sel]->repaint(); slope[sel]->repaint(); routing.repaint();
-    if (model.getSelectedId() != m + 1) model.setSelectedId (m + 1, juce::dontSendNotification);
+    picker[sel]->sync();
 
     const bool on2 = plain (P_filter2On) > 0.5f, parallel = juce::roundToInt (plain (P_filterRouting)) == 1;
     routing.setAlpha (on2 ? 1.0f : 0.45f);
@@ -422,7 +464,7 @@ void FilterPanel::sync()
     // the controls of a filter that's switched off are dimmed (they still work)
     const float a = sel == 1 && ! on2 ? 0.5f : 1.0f;
     for (auto* k : knobs[sel]) k->setAlpha (a);
-    type[sel]->setAlpha (a); slope[sel]->setAlpha (a); model.setAlpha (a);
+    type[sel]->setAlpha (a); slope[sel]->setAlpha (a); picker[sel]->setAlpha (a);
 
     const bool classic = t == FT_LP && effectiveFilterSlope (t, s) == nativeFilterSlope (m);
     const int cm = juce::roundToInt (plain (f.charModel));
@@ -430,10 +472,16 @@ void FilterPanel::sync()
     type[sel]->setMask (cm > 0 ? 0 : -1);
     slope[sel]->setMask (cm > 0 ? 0 : filterSlopeMask (t));
     if (cm > 0) slope[sel]->setShown (-2);
-    type[sel]->setAlpha (cm > 0 ? 0.35f : a); slope[sel]->setAlpha (cm > 0 ? 0.35f : a); model.setAlpha (cm > 0 ? 0.4f : a);
+    type[sel]->setAlpha (cm > 0 ? 0.35f : a); slope[sel]->setAlpha (cm > 0 ? 0.35f : a);
     auto* ck = knobs[sel][7];
     ck->setAlpha (cm > 0 ? a : 0.4f);
-    ck->slider.setTooltip (cm > 0 ? juce::String ("Character: ") + charModelInfo (cm).character : juce::String ("Character: used by the character models (choose one above)"));
+    ck->slider.setTooltip (cm > 0 ? juce::String ("Character: ") + charModelInfo (cm).character : juce::String ("Character: only the character models use it (this filter doesn't)"));
+    // the controls the chosen filter doesn't use are greyed out (they still keep their settings)
+    const bool resUsed = cm == 0 || charModelInfo (cm).usesRes, cutUsed = cm != CM_DJ;
+    knobs[sel][1]->setAlpha (resUsed ? a : 0.4f);
+    knobs[sel][0]->setAlpha (cutUsed ? a : 0.4f);
+    for (int i : { 4, 5, 6 }) knobs[sel][i]->setAlpha (cutUsed ? a : 0.4f);   // (envelope, LFO and key tracking move the cutoff)
+    knobs[sel][1]->slider.setTooltip (resUsed ? juce::String ("Resonance") : juce::String ("Resonance: this filter doesn't use it"));
     juce::String txt;
     if (sel == 1 && ! on2) txt = "Filter 2 is off: switch it on above.\n";
     if (cm > 0)
@@ -486,14 +534,12 @@ void FilterPanel::resized()
     typeCap.setBounds (14, 40, 200, 16);
     slopeCap.setBounds (418, 40, 200, 16);
     modelCap.setBounds (14, 98, 160, 16);
-    model.setBounds (14, 115, 170, 26);
-    charCap.setBounds (194, 98, 160, 16);
-    info.setBounds (376, 98, 384, 52);
+    info.setBounds (300, 98, 460, 52);
     for (int w = 0; w < 2; ++w)
     {
         type[w]->setBounds (14, 57, 390, 30);
         slope[w]->setBounds (418, 57, 252, 30);
-        charBox[w]->setBounds (194, 115, 170, 26);
+        picker[w]->setBounds (14, 115, 270, 26);
         int x = 10;
         for (int i : { 0, 1, 2, 3, 7 }) { knobs[w][i]->setBounds (x, 168, 62, 84); x += 64; }
         x = 340;

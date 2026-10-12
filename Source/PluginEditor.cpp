@@ -2773,17 +2773,29 @@ void MegaSynthEditor::buildPages()
                       "by anything shared by all notes (LFOs, macros, the mod wheel, the sidechain...): routes follow the newest note's "
                       "sources. (Master Volume, on the Mixer, stays before the effects as it always has, so older patches sound the same.)");
         mfs->add (new ParamToggle (proc, P_mfOn, "On", col::filter), 60, 40);
-        mfs->choice (P_mfType, "Type", 120);
-        mfs->choice (P_mfSlope, "Slope", 110);
-        mfs->choice (P_mfChar, "Character", 140)->box.setTooltip ("A character model (Formant, DJ Filter, Comb...) instead of the plain filter above");
+        mfs->add (new CaptionedPicker (proc, P_mfModel, P_mfChar, true, "Filter"), 180, 44);
+        auto* mfType = mfs->choice (P_mfType, "Type", 96);
+        auto* mfSlope = mfs->choice (P_mfSlope, "Slope", 86);
         mfs->newRow();
-        mfs->knob (P_mfCutoff, "Cutoff");
-        mfs->knob (P_mfRes, "Resonance");
+        auto* mfCut = mfs->knob (P_mfCutoff, "Cutoff");
+        auto* mfRes = mfs->knob (P_mfRes, "Resonance");
         mfs->knob (P_mfDrive, "Drive");
         mfs->knob (P_mfMix, "Mix");
-        mfs->knob (P_mfCharAmt, "Character");
+        auto* mfCh = mfs->knob (P_mfCharAmt, "Character");
         mfs->knob (P_outGain, "Output");
         auto* mfv = page->own (new MasterFilterView (proc));
+        // the controls the chosen filter doesn't use are greyed out (they keep their settings)
+        auto* mfTick = page->own (new StoreTicker());
+        mfTick->tick = [this, mfType, mfSlope, mfCut, mfRes, mfCh]
+        {
+            const int cm = juce::roundToInt (proc.param (P_mfChar)->convertFrom0to1 (proc.param (P_mfChar)->getValue()));
+            const bool resUsed = cm == 0 || charModelInfo (cm).usesRes;
+            mfType->setAlpha (cm > 0 ? 0.4f : 1.0f); mfSlope->setAlpha (cm > 0 ? 0.4f : 1.0f);
+            mfCh->setAlpha (cm > 0 ? 1.0f : 0.4f);
+            mfRes->setAlpha (resUsed ? 1.0f : 0.4f);
+            mfCut->setAlpha (cm == CM_DJ ? 0.4f : 1.0f);
+            mfCh->slider.setTooltip (cm > 0 ? juce::String ("Character: ") + charModelInfo (cm).character : juce::String ("Character: only the character models use it (this filter doesn't)"));
+        };
         page->onResize = [page, f, mfs, mfv]
         {
             const int g = 10, W = page->getWidth();
@@ -3959,4 +3971,18 @@ void MegaSynthEditor::timerCallback()
     }
 
     if (statusTicks > 0 && --statusTicks == 0) status.setText ({}, juce::dontSendNotification);
+}
+
+void MegaSynthEditor::timerCallbackForTests()
+{
+    timerCallback();
+    std::function<void (juce::Component*)> walk = [&] (juce::Component* c)
+    {
+        if (auto* fp = dynamic_cast<tgui::FilterPanel*> (c)) fp->refreshForTests();
+        if (auto* pk = dynamic_cast<tgui::FilterPicker*> (c)) pk->sync();
+        if (auto* mv = dynamic_cast<tgui::MasterFilterView*> (c)) mv->refreshForTests();
+        if (auto* st = dynamic_cast<tgui::StoreTicker*> (c); st != nullptr && st->tick && st->getParentComponent() != nullptr && st->getParentComponent()->isVisible()) st->tick();
+        for (auto* ch : c->getChildren()) walk (ch);
+    };
+    walk (this);
 }

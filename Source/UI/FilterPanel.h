@@ -41,6 +41,43 @@ private:
     int mask = -1, shown = -1, hover = -1, local = 0;
 };
 
+// One drop-down for every filter: the classic models and the character models, grouped by family.
+// It writes the model parameter and the character parameter together (a classic model sets
+// Character to Off; a character model leaves the model as it is, as before). On the Master Filter
+// (master = true) the model parameter is Master Filter Model, whose first entry is Clean (SVF).
+class FilterPicker : public juce::ComboBox, private juce::Timer
+{
+public:
+    FilterPicker (MegaSynthProcessor&, int modelParam, int charParam, bool master);
+    ~FilterPicker() override { stopTimer(); }
+    void sync();
+    // the item id for a model / character choice (and back)
+    static int idFor (bool master, int model, int charModel);
+private:
+    void timerCallback() override { if (isShowing()) sync(); }
+    void picked();
+    MegaSynthProcessor& proc;
+    const int modelParam, charParam;
+    const bool master;
+};
+
+// The Filter list with a caption above it (as the other drop-downs in sections)
+class CaptionedPicker : public juce::Component
+{
+public:
+    CaptionedPicker (MegaSynthProcessor& p, int modelParam, int charParam, bool master, const juce::String& cap) : picker (p, modelParam, charParam, master)
+    {
+        caption.setText (cap, juce::dontSendNotification);
+        caption.setColour (juce::Label::textColourId, juce::Colour (0xff8a97ab));
+        caption.setFont (juce::Font (juce::FontOptions (11.5f)));
+        addAndMakeVisible (caption); addAndMakeVisible (picker);
+    }
+    void resized() override { auto r = getLocalBounds(); caption.setBounds (r.removeFromTop (16)); picker.setBounds (r.removeFromTop (24)); }
+    FilterPicker picker;
+private:
+    juce::Label caption;
+};
+
 class FilterResponse : public juce::Component
 {
 public:
@@ -64,6 +101,7 @@ public:
     ~FilterPanel() override;
     void paint (juce::Graphics&) override;
     void resized() override;
+    void refreshForTests() { sync(); }
 private:
     void timerCallback() override;
     void sync();
@@ -75,14 +113,14 @@ private:
     Segmented which, routing;
     juce::OwnedArray<Segmented> type, slope;            // [filter]
     juce::OwnedArray<Knob> knobs[2];
-    juce::OwnedArray<juce::ComboBox> lfoSrc, charBox;
-    juce::OwnedArray<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoAtt, charAtt;
-    juce::ComboBox model;
+    juce::OwnedArray<juce::ComboBox> lfoSrc;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoAtt;
+    juce::OwnedArray<FilterPicker> picker;               // [filter]: the one Filter list (models and character models)
     juce::ToggleButton f2On { "Filter 2 On" }, split { "Stereo Split" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> f2OnAtt, splitAtt;
     juce::TextButton copyBtn { "Copy 1 > 2" };
     std::unique_ptr<Knob> balance;
-    juce::Label modelCap, lfoCap, typeCap, slopeCap, charCap, info;
+    juce::Label modelCap, lfoCap, typeCap, slopeCap, info;
     FilterResponse response;
 };
 

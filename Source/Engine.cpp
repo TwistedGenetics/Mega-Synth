@@ -1718,7 +1718,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         MasterFilter::Settings mf;
         mf.on = fs->f (P_mfOn) > 0.5f; mf.type = clampv (fs->i (P_mfType), 0, 3); mf.steep = fs->i (P_mfSlope) == 1;
         mf.cutoff = fs->f (P_mfCutoff); mf.res = fs->f (P_mfRes); mf.driveDb = fs->f (P_mfDrive); mf.mix = fs->f (P_mfMix);
-        mf.charModel = fs->i (P_mfChar); mf.charAmt = fs->f (P_mfCharAmt);
+        mf.charModel = fs->i (P_mfChar); mf.charAmt = fs->f (P_mfCharAmt); mf.model = fs->i (P_mfModel);
         masterFilter.process (L, R, numSamples, mf);
         outTrim.process (L, R, numSamples, fs->f (P_outGain));
     }

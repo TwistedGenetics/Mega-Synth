@@ -334,7 +334,7 @@ public:
     bool showPage (const juce::String& name);
     juce::StringArray allPageNames() const;
     juce::String currentPageName() const;
-    void timerCallbackForTests() { timerCallback(); }
+    void timerCallbackForTests();   // the editor's timer, and the pages' own refreshers (no message loop in tests)
 private:
     struct PageRef { int tab = -1, sub = -1; tgui::Page* page = nullptr; };
     std::map<juce::String, PageRef> pageIndex;

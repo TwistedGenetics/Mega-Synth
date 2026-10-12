@@ -3909,6 +3909,19 @@ int main()
 
         }
         {
+            // the fourteenth key (C1 + 13 = C#2) plays Akai Stretch, and the pad works in the synth
+            auto p = make(); setP (*p, P_pfKeys, 1.0f); setP (*p, P_pfQuant, 0.0f); setP (*p, P_pfAkaiPitch, 12.0f);
+            juce::AudioBuffer<float> b (2, 256); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 36 + 13, (juce::uint8) 100), 0);
+            p->processBlock (b, m);
+            CHECK (p->param (P_pfAkai)->getValue() > 0.5f && p->getEngine().perf().state (PF::Akai) == PF::On, "the 14th pad key plays Akai Stretch");
+            auto q = make();
+            juce::AudioBuffer<float> x, y;
+            setP (*q, P_pfAkai, 0.0f); render (*q, 0.6, chord (0.0, 0.6, { 57 }), &x);
+            auto q2 = make(); setP (*q2, P_pfAkai, 1.0f); setP (*q2, P_pfQuant, 0.0f); setP (*q2, P_pfAkaiPitch, 12.0f); render (*q2, 0.6, chord (0.0, 0.6, { 57 }), &y);
+            float d = 0; for (int i = (int) (0.3 * sr); i < (int) (0.6 * sr); ++i) d = std::max (d, std::abs (x.getSample (0, i) - y.getSample (0, i)));
+            CHECK (d > 0.01f, "Akai Stretch changes the synth's sound when its parameter is on");
+        }
+        {
             // the key isn't played as a note; Latch makes a key toggle
             auto p = make(); setP (*p, P_pfKeys, 1.0f);
             juce::AudioBuffer<float> b (2, 256); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100), 0);
@@ -3996,6 +4009,7 @@ int main()
             walk (ed.get());
             juce::StringArray missing;
             for (int i = P_pfRoll; i <= P_pfSpring2; ++i) if (got.count (i) == 0) missing.add (kParamIds[i]);
+            for (int i = P_pfAkai; i <= P_pfAkaiMix; ++i) if (got.count (i) == 0) missing.add (kParamIds[i]);
             CHECK (missing.isEmpty(), "every Performance FX parameter has a control" + (missing.isEmpty() ? juce::String() : ": " + missing.joinIntoString (", ")));
         }
         // 10. CPU: the stage idle, one pad, and every pad at once
@@ -4012,7 +4026,93 @@ int main()
                 return juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0) / 10.0 * 100.0;
             };
             std::cout << "  CPU (% of a core): idle " << juce::String (cost (0), 3) << "  Beat Repeat " << juce::String (cost (1), 3)
-                      << "  all 13 pads " << juce::String (cost (PF::kPads), 3) << std::endl;
+                      << "  all 14 pads " << juce::String (cost (PF::kPads), 3) << std::endl;
+            // Akai Stretch alone, per mode
+            juce::String line;
+            for (int mode = 0; mode < 4; ++mode)
+            {
+                PF fx; fx.prepare (sr); PF::Settings st; st.quant = 0; st.pad[PF::Akai] = true; st.akaiMode = mode; st.akaiPitch = mode == 0 ? 7.0f : 0.0f;
+                std::vector<float> l (256), r (256);
+                PF::Clock c = ck;
+                const int blocks = (int) (10.0 * sr / 256);
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                for (int b = 0; b < blocks; ++b) { sine (l, 220.0, 0.3f, b * 256); r = l; fx.process (l.data(), r.data(), 256, st, c); c.beat += 256 * c.beatInc; }
+                line << (mode == 0 ? "Crunch " : mode == 1 ? "Slow " : mode == 2 ? "Fast " : "Halftime ") << juce::String (juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0) / 10.0 * 100.0, 3) << "%  ";
+            }
+            std::cout << "  CPU, Akai Stretch (% of a core, the same at every Quality): " << line << std::endl;
+        }
+        // 11. Akai Stretch: pitch and length in each mode
+        {
+            auto peakHz = [&] (const std::vector<float>& x, int s0)
+            {
+                const int order = 14, N = 1 << order;
+                std::vector<float> b ((size_t) N * 2, 0.0f);
+                for (int i = 0; i < N && s0 + i < (int) x.size(); ++i) b[(size_t) i] = x[(size_t) (s0 + i)] * (0.5f - 0.5f * (float) std::cos (2.0 * kPi * i / (N - 1)));
+                juce::dsp::FFT fft (order); fft.performFrequencyOnlyForwardTransform (b.data());
+                int k = 2; for (int i = 2; i < N / 2 - 1; ++i) if (b[(size_t) i] > b[(size_t) k]) k = i;
+                const double a = b[(size_t) k - 1], c = b[(size_t) k], d = b[(size_t) k + 1];
+                return (k + 0.5 * (a - d) / (a - 2.0 * c + d)) * sr / N;
+            };
+            // tone bursts on every beat (120 BPM: 0.5 s apart), 60 ms of 440 Hz each
+            auto bursts = [&] (int N)
+            {
+                std::vector<float> v ((size_t) N, 0.0f);
+                for (int i = 0; i < N; ++i) { const double t = i / sr, ph = std::fmod (t, 0.5); if (ph < 0.06) v[(size_t) i] = 0.5f * (float) std::sin (2.0 * kPi * 440.0 * t) * (float) std::min (1.0, std::min (ph, 0.06 - ph) / 0.003); }
+                return v;
+            };
+            // the onsets (rising past a threshold) after a time
+            auto onsets = [&] (const std::vector<float>& x, int from)
+            {
+                std::vector<double> o; float env = 0.0f; bool on = false;
+                for (int i = from; i < (int) x.size(); ++i)
+                {
+                    env = std::max (std::abs (x[(size_t) i]), env * 0.999f);
+                    if (! on && env > 0.2f) { on = true; o.push_back (i / sr); }
+                    if (on && env < 0.02f) on = false;
+                }
+                return o;
+            };
+            auto spacing = [] (const std::vector<double>& o) { double s = 0; int n = 0; for (size_t i = 1; i < o.size(); ++i) { s += o[i] - o[i - 1]; ++n; } return n > 0 ? s / n : 0.0; };
+            const int N = (int) (6.0 * sr), press = (int) (2.0 * sr);
+            auto run = [&] (int mode, bool hard, float pitch, std::vector<float>& out)
+            {
+                PF fx; fx.prepare (sr); PF::Settings st; st.quant = 3; st.akaiMode = mode; st.akaiHard = hard; st.akaiPitch = pitch;
+                std::vector<float> r;
+                runFx (fx, bursts (N), out, r, { { PF::Akai, press, N } }, st, ck);
+                return fx.lastEngagedBeat (PF::Akai);
+            };
+            juce::StringArray bad;
+            struct M { const char* name; int mode; bool hard; double spacing; };
+            const M ms[] = { { "Slow x0.5", PF::AkaiSlow, true, 1.0 }, { "Slow x0.75", PF::AkaiSlow, false, 0.5 / 0.75 }, { "Fast x2", PF::AkaiFast, true, 0.25 },
+                             { "Fast x1.5", PF::AkaiFast, false, 0.5 / 1.5 }, { "Halftime", PF::AkaiHalftime, true, 1.0 }, { "Crunch", PF::AkaiCrunch, true, 0.5 } };
+            for (auto& m : ms)
+            {
+                std::vector<float> out;
+                const double eng = run (m.mode, m.hard, 0.0f, out);
+                const auto o = onsets (out, press + (int) (0.05 * sr));
+                const double sp = spacing (o);
+                // the pitch of one burst (Akai Cyclic flutters: within a line or two of 1 / cycle)
+                double hz = 0.0;
+                if (! o.empty())
+                {
+                    std::vector<float> one ((size_t) (1 << 14), 0.0f);
+                    const int s0 = (int) (o.front() * sr);
+                    for (int i = 0; i < (int) (0.05 * sr) && s0 + i < (int) out.size(); ++i) one[(size_t) i] = out[(size_t) (s0 + i)];
+                    hz = peakHz (one, 0);
+                }
+                std::cout << "  Akai Stretch " << m.name << ": hits every " << juce::String (sp, 3) << " s (expect " << juce::String (m.spacing, 3) << "), pitch "
+                          << juce::String (hz, 1) << " Hz, engaged on beat " << juce::String (eng, 4) << std::endl;
+                if (o.size() < 3 || std::abs (sp - m.spacing) > 0.02 * m.spacing + 0.004 || std::abs (hz - 440.0) > 30.0 || std::abs (eng - std::round (eng)) > 1e-6) bad.add (m.name);
+            }
+            CHECK (bad.isEmpty(), "Akai Stretch: each mode's timing, the pitch kept, starting on the beat" + (bad.isEmpty() ? juce::String() : ": " + bad.joinIntoString (", ")));
+            // Crunch with Pitch: time kept, pitch moved (a steady tone)
+            {
+                std::vector<float> in ((size_t) N); sine (in, 330.0, 0.4f);
+                PF fx; fx.prepare (sr); PF::Settings st; st.quant = 0; st.akaiMode = PF::AkaiCrunch; st.akaiPitch = 12.0f;
+                std::vector<float> l, r; runFx (fx, in, l, r, { { PF::Akai, press, N } }, st, ck);
+                const double hz = peakHz (l, press + (int) (0.2 * sr));
+                CHECK (std::abs (hz - 660.0) < 30.0, "Akai Crunch at +12: the pitch goes up an octave in real time (" + juce::String (hz, 1) + " Hz)");
+            }
         }
     };
     // ---- Granular Synth
@@ -5260,6 +5360,7 @@ int main()
         auto dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders"); dir.createDirectory();
         const double bpm = 172.0, inc = bpm / 60.0 / sr;
         const int total = (int) std::ceil (32.0 / inc) + (int) (0.5 * sr);
+        std::function<void (double)> onBeat;   // (demo 7: changes settings as it plays)
         auto renderTo = [&] (MegaSynthProcessor& p, const juce::String& name, std::vector<std::pair<int, juce::MidiMessage>> ev)
         {
             FakeHead head; p.setPlayHead (&head);
@@ -5272,6 +5373,7 @@ int main()
                 head.info.setIsPlaying (pos < (int) (32.0 / inc)); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
                 head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
                 juce::MidiBuffer m; for (auto& e : ev) if (e.first >= pos && e.first < pos + n) m.addEvent (e.second, e.first - pos);
+                if (onBeat) onBeat (ppq);
                 buf.clear(); p.processBlock (buf, m); ppq += n * inc;
                 for (int c = 0; c < 2; ++c) all.copyFrom (c, pos, buf, c, 0, n);
             }
@@ -5348,6 +5450,37 @@ int main()
             for (int b = 0; b < 8; ++b) { ev.push_back ({ (int) (b * 4.0 / inc), juce::MidiMessage::noteOn (1, notes[b], (juce::uint8) 100) });
                                           ev.push_back ({ (int) ((b * 4.0 + 2.5) / inc), juce::MidiMessage::noteOff (1, notes[b]) }); }
             renderTo (*p, dryVersion == 1 ? "break_demo_6b_sub_and_break_dry_172.wav" : "break_demo_6a_all_through_effects_172.wav", ev);
+        }
+        // 7. Akai Stretch on the whole mix: bars 1-2 dry, 3 Crunch (+5 st), 4 Slow x0.5, 5 Fast x2, 6 Halftime, 7 Crunch (-5 st), 8 dry
+        {
+            auto p = make(); p->loadFactoryPreset (32);
+            setP (*p, P_pfQuant, 5.0f);   // (each change waits for the bar)
+            std::vector<std::pair<int, juce::MidiMessage>> ev;
+            for (int b = 0; b < 8; ++b) { ev.push_back ({ (int) (b * 4.0 / inc), juce::MidiMessage::noteOn (1, b % 4 == 3 ? 43 : 45, (juce::uint8) 90) });
+                                          ev.push_back ({ (int) ((b * 4.0 + 3.5) / inc), juce::MidiMessage::noteOff (1, b % 4 == 3 ? 43 : 45) }); }
+            // just before each bar line: let go, set the next mode, press again (Quantise: it engages on the bar)
+            int offDone = -1, onDone = -1;
+            onBeat = [&] (double beat)
+            {
+                struct S { bool on; int mode; float pitch; };
+                static const S plan[9] = { { false, 0, 0 }, { false, 0, 0 }, { true, 0, 5 }, { true, 1, 0 }, { true, 2, 0 }, { true, 3, 0 }, { true, 0, -5 }, { false, 0, 0 }, { false, 0, 0 } };
+                const int nextBar = (int) std::floor (beat / 4.0) + 1;
+                const double toLine = nextBar * 4.0 - beat;
+                if (toLine < 0.12 && offDone != nextBar)
+                {
+                    offDone = nextBar;
+                    const auto& pl = plan[juce::jlimit (0, 8, nextBar)];
+                    setP (*p, P_pfAkai, 0.0f);
+                    setP (*p, P_pfAkaiMode, (float) pl.mode); setP (*p, P_pfAkaiPitch, pl.pitch); setP (*p, P_pfAkaiSpeed, 1.0f);
+                }
+                else if (toLine < 0.06 && onDone != nextBar && offDone == nextBar)
+                {
+                    onDone = nextBar;
+                    if (plan[juce::jlimit (0, 8, nextBar)].on) setP (*p, P_pfAkai, 1.0f);
+                }
+            };
+            renderTo (*p, "perf_demo_akai_stretch_172.wav", ev);
+            onBeat = nullptr;
         }
         // 5. fills: Break Frankenstein's chain with an Auto Fill every 4 bars (one bar long, ending the
         //    phrase), each fill played from Break 3 over the groove, and the pattern back on the downbeat
@@ -5426,11 +5559,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.58.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.60.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.58 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list and the routes added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.60 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes and Akai Stretch added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",

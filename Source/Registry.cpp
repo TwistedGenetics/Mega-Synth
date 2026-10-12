@@ -200,7 +200,7 @@ namespace
             if (id.startsWith ("gs")) m.unit = (id == "gsSize" || id == "gsSpray") ? "ms" : id == "gsDensity" ? "/s" : (id == "gsSemi" || id == "gsPitchRand") ? "st"
                                              : id == "gsCents" ? "cents" : id == "gsRoot" ? "note" : juce::String();
             if (id.startsWith ("bc") || id.startsWith ("bs")) m.unit = id == "bcChopLatency" ? "ms" : id.startsWith ("bcTempo") ? "BPM" : id == "bcCycle" ? "ms" : id == "bcPitch" ? "st" : (id == "bcKeyBase" || id == "bsFillKey") ? "note" : juce::String();
-            if (id.startsWith ("pf")) m.unit = id == "pfCrushRate" ? "Hz" : id == "pfPitchGlide" ? "s" : id == "pfPitchAmt" ? "st" : id == "pfTapeTime" ? "beats" : juce::String();
+            if (id.startsWith ("pf")) m.unit = id == "pfCrushRate" ? "Hz" : id == "pfPitchGlide" ? "s" : (id == "pfPitchAmt" || id == "pfAkaiPitch") ? "st" : id == "pfTapeTime" ? "beats" : id == "pfAkaiCycle" ? "ms" : juce::String();
             if (id == "mfCutoff") m.unit = "Hz";
             if (id == "mfDrive" || id == "outGain") m.unit = "dB";
             m.path = juce::String (categoryName (m.category)).toLowerCase() + "." + id;

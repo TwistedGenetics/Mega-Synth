@@ -109,11 +109,12 @@ inline juce::String formatParam (int idx, float v)
     if (id == "gsPitchRand") return fixed (v, 2) + " st";
     if (id == "pfCrushRate") return v >= 1000 ? fixed (v / 1000.0, 1) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz";
     if (id == "pfTapeTime") return fixed (v, 2) + (std::abs (v - 1.0f) < 1e-3f ? " beat" : " beats");
-    if (id == "pfPitchAmt") return fixed (v, 1) + " st";
+    if (id == "pfPitchAmt" || id == "pfAkaiPitch") return fixed (v, 1) + " st";
+    if (id == "pfAkaiCycle") return fixed (v, 1) + " ms";
     if (id == "pfPitchGlide") return fixed (v, 2) + " s";
     if (id == "pfCrushBits") return fixed (v, 1) + " bit";
     if (id == "pfDjPos") return std::abs (v) < 0.005f ? juce::String ("centre") : (v < 0 ? "LP " : "HP ") + juce::String (juce::roundToInt (std::abs (v) * 100.0f)) + "%";
-    if (id == "pfGateDepth" || id == "pfDjRes" || id == "pfVinylAmt" || id == "pfEchoFb" || id == "pfEchoMix" || id == "pfVerbSize" || id == "pfVerbMix")
+    if (id == "pfGateDepth" || id == "pfDjRes" || id == "pfVinylAmt" || id == "pfEchoFb" || id == "pfEchoMix" || id == "pfVerbSize" || id == "pfVerbMix" || id == "pfAkaiXfade" || id == "pfAkaiMix")
         return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id == "fbTone") return v >= 1000 ? fixed (v / 1000.0, 1) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz";
     if (id == "spShift") return (v > 0 ? "+" : "") + fixed (v, 1) + " Hz";
@@ -180,7 +181,7 @@ inline float parseParam (int idx, const juce::String& text)
     if ((id == "bcLevel1" || id == "bcLevel2" || id == "bcLevel3" || id == "bsAmount" || id == "bsVarAmount" || id == "bsAutoFillProb") && text.contains ("%")) return v / 100.0f;
     if ((id == "bcXfade" || id == "bcVelSens" || id == "bcLevel" || id == "bcSens" || id == "bcSens2" || id == "bcSens3" || id == "bsSwing") && text.contains ("%")) return v / 100.0f;
     if (id == "pfDjPos") { const float n = text.retainCharacters ("-0123456789.").getFloatValue(); const float a = text.contains ("%") ? n / 100.0f : n; return text.containsIgnoreCase ("lp") ? -std::abs (a) : (text.containsIgnoreCase ("centre") ? 0.0f : a); }
-    if ((id == "pfGateDepth" || id == "pfDjRes" || id == "pfVinylAmt" || id == "pfEchoFb" || id == "pfEchoMix" || id == "pfVerbSize" || id == "pfVerbMix") && text.contains ("%")) return v / 100.0f;
+    if ((id == "pfGateDepth" || id == "pfDjRes" || id == "pfVinylAmt" || id == "pfEchoFb" || id == "pfEchoMix" || id == "pfVerbSize" || id == "pfVerbMix" || id == "pfAkaiXfade" || id == "pfAkaiMix") && text.contains ("%")) return v / 100.0f;
     if (id.startsWith ("lfo") && id.endsWith ("Phase") && ! text.contains ("%")) return juce::jlimit (0.0f, 1.0f, v / 360.0f);   // degrees
     if ((id == "filterDrive" || id == "filter2Drive") && text.containsIgnoreCase ("db")) return std::pow (10.0f, v / 20.0f);
     if (text.containsIgnoreCase ("khz") || text.trim().endsWithIgnoreCase ("k")) return v * 1000.0f;

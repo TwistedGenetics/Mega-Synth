@@ -1819,7 +1819,9 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         // ---- Performance FX (bypassed, untouched, while no pad is engaged)
         {
             PerfFx::Settings pf;
-            for (int k = 0; k < PerfFx::kPads; ++k) pf.pad[k] = fs->v[P_pfRoll + k] > 0.5f;
+            for (int k = 0; k < PerfFx::kPads; ++k) pf.pad[k] = fs->v[pfPadParam (k)] > 0.5f;
+            pf.akaiMode = clampv (fs->i (P_pfAkaiMode), 0, 3); pf.akaiHard = fs->i (P_pfAkaiSpeed) == 1; pf.akaiSync = clampv (fs->i (P_pfAkaiSync), 0, 2);
+            pf.akaiCycleMs = fs->f (P_pfAkaiCycle); pf.akaiXfade = fs->f (P_pfAkaiXfade); pf.akaiPitch = fs->f (P_pfAkaiPitch); pf.akaiMix = fs->f (P_pfAkaiMix);
             pf.quant = clampv (fs->i (P_pfQuant), 0, 5); pf.rollRate = clampv (fs->i (P_pfRollRate), 0, 5);
             pf.stutterRate = clampv (fs->i (P_pfStutterRate), 0, 2); pf.gatePattern = clampv (fs->i (P_pfGatePattern), 0, 7);
             pf.echoTime = clampv (fs->i (P_pfEchoTime), 0, 4);

@@ -133,6 +133,12 @@ inline const char* const kSubRouteKeys[]   = { "normal","drypre","drypost" };
 inline const char* const kSubRouteLabels[] = { "Normal","Dry, before Master Filter","Dry, after Master Filter" };
 inline const char* const kBcFxRouteKeys[]   = { "thru","skipfx","skipfxpf","skipall" };
 inline const char* const kBcFxRouteLabels[] = { "Through the effects","Skip effects (Perf FX on)","Skip effects and Perf FX","Skip all (after Master Filter)" };
+inline const char* const kPfAkaiModeKeys[]   = { "crunch","slow","fast","halftime" };
+inline const char* const kPfAkaiModeLabels[] = { "Crunch (x1)","Slow","Fast","Halftime" };
+inline const char* const kPfAkaiSpeedKeys[]   = { "gentle","hard" };
+inline const char* const kPfAkaiSpeedLabels[] = { "x0.75 / x1.5","x0.5 / x2" };
+inline const char* const kPfAkaiSyncKeys[]   = { "free","32","64" };
+inline const char* const kPfAkaiSyncLabels[] = { "Cycle: free (ms)","Cycle: 1/32","Cycle: 1/64" };
 inline const char* const kMfModelKeys[]   = { "clean","lp","sallenkey","ladder","steiner","svf","ota","polivoks","swcap","acid","ms20","oberheim","sem","tb303","moogfat","arpodyssey","cs15","sh2" };
 inline const char* const kMfModelLabels[] = { "Clean (SVF)","Standard LP","Sallen-Key LP","Ladder","Steiner-Parker","State Variable","Discrete OTA","Polivoks","Switched Capacitor","Acid Filter Approx","MS-20","Oberheim","SEM","TB-303","Minimoog - Fat Cat","Arp Odyssey","CS-15","SH-2" };
 inline const char* const kMfSlopeKeys[]   = { "12","24" };
@@ -361,14 +367,18 @@ inline const ChoiceList kListBsAltBreak = TG_LIST(kBsAltBreak);
 inline const ChoiceList kListBsToolSrc  = TG_LIST(kBsToolSrc);
 inline const ChoiceList kListMfModel    = TG_LIST(kMfModel);
 inline const ChoiceList kListSubRoute   = TG_LIST(kSubRoute);
+inline const ChoiceList kListPfAkaiMode = TG_LIST(kPfAkaiMode);
+inline const ChoiceList kListPfAkaiSpeed = TG_LIST(kPfAkaiSpeed);
+inline const ChoiceList kListPfAkaiSync = TG_LIST(kPfAkaiSync);
 inline const ChoiceList kListBcFxRoute  = TG_LIST(kBcFxRoute);
 inline const ChoiceList kListBsFillMode = TG_LIST(kBsFillMode);
 inline const ChoiceList kListBsFillLen  = TG_LIST(kBsFillLen);
 inline const ChoiceList kListBsFillStart = TG_LIST(kBsFillStart);
 inline const ChoiceList kListBsFillRet  = TG_LIST(kBsFillRet);
 inline const ChoiceList kListBsAutoFill = TG_LIST(kBsAutoFill);
-// Performance FX pads, in the order they're processed: P_pfRoll + k
-constexpr int kPfPads = 13;
+// Performance FX pads: P_pfRoll + k for the first thirteen, then Akai Stretch (added later, so its
+// parameter sits at the end of the list): use pfPadParam (k)
+constexpr int kPfPads = 14;
 
 // LFO extras (state version 7): 8 parameters per LFO, LFO k at P_lfo1Sync + kLfoXStride * k
 constexpr int kLfoXStride = 8;
@@ -1122,7 +1132,15 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(mfModel,     "Master Filter Model", kListMfModel, 0) \
     C(subRoute,    "Sub Route", kListSubRoute, 0) \
     C(bcFxRoute,   "Break FX Route", kListBcFxRoute, 0) \
-    B(subMono,     "Sub Mono Below 120 Hz", false)
+    B(subMono,     "Sub Mono Below 120 Hz", false) \
+    B(pfAkai,      "Perf Akai Stretch", false) \
+    C(pfAkaiMode,  "Perf Akai Mode", kListPfAkaiMode, 0) \
+    C(pfAkaiSpeed, "Perf Akai Speed", kListPfAkaiSpeed, 1) \
+    C(pfAkaiSync,  "Perf Akai Cycle Sync", kListPfAkaiSync, 0) \
+    F(pfAkaiCycle, "Perf Akai Cycle Length", 10, 200, 40, 0.1, 50) \
+    F(pfAkaiXfade, "Perf Akai Crossfade", 0, 1, 0.35, 0.01, 0) \
+    F(pfAkaiPitch, "Perf Akai Pitch", -12, 12, 0, 0.1, 0) \
+    F(pfAkaiMix,   "Perf Akai Mix", 0, 1, 1, 0.01, 0)
 
 enum ParamIndex
 {
@@ -1137,6 +1155,8 @@ enum ParamIndex
 #undef TG_A
     P_COUNT
 };
+inline int pfPadParam (int k) { return k < 13 ? P_pfRoll + k : P_pfAkai; }
+
 
 inline const char* const kParamIds[] = {
 #define TG_F(id, name, mn, mx, df, st, sk) #id,

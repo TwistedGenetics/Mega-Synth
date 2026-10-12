@@ -383,12 +383,19 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
 
 ## Performance FX (Perform > Performance FX)
 
-Thirteen pads to play live on the whole mix. They sit after the effects rack and before the Master Filter and Output. With no pad engaged, and the echo and reverb tails gone, the stage doesn't touch the audio at all, so patches sound exactly as before.
+Fourteen pads to play live on the whole mix. They sit after the effects rack and before the Master Filter and Output. With no pad engaged, and the echo and reverb tails gone, the stage doesn't touch the audio at all, so patches sound exactly as before.
 
 - **Playing:** hold a pad to play it, and let go to stop. With **Latch** on, a click switches a pad on and the next click switches it off.
 - **Quantise** (Off, 1/16, 1/8, 1/4, 1/2, 1 bar; default 1/16): a pressed pad waits for the next line of that grid, counted from the bar, then fades in over 4 ms. Letting go fades it out at once. The grid follows the DAW's position while it plays (a pad shows an amber outline while it waits), and the synth's own tempo otherwise.
 - **Several pads at once** run in a fixed order, numbered on the pads:
-  1. Time pads (the last one pressed wins): **Beat Repeat** (1/4, 1/8, 1/16, 1/32, 1/8T, 1/16T), **Reverse** (the last bar, backwards), **Tape Stop**, **Tape Start**, **Backspin**. Tape Time sets the stop, start and spin length in beats.
+  1. Time pads (the last one pressed wins): **Beat Repeat** (1/4, 1/8, 1/16, 1/32, 1/8T, 1/16T), **Reverse** (the last bar, backwards), **Tape Stop**, **Tape Start**, **Backspin**, **Akai Stretch**. Tape Time sets the stop, start and spin length in beats.
+     - **Akai Stretch:** the Break Chopper's Akai Cyclic (S1000-style) time-stretch on the whole mix. Its modes:
+       - **Crunch:** real time, one cycle late; **Akai Pitch** shifts it through the cycles.
+       - **Slow:** from the press at x0.75 or x0.5, pitch kept.
+       - **Fast:** the last bar looped at x1.5 or x2, pitch kept.
+       - **Halftime:** the last bar stretched over two.
+     - **Its settings:** **Akai Cycle** (10-200 ms, or synced to 1/32 or 1/64), **Akai Xfade**, **Akai Pitch** (±12 st) and **Akai Mix**. It quantises, latches, fades in and out and plays from MIDI keys like the others.
+     - **Approximate:** it's the same algorithm as the chopper's Akai Cyclic, written again here (the chopper's code is untouched, so breaks render exactly as before). Its flutter is at 1 / Cycle Length. Slow keeps falling behind, so after about a minute at x0.5 it starts again from now. The optional sampler Colour isn't included.
   2. **Pitch Down**: down by Pitch Amount (an octave by default), gliding over Glide, then gliding back up when released.
   3. **Stutter**: a hard gate at 1/16, 1/32 or 1/64.
   4. **Trance Gate**: 8 sixteen-step patterns, with a Depth control.
@@ -402,11 +409,11 @@ Thirteen pads to play live on the whole mix. They sit after the effects rack and
   - **Assign X / Assign Y** adds the route; change its depth in the Mod Matrix. The XY sources are also in every knob's "Modulate with" menu.
   - **Spring:** the pad glides back to the centre when you let go. Switch it off and the pad stays where you leave it.
 - **MIDI:**
-  - **MIDI Keys** plays the 13 pads from 13 keys starting at C1, C2, C3, C4, C5 or C6. The key name is shown on each pad. Those keys play pads, not notes.
+  - **MIDI Keys** plays the 14 pads from 14 keys starting at C1, C2, C3, C4, C5 or C6. The key name is shown on each pad. Those keys play pads, not notes.
   - Right-click a pad for MIDI Learn (CC 64 and above switches it on).
   - Every pad and setting is a real, automatable parameter.
 - **What's saved:** everything is saved in patches, projects, undo and A/B. It isn't part of Mutate or the scenes. Older patches and projects load with every pad off.
-- **CPU:** about 0.08% of one core when idle (it keeps 8 s of recent audio for Reverse and Backspin), 0.4% with one pad, and 5.5% with all 13 at once. It's the same at every Quality setting.
+- **CPU:** about 0.08% of one core when idle (it keeps 8 s of recent audio for Reverse and Backspin), 0.4% with one pad, and about 3-6% with all 14 at once (it varies from run to run on the test machine). Akai Stretch on its own is 0.4-0.5% in every mode. It's the same at every Quality setting.
 - **Approximations:**
   - The tape and backspin pads read the recent audio at a changing speed, with linear interpolation (fine for this; not a high-end resampler).
   - Pitch Down is a two-tap delay-line shifter (50 ms window), so it has a little of that classic "chorusy" pitch-shift sound rather than a clean formant-preserving shift.

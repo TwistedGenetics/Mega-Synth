@@ -869,7 +869,7 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
         const int nn = m.getNoteNumber();
         if (pb >= 0 && nn >= pb && nn < pb + kPfPads)
         {
-            const int idx = P_pfRoll + (nn - pb);
+            const int idx = pfPadParam (nn - pb);
             float v;
             if (snap.i (P_pfLatch) != 0) { if (! m.isNoteOn()) return; v = snap.v[idx] > 0.5f ? 0.0f : 1.0f; }   // latched: each press toggles
             else v = m.isNoteOn() ? 1.0f : 0.0f;
@@ -1637,6 +1637,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 20) setFillDefaultsForOldPatch();
     if (version < 21) setMfModelDefaultsForOldPatch();
     if (version < 22) setRouteDefaultsForOldPatch();
+    if (version < 23) setAkaiDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1869,6 +1870,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("bsFillMode")) setFillDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("mfModel")) setMfModelDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("subRoute")) setRouteDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("pfAkai")) setAkaiDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2133,6 +2135,15 @@ void MegaSynthProcessor::setBreak3DefaultsForOldPatch()
 void MegaSynthProcessor::setChopDefaultsForOldPatch()
 {
     for (int i = P_bcChopMode; i <= P_bcMarkerSnap; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setAkaiDefaultsForOldPatch()
+{
+    for (int i = P_pfAkai; i <= P_pfAkaiMix; ++i)
     {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();

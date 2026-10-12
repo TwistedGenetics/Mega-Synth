@@ -14,13 +14,13 @@ class PerfPad : public juce::Component, public juce::SettableTooltipClient
 public:
     PerfPad (MegaSynthProcessor& p, int padIndex, juce::Colour c) : proc (p), pad (padIndex), colour (c)
     {
-        tagParam (*this, tg::P_pfRoll + pad);   // right-click: MIDI Learn
+        tagParam (*this, tg::pfPadParam (pad));   // right-click: MIDI Learn
         setTooltip (juce::String (tg::PerfFx::padName (pad)) + ": hold to play (Latch: click on / off). Right-click for MIDI Learn.");
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (e.mods.isPopupMenu()) return;
-        auto* prm = proc.param (tg::P_pfRoll + pad);
+        auto* prm = proc.param (tg::pfPadParam (pad));
         prm->beginChangeGesture();
         if (latched()) prm->setValueNotifyingHost (prm->getValue() > 0.5f ? 0.0f : 1.0f);
         else prm->setValueNotifyingHost (1.0f);
@@ -31,7 +31,7 @@ public:
     {
         if (e.mods.isPopupMenu() || ! holding) return;
         holding = false;
-        auto* prm = proc.param (tg::P_pfRoll + pad);
+        auto* prm = proc.param (tg::pfPadParam (pad));
         if (! latched()) prm->setValueNotifyingHost (0.0f);
         prm->endChangeGesture();
         repaint();
@@ -39,7 +39,7 @@ public:
     void refresh()
     {
         const int s = proc.getEngine().perf().padShown[pad].load (std::memory_order_relaxed);
-        const bool want = proc.param (tg::P_pfRoll + pad)->getValue() > 0.5f;
+        const bool want = proc.param (tg::pfPadParam (pad))->getValue() > 0.5f;
         const int key = (s << 1) | (want ? 1 : 0);
         if (key != shown || s == 1) { shown = key; repaint(); }
     }
@@ -67,7 +67,7 @@ public:
         g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
         g.drawFittedText (tg::PerfFx::padName (pad), getLocalBounds().reduced (8, 14), juce::Justification::centred, 2);
     }
-    static int stageOf (int k) { return k < tg::PerfFx::kTimePads ? 1 : k - tg::PerfFx::kTimePads + 2; }
+    static int stageOf (int k) { return (k < tg::PerfFx::kTimePads || k == tg::PerfFx::Akai) ? 1 : k - tg::PerfFx::kTimePads + 2; }
 private:
     bool latched() const { return proc.param (tg::P_pfLatch)->getValue() > 0.5f; }
     int keyBase() const

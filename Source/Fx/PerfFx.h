@@ -5,7 +5,7 @@
 // they run in the fixed order below. With nothing engaged (and the echo / reverb tails gone) the
 // stage doesn't touch the audio at all.
 //
-//   1  Time:   Beat Repeat, Reverse, Tape Stop, Tape Start, Backspin  (the last one engaged wins)
+//   1  Time:   Beat Repeat, Reverse, Tape Stop, Tape Start, Backspin, Akai Stretch  (the last one engaged wins)
 //   2  Pitch Down       3  Stutter Gate     4  Trance Gate     5  DJ Filter
 //   6  Bitcrush         7  Vinyl            8  Echo Throw      9  Reverb Throw / Freeze
 #include <JuceHeader.h>
@@ -19,7 +19,8 @@ namespace tg
 class PerfFx
 {
 public:
-    enum Pad { Roll, Reverse, TapeStop, TapeStart, Brake, PitchDown, Stutter, Gate, Dj, Crush, Vinyl, Echo, Verb, kPads };
+    enum Pad { Roll, Reverse, TapeStop, TapeStart, Brake, PitchDown, Stutter, Gate, Dj, Crush, Vinyl, Echo, Verb, Akai, kPads };
+    enum AkaiMode { AkaiCrunch, AkaiSlow, AkaiFast, AkaiHalftime };
     enum State { Off, Pending, On, Releasing };
     static constexpr int kTimePads = 5;
 
@@ -30,13 +31,16 @@ public:
         float tapeBeats = 1.0f, glide = 0.3f, pitchSemis = -12.0f, gateDepth = 1.0f, djPos = -0.6f, djRes = 0.3f;
         float crushBits = 6.0f, crushRate = 8000.0f, vinyl = 0.6f, echoFb = 0.6f, echoMix = 0.7f, verbSize = 0.8f, verbMix = 0.6f;
         bool verbFreeze = false;
+        // Akai Stretch: S1000-style cyclic time-stretch of the whole mix
+        int akaiMode = AkaiCrunch, akaiSync = 0; bool akaiHard = true;
+        float akaiCycleMs = 40.0f, akaiXfade = 0.35f, akaiPitch = 0.0f, akaiMix = 1.0f;
     };
     struct Clock { double beat = 0.0, beatInc = 0.0, barOrigin = 0.0, beatsPerBar = 4.0, tempo = 120.0; };
 
     static const char* padName (int k)
     {
         static const char* n[] = { "Beat Repeat", "Reverse", "Tape Stop", "Tape Start", "Backspin", "Pitch Down", "Stutter",
-                                   "Trance Gate", "DJ Filter", "Bitcrush", "Vinyl", "Echo Throw", "Reverb Throw" };
+                                   "Trance Gate", "DJ Filter", "Bitcrush", "Vinyl", "Echo Throw", "Reverb Throw", "Akai Stretch" };
         return n[juce::jlimit (0, kPads - 1, k)];
     }
 
@@ -151,9 +155,15 @@ public:
             // ---- 1. time: the pads in the order they were engaged, the newest on top
             for (int k : engageOrder)
             {
-                if (k >= kTimePads || w[k] <= 0.0f) continue;
+                if ((k >= kTimePads && k != Akai) || w[k] <= 0.0f) continue;
                 float yl, yr;
-                timeRead (k, now, spb, p, c, yl, yr);
+                if (k == Akai)
+                {
+                    akaiRead (now, spb, p, yl, yr);
+                    const float m = juce::jlimit (0.0f, 1.0f, p.akaiMix);
+                    yl = xl + (yl - xl) * m; yr = xr + (yr - xr) * m;
+                }
+                else timeRead (k, now, spb, p, c, yl, yr);
                 xl += (yl - xl) * w[k]; xr += (yr - xr) * w[k];
             }
 
@@ -372,6 +382,12 @@ private:
                 }
         }
         st[k] = On;
+        if (k == Akai)
+        {
+            const double spb = 60.0 / std::max (20.0, c.tempo) * sr;
+            ak.start = now; ak.age = 0; ak.cycIndex = -1; ak.cycStart = ak.prevStart = 0.0;
+            ak.bar = std::min ((double) histLen * 0.4, (c.beatsPerBar > 0 ? c.beatsPerBar : 4.0) * spb);
+        }
         if (k < kTimePads)
         {
             auto& t = tr[k];
@@ -387,6 +403,76 @@ private:
 
     struct TimeReader { int64_t start = 0; double pos = 0.0, rate = 1.0, elapsed = 0.0, slice = 1000.0, span = 48000.0; };
     TimeReader tr[kTimePads];
+
+    // ---- Akai Stretch: the Break Chopper's Akai Cyclic method on the recent audio. Short cycles, each
+    // read at the pitch from where the sound "should be by now", repeated or skipped as the speed
+    // needs, the last one crossfaded into the next (the S1000's flutter at 1 / Cycle Length).
+    //   Crunch: real time (one cycle late), Pitch shifts it.  Slow: from the press at x0.75 / x0.5.
+    //   Fast: the last bar looped at x1.5 / x2.  Halftime: the last bar stretched over two.
+    struct AkaiState { int64_t start = 0, age = 0, cycIndex = -1, cycAge = 0; double cycStart = 0.0, prevStart = 0.0, bar = 48000.0; };
+    AkaiState ak;
+    double akaiCycle (double spb, const Settings& p) const
+    {
+        if (p.akaiSync == 1) return spb / 8.0;    // 1/32
+        if (p.akaiSync == 2) return spb / 16.0;   // 1/64
+        return (double) juce::jlimit (10.0f, 200.0f, p.akaiCycleMs) * 0.001 * sr;
+    }
+    // where the sound should be by now (a position in the history), for this output sample
+    double akaiProgress (int64_t now, double lag, const Settings& p) const
+    {
+        const double e = (double) (now - ak.start);
+        switch (p.akaiMode)
+        {
+            case AkaiSlow:
+            {
+                const double s = p.akaiHard ? 0.5 : 0.75;
+                return (double) ak.start - lag + s * e;
+            }
+            case AkaiFast:
+            case AkaiHalftime:
+            {
+                // the last bar before the press, looped (faster, or at half speed over two bars)
+                const double s = p.akaiMode == AkaiHalftime ? 0.5 : (p.akaiHard ? 2.0 : 1.5);
+                const double regionStart = (double) ak.start - ak.bar - lag;
+                return regionStart + std::fmod (s * e, ak.bar);
+            }
+            default: return (double) now - lag;   // Crunch: real time
+        }
+    }
+    void akaiRead (int64_t now, double spb, const Settings& p, float& yl, float& yr)
+    {
+        const double pitchRate = std::pow (2.0, (double) juce::jlimit (-12.0f, 12.0f, p.akaiPitch) / 12.0);
+        const int64_t C = std::max ((int64_t) 16, (int64_t) akaiCycle (spb, p));
+        const int64_t X = std::max ((int64_t) 8, (int64_t) (juce::jlimit (0.0f, 1.0f, p.akaiXfade) * 0.5f * (float) C));
+        const double lag = pitchRate * (double) C + 4.0;   // a cycle reads ahead of where it starts: start it that far back
+        // Slow drifts further behind: before it falls out of the history, it starts again from now
+        if (p.akaiMode == AkaiSlow && (double) now - akaiProgress (now, lag, p) > (double) histLen - 2.0 * (double) C - sr)
+            ak.start = now;
+        const int64_t k = ak.age / C;
+        if (k != ak.cycIndex)
+        {
+            ak.prevStart = ak.cycStart + pitchRate * (double) C;
+            ak.cycStart = akaiProgress (now, lag, p);
+            if (ak.cycIndex < 0) ak.prevStart = ak.cycStart;
+            ak.cycIndex = k; ak.cycAge = 0;
+        }
+        const double t = (double) ak.cycAge;
+        auto rd = [&] (double pos, float& l, float& r)
+        {
+            pos = std::min (pos, (double) now);
+            if (pos < (double) (wpos - histLen + 4)) { l = r = 0.0f; return; }
+            l = readHist (0, pos); r = readHist (1, pos);
+        };
+        rd (ak.cycStart + pitchRate * t, yl, yr);
+        if (ak.cycAge < X && k > 0)
+        {
+            float pl, pr;
+            rd (ak.prevStart + pitchRate * t, pl, pr);
+            const float f = (float) (t + 1.0) / (float) (X + 1);
+            yl = pl + (yl - pl) * f; yr = pr + (yr - pr) * f;
+        }
+        ++ak.cycAge; ++ak.age;
+    }
 
     // one sample from a time pad's reader (the history already holds the current sample)
     void timeRead (int k, int64_t now, double spb, const Settings& p, const Clock&, float& yl, float& yr)

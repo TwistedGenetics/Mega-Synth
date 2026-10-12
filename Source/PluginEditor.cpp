@@ -182,6 +182,45 @@ Knob::Knob (MegaSynthProcessor& p, int idx, const juce::String& cap, juce::Colou
         slider.setTooltip (tip);
     }
     slider.onRightClick = [this] { showMenu(); };
+    caption.setInterceptsMouseClicks (false, false);
+    // mod depth with the mouse: on a route's arc, or anywhere with Ctrl / Cmd
+    slider.onDepthDown = [this] (const juce::MouseEvent& e)
+    {
+        if (slots.empty()) return false;
+        const auto p = e.getEventRelativeTo (this).position;
+        const int k = routeAtRing (p);
+        const bool anywhere = e.mods.isCommandDown() || e.mods.isCtrlDown();
+        if (k < 0 && ! anywhere) return false;
+        if (k >= 0) selSlot = slots[(size_t) k];
+        if (selSlot < 0) return false;
+        if (e.mods.isAltDown() && k >= 0) { proc.clearRoute (selSlot); updateMod(); repaint(); return true; }   // Alt-click an arc: remove it
+        dragSlot = selSlot; dragStart = amountOf (dragSlot); dragY = p.y;
+        proc.param (P_mod1Amt + dragSlot)->beginChangeGesture();
+        repaint();
+        return true;
+    };
+    slider.onDepthDrag = [this] (const juce::MouseEvent& e)
+    {
+        if (dragSlot < 0) return;
+        const float dy = dragY - e.getEventRelativeTo (this).position.y;   // up: more
+        setAmount (dragSlot, dragStart + dy / 150.0f * (e.mods.isShiftDown() ? 0.1f : 1.0f));
+        updateMod(); repaint();
+    };
+    slider.onDepthUp = [this] (const juce::MouseEvent&)
+    {
+        if (dragSlot >= 0) proc.param (P_mod1Amt + dragSlot)->endChangeGesture();   // one undo step for the drag
+        dragSlot = -1; repaint();
+    };
+    slider.onDepthDouble = [this] (const juce::MouseEvent& e)
+    {
+        const int k = routeAtRing (e.getEventRelativeTo (this).position);
+        if (k < 0) return false;
+        selSlot = slots[(size_t) k];
+        auto* prm = proc.param (P_mod1Amt + selSlot);
+        prm->beginChangeGesture(); setAmount (selSlot, 0.0f); prm->endChangeGesture();   // double-click an arc: depth 0
+        updateMod(); repaint();
+        return true;
+    };
 }
 
 void Knob::showMenu()
@@ -247,27 +286,159 @@ void Knob::showMenu()
                         });
 }
 
+juce::Colour tgui::modSourceColour (int src)
+{
+    switch (src > 0 && src < MS_COUNT ? kModSrcKind[src] : K_NONE)
+    {
+        case K_LFO:    return col::mod;
+        case K_ENV:    return col::env;
+        case K_MACRO:  return col::accent;
+        case K_MIDI:   case K_MPE: return col::fm;
+        case K_SEQ:    return col::seq;
+        case K_RAND:   return col::supersaw;
+        case K_FOLLOW: case K_AUDIO: return col::complex;
+        default:       return col::filter;
+    }
+}
+
+juce::String tgui::modSourceShort (int src)
+{
+    // initials and numbers: "LFO 1" -> L1, "Mod Wheel" -> MW, "Macro 3" -> M3
+    if (src <= 0 || src >= MS_COUNT) return {};
+    juce::String out;
+    for (auto& w : juce::StringArray::fromTokens (kModSrcNames[src], " ", ""))
+        out << (w.containsOnly ("0123456789") ? w : w.substring (0, 1).toUpperCase());
+    return out.substring (0, 4);
+}
+
+ModSourceChip::ModSourceChip (int src, const juce::String& label) : source (src), text (label)
+{
+    setTooltip ("Drag onto any knob to modulate it with " + juce::String (kModSrcNames[src]) + " (a new route at 25%). "
+                "Then drag the coloured ring around the knob to set the depth.");
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+}
+
+void ModSourceChip::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat().reduced (0.5f);
+    const auto c = modSourceColour (source);
+    g.setColour (c.withAlpha (0.18f)); g.fillRoundedRectangle (r, r.getHeight() * 0.5f);
+    g.setColour (c); g.drawRoundedRectangle (r, r.getHeight() * 0.5f, 1.0f);
+    g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+    g.drawText (text, r, juce::Justification::centred);
+}
+
+void ModSourceChip::mouseDrag (const juce::MouseEvent& e)
+{
+    if (e.getDistanceFromDragStart() < 4) return;
+    if (auto* dc = juce::DragAndDropContainer::findParentDragContainerFor (this))
+        if (! dc->isDragAndDropActive()) dc->startDragging ("modsrc:" + juce::String (source), this);
+}
+
+float Knob::amountOf (int slot) const { auto* p = proc.param (P_mod1Amt + slot); return p->convertFrom0to1 (p->getValue()); }
+
+void Knob::setAmount (int slot, float a)
+{
+    auto* p = proc.param (P_mod1Amt + slot);
+    p->setValueNotifyingHost (p->convertTo0to1 (juce::jlimit (-1.0f, 1.0f, a)));
+}
+
 void Knob::updateMod()
 {
     bool h = false; float lo = 0, hi = 0;
+    std::vector<int> now;
+    uint32_t key = 0;
     for (int i = 0; i < kNumRoutes; ++i)
     {
         const auto c = proc.routes.get (i);
         if (! c.active() || c.dst != paramIndex) continue;
         h = true;
-        const float a = proc.param (P_mod1Amt + i)->convertFrom0to1 (proc.param (P_mod1Amt + i)->getValue());
+        now.push_back (i);
+        const float a = amountOf (i);
+        key = key * 131u + (uint32_t) (i * 7 + c.src) + (uint32_t) std::lround (a * 1000.0f);
         if (kModSrcBipolar[c.src] && ! c.unipolar) { lo -= std::abs (a); hi += std::abs (a); }
         else if (a > 0) hi += a; else lo += a;
     }
-    const float lv = h ? proc.getEngine().liveOffset[(size_t) paramIndex].load (std::memory_order_relaxed) : 0.0f;
-    if (h != hasMod || std::abs (lo - modLo) > 1.0e-5f || std::abs (hi - modHi) > 1.0e-5f || std::abs (lv - live) > 0.002f)
+    if (now != slots)
     {
-        hasMod = h; modLo = lo; modHi = hi; live = lv;
+        // a new route is the one the mouse edits; a removed one hands over to the last
+        int added = -1;
+        for (int i : now) if (std::find (slots.begin(), slots.end(), i) == slots.end()) added = i;
+        slots = now;
+        if (added >= 0) selSlot = added;
+        else if (std::find (slots.begin(), slots.end(), selSlot) == slots.end()) selSlot = slots.empty() ? -1 : slots.back();
+        resized();
+    }
+    const float lv = h ? proc.getEngine().liveOffset[(size_t) paramIndex].load (std::memory_order_relaxed) : 0.0f;
+    if (h != hasMod || key != shownRouteKey || std::abs (lo - modLo) > 1.0e-5f || std::abs (hi - modHi) > 1.0e-5f || std::abs (lv - live) > 0.002f)
+    {
+        hasMod = h; modLo = lo; modHi = hi; live = lv; shownRouteKey = key;
         repaint();
     }
     const int cc = proc.ccForParam (paramIndex);
     const bool learning = proc.learningParam() == paramIndex;
     if (cc != shownCC || learning != shownLearn) { shownCC = cc; shownLearn = learning; repaint(); }
+}
+
+void Knob::selectNextRoute()
+{
+    if (slots.empty()) return;
+    auto it = std::find (slots.begin(), slots.end(), selSlot);
+    selSlot = (it == slots.end() || it + 1 == slots.end()) ? slots.front() : *(it + 1);
+    repaint();
+}
+
+Knob::Ring Knob::ring() const
+{
+    Ring g;
+    const auto layout = slider.getLookAndFeel().getSliderLayout (const_cast<KnobSlider&> (slider));
+    const auto bounds = layout.sliderBounds.toFloat().translated ((float) slider.getX(), (float) slider.getY()).reduced (3.0f);
+    const float radius = std::min (bounds.getWidth(), bounds.getHeight()) * 0.5f;
+    g.c = bounds.getCentre(); g.r = radius - 10.0f;   // (just inside the knob's own value arc)
+    const auto rp = slider.getRotaryParameters();
+    g.start = rp.startAngleRadians; g.span = rp.endAngleRadians - rp.startAngleRadians;
+    return g;
+}
+
+int Knob::routeAtRing (juce::Point<float> p) const
+{
+    if (slots.empty()) return -1;
+    const auto g = ring();
+    const float d = p.getDistanceFrom (g.c);
+    const int n = (int) std::min<size_t> (slots.size(), 3);
+    // the arcs sit 3.5 px apart, from the outside in; anything from just outside the outer one to just inside the inner one
+    if (d > g.r + 5.0f || d < g.r - 3.5f * (float) (n - 1) - 3.5f) return -1;
+    return juce::jlimit (0, n - 1, juce::roundToInt ((g.r - d) / 3.5f));
+}
+
+juce::Point<float> Knob::ringPointForTests (int routeIndex, float proportion) const
+{
+    const auto g = ring();
+    const float a = g.start + proportion * g.span, r = g.r - 3.5f * (float) routeIndex;
+    return { g.c.x + r * std::sin (a), g.c.y - r * std::cos (a) };
+}
+
+bool Knob::isInterestedInDragSource (const SourceDetails& d)
+{
+    if (! d.description.toString().startsWith ("modsrc:")) return false;
+    const auto& m = tg::meta (paramIndex);
+    const int src = d.description.toString().fromFirstOccurrenceOf (":", false, false).getIntValue();
+    return m.modulatable && src > 0 && src < MS_COUNT && (kModSrcKind[src] != K_AUDIO || m.audioRate);
+}
+
+void Knob::itemDropped (const SourceDetails& d)
+{
+    dropHover = false;
+    const int src = d.description.toString().fromFirstOccurrenceOf (":", false, false).getIntValue();
+    const int slot = proc.addRoute (src, paramIndex, 0.25f);
+    if (slot >= 0) { selSlot = slot; if (onShowRoute) onShowRoute (-1 - slot); }
+    updateMod(); repaint();
+}
+
+void Knob::mouseDown (const juce::MouseEvent& e)
+{
+    // the route chip: the next route on this knob
+    if (slots.size() > 0 && chipBounds().contains (e.getPosition())) selectNextRoute();
 }
 
 void Knob::paintOverChildren (juce::Graphics& g)
@@ -278,6 +449,11 @@ void Knob::paintOverChildren (juce::Graphics& g)
         g.setColour (col::accent);
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 6.0f, 2.0f);
     }
+    if (dropHover)
+    {
+        g.setColour (col::mod);
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 6.0f, 2.0f);
+    }
     if (shownCC >= 0 || shownLearn)
     {
         g.setColour (shownLearn ? col::accent : col::muted);
@@ -285,28 +461,59 @@ void Knob::paintOverChildren (juce::Graphics& g)
         g.drawText (shownLearn ? "LEARN" : "CC" + juce::String (shownCC), getLocalBounds().removeFromTop (14).removeFromRight (34), juce::Justification::centredRight);
     }
     if (! hasMod) return;
-    const auto layout = slider.getLookAndFeel().getSliderLayout (slider);
-    const auto bounds = layout.sliderBounds.toFloat().translated ((float) slider.getX(), (float) slider.getY()).reduced (3.0f);
-    const float radius = std::min (bounds.getWidth(), bounds.getHeight()) * 0.5f;
-    const auto c = bounds.getCentre();
-    const auto rp = slider.getRotaryParameters();
-    const float span = rp.endAngleRadians - rp.startAngleRadians;
+    const auto gr = ring();
     const float base = (float) slider.valueToProportionOfLength (slider.getValue());
-    const float p0 = juce::jlimit (0.0f, 1.0f, base + modLo), p1 = juce::jlimit (0.0f, 1.0f, base + modHi);
-    const float r = radius - 7.5f;
-    juce::Path arc;
-    arc.addCentredArc (c.x, c.y, r, r, 0.0f, rp.startAngleRadians + p0 * span, rp.startAngleRadians + std::max (p1, p0 + 0.003f) * span, true);
-    g.setColour (col::mod.withAlpha (0.85f));
-    g.strokePath (arc, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    const float a = rp.startAngleRadians + juce::jlimit (0.0f, 1.0f, base + live) * span;
+    // one arc per route (up to three, outside in), in its source's colour; the edited one bolder
+    for (size_t k = 0; k < slots.size() && k < 3; ++k)
+    {
+        const int slot = slots[k];
+        const auto c = proc.routes.get (slot);
+        const float a = amountOf (slot);
+        const bool bip = kModSrcBipolar[c.src] && ! c.unipolar;
+        const float p0 = juce::jlimit (0.0f, 1.0f, base + (bip ? -std::abs (a) : std::min (0.0f, a)));
+        const float p1 = juce::jlimit (0.0f, 1.0f, base + (bip ? std::abs (a) : std::max (0.0f, a)));
+        const float r = gr.r - 3.5f * (float) k;
+        juce::Path arc;
+        arc.addCentredArc (gr.c.x, gr.c.y, r, r, 0.0f, gr.start + p0 * gr.span, gr.start + std::max (p1, p0 + 0.003f) * gr.span, true);
+        const bool sel = slot == selSlot;
+        g.setColour (modSourceColour (c.src).withAlpha (sel ? 0.95f : 0.55f));
+        g.strokePath (arc, juce::PathStrokeType (sel ? 2.6f : 1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    const float a = gr.start + juce::jlimit (0.0f, 1.0f, base + live) * gr.span;
     g.setColour (juce::Colours::white);
-    g.fillEllipse (juce::Rectangle<float> (4.5f, 4.5f).withCentre ({ c.x + r * std::sin (a), c.y - r * std::cos (a) }));
+    g.fillEllipse (juce::Rectangle<float> (4.5f, 4.5f).withCentre ({ gr.c.x + gr.r * std::sin (a), gr.c.y - gr.r * std::cos (a) }));
+    // the route chip: which route the mouse edits (click: the next one)
+    if (selSlot >= 0)
+    {
+        const auto c = proc.routes.get (selSlot);
+        const auto cb = chipBounds().toFloat().reduced (0.5f);
+        const auto colr = modSourceColour (c.src);
+        g.setColour (colr.withAlpha (0.25f)); g.fillRoundedRectangle (cb, 6.0f);
+        g.setColour (colr); g.drawRoundedRectangle (cb, 6.0f, 1.0f);
+        g.setFont (juce::Font (juce::FontOptions (8.5f, juce::Font::bold)));
+        g.drawFittedText (modSourceShort (c.src) + (slots.size() > 1 ? "+" : ""), cb.toNearestInt(), juce::Justification::centred, 1, 0.6f);
+    }
+    // while dragging a depth: the route, its depth and where it takes the knob
+    if (dragSlot >= 0)
+    {
+        const auto c = proc.routes.get (dragSlot);
+        const float amt = amountOf (dragSlot);
+        auto* prm = proc.param (paramIndex);
+        const float to = prm->convertFrom0to1 (juce::jlimit (0.0f, 1.0f, prm->getValue() + amt));
+        const juce::String t = juce::String (kModSrcNames[c.src]) + ": " + formatParam (P_mod1Amt + dragSlot, amt) + "  (to " + formatParam (paramIndex, to) + ")";
+        auto box = getLocalBounds().removeFromBottom (16).toFloat();
+        box = box.withSizeKeepingCentre (std::max (box.getWidth(), 120.0f), box.getHeight());
+        g.setColour (col::panel.withAlpha (0.95f)); g.fillRoundedRectangle (box, 4.0f);
+        g.setColour (modSourceColour (c.src)); g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+        g.drawFittedText (t, box.toNearestInt(), juce::Justification::centred, 1, 0.6f);
+    }
 }
 
 void Knob::resized()
 {
     auto r = getLocalBounds();
-    caption.setBounds (r.removeFromTop (15));
+    auto cap = r.removeFromTop (15);
+    caption.setBounds (slots.empty() ? cap : cap.withTrimmedLeft (std::min (24, getWidth() / 3)));   // (room for the route chip)
     slider.setBounds (r);
 }
 
@@ -413,15 +620,22 @@ void Section::paint (juce::Graphics& g)
     g.drawText (title, juce::Rectangle<float> (r.getX() + 22, r.getY() + 6, r.getWidth() - 30, 22), juce::Justification::centredLeft);
 }
 
+void Section::addTitleChip (juce::Component* c, int width)
+{
+    owned.add (c);
+    addAndMakeVisible (c);
+    titleChips.push_back ({ c, width });
+    resized();
+}
+
 void Section::resized()
 {
-    if (infoBadge != nullptr)
-    {
-        juce::GlyphArrangement ga;
-        ga.addLineOfText (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)), title, 0.0f, 0.0f);
-        const int tw = juce::roundToInt (ga.getBoundingBox (0, -1, true).getWidth());
-        infoBadge->setBounds (juce::jmin (getWidth() - 26, 23 + tw + 8), 9, 16, 16);
-    }
+    juce::GlyphArrangement ga;
+    ga.addLineOfText (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)), title, 0.0f, 0.0f);
+    const int tw = juce::roundToInt (ga.getBoundingBox (0, -1, true).getWidth());
+    if (infoBadge != nullptr) infoBadge->setBounds (juce::jmin (getWidth() - 26, 23 + tw + 8), 9, 16, 16);
+    int cx = 23 + tw + 8 + (infoBadge != nullptr ? 24 : 0);
+    for (auto& [c, w] : titleChips) { c->setBounds (cx, 8, w, 18); cx += w + 4; }
     const int pad = 10, gap = 6, top = 32;
     int x = pad, y = top, rowH = 0;
     for (auto& it : items)
@@ -1398,6 +1612,7 @@ void MegaSynthEditor::buildPages()
         // the controls you reach for while playing: macros, scenes, Mutate, the DNA Sequencer and the main sound knobs
         auto* page = addPage ("Perform");
         auto* macSec = sec (page, "Macros", col::accent);
+        for (int k = 0; k < 8; ++k) macSec->addTitleChip (new ModSourceChip (MS_Macro1 + k, "M" + juce::String (k + 1)), 30);
         juce::Array<MacroCell*> cells;
         for (int i = 0; i < 8; ++i) { auto* m = page->own (new MacroCell (proc, i)); macroCells.add (m); cells.add (m); }
         auto* scSec = sec (page, "Scenes", col::mod);
@@ -1506,6 +1721,7 @@ void MegaSynthEditor::buildPages()
         auto* xySec = sec (page, "XY Pads  (Kaoss-style: X and Y are Mod Matrix sources, so each axis can drive any Performance FX setting or any "
                                  "Mod Matrix destination. Assign adds a route (you can change its depth in the Mod Matrix). Spring: back to the centre "
                                  "when you let go; off, it stays where you leave it.)", col::mod);
+        for (int k = 0; k < 4; ++k) xySec->addTitleChip (new ModSourceChip (MS_PfX1 + k, juce::String (k % 2 == 0 ? "X" : "Y") + juce::String (k / 2 + 1)), 30);
         juce::Array<PerfXY*> xys;
         juce::Array<juce::Component*> xyCtl;
         for (int k = 0; k < 2; ++k)
@@ -2779,9 +2995,11 @@ void MegaSynthEditor::buildPages()
         auto* f = page->own (new FilterPanel (proc));
         auto* pageEnv = addPage ("Amp & Filter");
         auto* a = sec (pageEnv, "Amp Envelope", col::env);
+        a->addTitleChip (new ModSourceChip (MS_AmpEnv, "drag"), 44);
         for (auto [idx, n] : { std::pair<int, const char*> { P_ampA, "Attack" }, { P_ampD, "Decay" }, { P_ampS, "Sustain" }, { P_ampR, "Release" } })
             a->knob (idx, n);
         auto* fe = sec (pageEnv, "Filter Envelope", col::env);
+        fe->addTitleChip (new ModSourceChip (MS_FilterEnv, "drag"), 44);
         for (auto [idx, n] : { std::pair<int, const char*> { P_fEnvA, "Attack" }, { P_fEnvD, "Decay" }, { P_fEnvS, "Sustain" }, { P_fEnvR, "Release" } })
             fe->knob (idx, n);
         // the Master Filter: after every effect, before the Output trim
@@ -2992,6 +3210,7 @@ void MegaSynthEditor::buildPages()
         for (int i = 0; i < 3; ++i)
         {
             env[i] = sec (pageMe, "Mod Envelope " + juce::String (i + 1), col::env);
+            env[i]->addTitleChip (new ModSourceChip (MS_ModEnv1 + i, "drag"), 44);
             env[i]->knob (P_mEnv1A + 4 * i, "Attack");
             env[i]->knob (P_mEnv1D + 4 * i, "Decay");
             env[i]->knob (P_mEnv1S + 4 * i, "Sustain");
@@ -3061,6 +3280,7 @@ void MegaSynthEditor::buildPages()
         for (int k = 0; k < 2; ++k)
         {
             ms[k] = sec (page, "MSEG " + juce::String (k + 1) + "  (multi-stage envelope: a Mod Matrix source)", col::env);
+            ms[k]->addTitleChip (new ModSourceChip (MS_Mseg1 + k, "drag"), 44);
             ms[k]->add (new ParamToggle (proc, P_mseg1Sync + 2 * k, "Sync (beats)", col::env), 120, 30);
             ms[k]->knob (P_mseg1Scale + 2 * k, "Time Scale", 70);
             ms[k]->newRow();
@@ -3268,7 +3488,8 @@ void MegaSynthEditor::buildPages()
     // ---------------------------------------------------------------- Macros & Scenes
     {
         auto* page = addPage ("Macros & Scenes");
-        auto* macSec = sec (page, "Macros  (right-click any knob > Assign to macro; double-click a name to rename)", col::accent);
+        auto* macSec = sec (page, "Macros  (right-click any knob > Assign to macro, or drag a macro chip onto it; double-click a name to rename)", col::accent);
+        for (int k = 0; k < 8; ++k) macSec->addTitleChip (new ModSourceChip (MS_Macro1 + k, "M" + juce::String (k + 1)), 30);
         juce::Array<MacroCell*> myCells;
         for (int i = 0; i < 8; ++i) { auto* m = page->own (new MacroCell (proc, i)); macroCells.add (m); myCells.add (m); }
         auto* scSec = sec (page, "Scenes", col::mod);
@@ -3998,6 +4219,7 @@ void MegaSynthEditor::timerCallbackForTests()
     {
         if (auto* fp = dynamic_cast<tgui::FilterPanel*> (c)) fp->refreshForTests();
         if (auto* pk = dynamic_cast<tgui::FilterPicker*> (c)) pk->sync();
+        if (auto* kn = dynamic_cast<tgui::Knob*> (c)) kn->updateMod();
         if (auto* mv = dynamic_cast<tgui::MasterFilterView*> (c)) mv->refreshForTests();
         if (auto* st = dynamic_cast<tgui::StoreTicker*> (c); st != nullptr && st->tick && st->getParentComponent() != nullptr && st->getParentComponent()->isVisible()) st->tick();
         for (auto* ch : c->getChildren()) walk (ch);

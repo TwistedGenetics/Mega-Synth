@@ -227,6 +227,8 @@ bool& LfoPanel::clipboardValid() { static bool v = false; return v; }
 LfoPanel::LfoPanel (MegaSynthProcessor& p, int k, juce::Colour c) : proc (p), lfo (k), colour (c)
 {
     const int xb = xbase (lfo);
+    chip = std::make_unique<ModSourceChip> (MS_Lfo1 + lfo, "drag LFO " + juce::String (lfo + 1));
+    addAndMakeVisible (*chip);
     wave = std::make_unique<Choice> (proc, P_lfo1Wave + 3 * lfo, "Wave");
     sync = std::make_unique<Choice> (proc, xb + 0, "Sync");
     retrig = std::make_unique<Choice> (proc, xb + 1, "Retrigger");
@@ -318,6 +320,7 @@ void LfoPanel::resized()
     wave->setBounds (x, y, 112, 40); sync->setBounds (x + 118, y, 120, 40);
     retrig->setBounds (x, y + 42, 112, 40); mode->setBounds (x + 118, y + 42, 120, 40);
     uni.setBounds (x, y + 86, 100, 22); custom.setBounds (x + 118, y + 86, 100, 22);
+    chip->setBounds (76, 9, 74, 18);
     const int kx = 250;
     for (int i = 0; i < knobs.size(); ++i) knobs[i]->setBounds (kx + i * 58, 40, 58, 76);
     const int ex = kx + knobs.size() * 58 + 8;

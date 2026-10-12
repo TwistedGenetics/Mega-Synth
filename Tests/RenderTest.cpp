@@ -2343,6 +2343,15 @@ int main()
             auto f = dir.getChildFile ("page_Filters_models.png"); f.deleteFile();
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
         }
+        {
+            // mod depth on the knobs: two routes on Filter 1's Cutoff (LFO 1 and Mod Env 1), one on Resonance
+            setP (*p, P_flt1Char, 0.0f);
+            p->addRoute (MS_Lfo1, P_filterCutoff, 0.3f); p->addRoute (MS_ModEnv1, P_filterCutoff, -0.2f); p->addRoute (MS_Macro2, P_filterRes, 0.4f);
+            e->showPage ("Filters"); e->timerCallbackForTests();
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto f = dir.getChildFile ("page_Filters_moddepth.png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        }
         return 0;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_UICONTROLS", {}).isNotEmpty())
@@ -3370,6 +3379,87 @@ int main()
                     line << (q == 0 ? "Eco " : q == 1 ? "Normal " : "High ") << juce::String (100.0 * t[0] / 3.0, 2) << "% -> " << juce::String (100.0 * t[1] / 3.0, 2) << "%  ";
                 }
                 std::cout << "  CPU, 8 notes, sub normal -> dry (% of a core): " << line << std::endl;
+            }
+            {
+                // ---- mod depth with the mouse (Serum-style)
+                auto p = make();
+                std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+                ed->setSize (1200, 890);
+                auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+                e->showPage ("Filters");
+                tgui::Knob* k = nullptr; tgui::Knob* admin = nullptr;
+                std::function<void (juce::Component*)> walk = [&] (juce::Component* comp)
+                {
+                    if (auto* kn = dynamic_cast<tgui::Knob*> (comp)) { if (kn->paramIndex == P_filterCutoff && kn->isVisible() && k == nullptr) k = kn; if (kn->paramIndex == P_bcKeyBase) admin = kn; }
+                    for (auto* ch : comp->getChildren()) walk (ch);
+                };
+                walk (ed.get());
+                CHECK (k != nullptr, "the Cutoff knob");
+                if (k != nullptr)
+                {
+                    auto amt = [&] (int slot) { return p->param (P_mod1Amt + slot)->convertFrom0to1 (p->param (P_mod1Amt + slot)->getValue()); };
+                    auto src = juce::Desktop::getInstance().getMainMouseSource();
+                    auto ev = [&] (juce::Point<float> knobPt, juce::ModifierKeys mods, int clicks = 1)
+                    {
+                        const auto sp = knobPt - k->slider.getPosition().toFloat();
+                        return juce::MouseEvent (src, sp, mods, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, &k->slider, &k->slider, juce::Time::getCurrentTime(), sp, juce::Time::getCurrentTime(), clicks, false);
+                    };
+                    const juce::ModifierKeys lb (juce::ModifierKeys::leftButtonModifier);
+                    const int s1 = p->addRoute (MS_Lfo1, P_filterCutoff, 0.25f);
+                    k->updateMod();
+                    CHECK (k->routeSlots().size() == 1 && k->selectedRoute() == s1, "the knob knows its route");
+                    // drag the arc up 30 px: +0.2
+                    p->pushHistory ("before");
+                    const auto at = k->ringPointForTests (0, 0.95f);
+                    k->slider.mouseDown (ev (at, lb));
+                    k->slider.mouseDrag (ev (at.translated (0, -30), lb));
+                    k->slider.mouseUp (ev (at.translated (0, -30), {}));
+                    const double v0 = k->slider.getValue();
+                    CHECK (std::abs (amt (s1) - 0.45f) < 0.002f, "dragging the arc up sets the depth (" + juce::String (amt (s1), 3) + ")");
+                    p->pushHistory ("Edit");
+                    p->undo();
+                    CHECK (std::abs (amt (s1) - 0.25f) < 0.002f, "one Undo puts the depth back");
+                    p->redo();
+                    // Shift: fine
+                    k->slider.mouseDown (ev (at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier)));
+                    k->slider.mouseDrag (ev (at.translated (0, -30), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier)));
+                    k->slider.mouseUp (ev (at.translated (0, -30), {}));
+                    CHECK (std::abs (amt (s1) - 0.47f) < 0.002f, "Shift: fine steps (" + juce::String (amt (s1), 3) + ")");
+                    // the middle of the knob: the value, not the depth
+                    const auto mid = k->ringPointForTests (0, 0.5f) + (k->slider.getBounds().getCentre().toFloat() - k->ringPointForTests (0, 0.5f)) * 1.0f;
+                    const float before = amt (s1);
+                    k->slider.mouseDown (ev (mid, lb)); k->slider.mouseDrag (ev (mid.translated (0, -25), lb)); k->slider.mouseUp (ev (mid.translated (0, -25), {}));
+                    CHECK (std::abs (amt (s1) - before) < 1e-6f && std::abs (k->slider.getValue() - v0) > 1.0, "dragging the knob itself moves its value, not the depth");
+                    // Ctrl / Cmd anywhere: the depth
+                    k->slider.mouseDown (ev (mid, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::commandModifier)));
+                    k->slider.mouseDrag (ev (mid.translated (0, 15), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::commandModifier)));
+                    k->slider.mouseUp (ev (mid.translated (0, 15), {}));
+                    CHECK (std::abs (amt (s1) - (before - 0.1f)) < 0.002f, "Ctrl / Cmd-drag anywhere sets the depth");
+                    // double-click the arc: depth 0
+                    k->slider.mouseDoubleClick (ev (at, lb, 2));
+                    CHECK (std::abs (amt (s1)) < 1e-6f, "double-click an arc: depth 0");
+                    // a second route: the chip picks which one the mouse edits; the inner arc picks its own
+                    const int s2 = p->addRoute (MS_Lfo2, P_filterCutoff, -0.3f);
+                    k->updateMod();
+                    CHECK (k->routeSlots().size() == 2 && k->selectedRoute() == s2, "a new route is the one edited");
+                    k->mouseDown (juce::MouseEvent (src, { 5.0f, 5.0f }, lb, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, k, k, juce::Time::getCurrentTime(), { 5.0f, 5.0f }, juce::Time::getCurrentTime(), 1, false));
+                    CHECK (k->selectedRoute() == s1, "the chip goes round the routes");
+                    const auto inner = k->ringPointForTests (1, 0.95f);
+                    k->slider.mouseDown (ev (inner, lb)); k->slider.mouseDrag (ev (inner.translated (0, -15), lb)); k->slider.mouseUp (ev (inner.translated (0, -15), {}));
+                    CHECK (k->selectedRoute() == s2 && std::abs (amt (s2) - (-0.2f)) < 0.002f && std::abs (amt (s1)) < 1e-6f, "the inner arc edits the second route");
+                    // Alt-click an arc: the route goes
+                    k->slider.mouseDown (ev (inner, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier)));
+                    k->slider.mouseUp (ev (inner, {}));
+                    k->updateMod();
+                    CHECK (! p->routes.get (s2).active() && k->routeSlots().size() == 1, "Alt-click an arc removes its route");
+                    // drag a source onto the knob: a new route at 25%
+                    juce::DragAndDropTarget::SourceDetails dd (juce::var ("modsrc:" + juce::String ((int) MS_ModEnv1)), nullptr, {});
+                    CHECK (k->isInterestedInDragSource (dd) && (admin == nullptr || ! admin->isInterestedInDragSource (dd)), "knobs that can be modulated take a dropped source (others don't)");
+                    k->itemDropped (dd);
+                    bool found = false;
+                    for (int i = 0; i < kNumRoutes; ++i) { const auto c = p->routes.get (i); if (c.active() && c.src == MS_ModEnv1 && c.dst == P_filterCutoff) found = std::abs (amt (i) - 0.25f) < 1e-4f && k->selectedRoute() == i; }
+                    CHECK (found, "dropping Mod Env 1 on the knob makes a route at 25%, ready to edit");
+                }
             }
             {
                 // older projects: both routes as they always were

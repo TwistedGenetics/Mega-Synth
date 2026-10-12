@@ -612,6 +612,21 @@ edited, saved, mutated or bred. Loading one can be undone.
 
 Quality is your setting rather than part of the sound, so loading a preset keeps it.
 
+## Mod depth with the mouse (Serum-style)
+
+- **Making a route:**
+  - Drag a source chip onto any knob that can be modulated. A new route at 25% appears and is ready to edit.
+  - The chips are next to each source's title: LFO 1-4, the Amp, Filter and Mod Envelopes, MSEG 1-2, the eight macros (Perform and Macros & Scenes), and the XY pads' X and Y.
+  - Right-click > Modulate with still works too.
+- **The arcs:** each route on a knob is an arc just inside the knob's own arc, in its source's colour, up to three per knob from the outside in. Bipolar sources reach both ways. The white dot is what the newest note is hearing now.
+- **Setting the depth:**
+  - Drag an arc up for more depth, or down for less or negative. Ctrl/Cmd-drag anywhere on the knob does the same.
+  - Shift gives fine steps.
+  - While you drag, the knob shows the route, its depth and the value it takes the knob to.
+  - Each drag is one Undo step, and the Mod Matrix page follows live (and the other way round).
+- **Other actions:** double-click an arc for depth 0, and Alt-click an arc to remove its route.
+- **The chip on a knob:** the small chip in the knob's top-left corner names the route the mouse edits ("+" means there are more). Click it to go round them, or click a route's own arc.
+
 ## Modulation matrix (Modulation > Mod Matrix)
 
 Any source can drive any sound parameter: 32 routes, each with its own depth.

@@ -64,6 +64,7 @@ private:
     std::unique_ptr<Segmented> gridSel;
     juce::TextButton presets { "Presets" }, copy { "Copy" }, paste { "Paste" };
     std::unique_ptr<LfoShapeEditor> editor;
+    std::unique_ptr<juce::Component> chip;   // drag onto a knob to modulate it
 };
 
 } // namespace tgui

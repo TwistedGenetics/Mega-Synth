@@ -56,39 +56,89 @@ class KnobSlider : public juce::Slider
 {
 public:
     std::function<void()> onRightClick;
+    // mod depth with the mouse (Serum-style): return true from onDepthDown to take the gesture
+    std::function<bool (const juce::MouseEvent&)> onDepthDown, onDepthDouble;
+    std::function<void (const juce::MouseEvent&)> onDepthDrag, onDepthUp;
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (e.mods.isPopupMenu()) { rightDown = true; if (onRightClick) onRightClick(); return; }
-        rightDown = false; juce::Slider::mouseDown (e);
+        rightDown = false;
+        depth = onDepthDown && onDepthDown (e);
+        if (! depth) juce::Slider::mouseDown (e);
     }
-    void mouseDrag (const juce::MouseEvent& e) override { if (! rightDown) juce::Slider::mouseDrag (e); }
-    void mouseUp (const juce::MouseEvent& e) override { if (! rightDown) juce::Slider::mouseUp (e); rightDown = false; }
+    void mouseDrag (const juce::MouseEvent& e) override { if (rightDown) return; if (depth) { if (onDepthDrag) onDepthDrag (e); return; } juce::Slider::mouseDrag (e); }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (depth) { depth = false; if (onDepthUp) onDepthUp (e); return; }
+        if (! rightDown) juce::Slider::mouseUp (e);
+        rightDown = false;
+    }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (onDepthDouble && onDepthDouble (e)) return; juce::Slider::mouseDoubleClick (e); }
 private:
-    bool rightDown = false;
+    bool rightDown = false, depth = false;
 };
 
 // A rotary knob with a caption above and the parameter's value text below.
 // When the modulation matrix drives its parameter it shows a ring: the range the routes
 // can reach, and a dot at the value the newest note is hearing right now.
-class Knob : public juce::Component
+class Knob : public juce::Component, public juce::DragAndDropTarget
 {
 public:
     Knob (MegaSynthProcessor&, int paramIndex, const juce::String& caption, juce::Colour);
     void resized() override;
     void paintOverChildren (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;   // the route chip
     void updateMod();                          // called by the editor's timer
     KnobSlider slider;
     const int paramIndex;
     std::function<void (int slot)> onShowRoute;   // open the matrix at a route
+
+    // ---- mod depth with the mouse (Serum-style). Each route on this knob is an arc in its source's
+    // colour; drag an arc (or Ctrl / Cmd-drag anywhere) up or down to set that route's depth (Shift:
+    // fine). Double-click an arc: depth 0. Alt-click an arc: remove the route. The chip in the corner
+    // picks which route the mouse edits (click it to go round them). Drop a source chip (from an LFO,
+    // envelope, MSEG, macro or XY pad) on a knob to make a new route at 25%.
+    const std::vector<int>& routeSlots() const { return slots; }
+    int selectedRoute() const { return selSlot; }
+    void selectNextRoute();
+    juce::Point<float> ringPointForTests (int routeIndex, float proportion) const;   // knob coordinates
+    juce::Rectangle<int> chipBounds() const { return { 0, 1, std::min (24, getWidth() / 3), 13 }; }
+    bool isInterestedInDragSource (const SourceDetails&) override;
+    void itemDragEnter (const SourceDetails&) override { dropHover = true; repaint(); }
+    void itemDragExit (const SourceDetails&) override { dropHover = false; repaint(); }
+    void itemDropped (const SourceDetails&) override;
 private:
     void showMenu();
+    struct Ring { juce::Point<float> c; float r = 0, start = 0, span = 0; };
+    Ring ring() const;                        // in knob coordinates
+    int routeAtRing (juce::Point<float> p) const;   // the route whose arc is there (index into slots), -1
+    float amountOf (int slot) const;
+    void setAmount (int slot, float a);
     MegaSynthProcessor& proc;
     juce::Label caption;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
-    bool hasMod = false;
+    bool hasMod = false, dropHover = false;
     float modLo = 0, modHi = 0, live = 0;
+    std::vector<int> slots;                   // the routes on this knob, in slot order
+    int selSlot = -1;                         // the one the mouse edits
+    int dragSlot = -1; float dragStart = 0, dragY = 0;   // a depth drag in progress
+    uint32_t shownRouteKey = 0;
     int shownCC = -1; bool shownLearn = false;   // MIDI learn
 };
+
+// A source you can drag onto any knob to modulate it (LFOs, envelopes, MSEGs, macros, XY pads)
+class ModSourceChip : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    ModSourceChip (int src, const juce::String& label);
+    void paint (juce::Graphics&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    const int source;
+private:
+    juce::String text;
+};
+juce::Colour modSourceColour (int src);
+juce::String modSourceShort (int src);
 
 // Caption + drop-down attached to a choice parameter.
 class Choice : public juce::Component
@@ -115,6 +165,8 @@ public:
     void resized() override;
     // the explanation behind the (i) next to the title ("Name  (explanation)" titles are split automatically)
     void addInfo (const juce::String& text);
+    // a small component beside the title (the drag-to-modulate source chips); takes ownership
+    void addTitleChip (juce::Component* c, int width);
     juce::String getTitle() const { return title; }
     juce::String getInfo() const { return info; }
     juce::Colour colour;
@@ -126,6 +178,7 @@ private:
     struct Item { juce::Component* c; int w, h; bool rowBreak; };
     std::vector<Item> items;
     juce::OwnedArray<juce::Component> owned;
+    std::vector<std::pair<juce::Component*, int>> titleChips;
     bool pendingBreak = false;
 };
 
@@ -317,6 +370,7 @@ private:
 
 //==============================================================================
 class MegaSynthEditor : public juce::AudioProcessorEditor,
+                        public juce::DragAndDropContainer,
                         private juce::Timer
 {
 public:

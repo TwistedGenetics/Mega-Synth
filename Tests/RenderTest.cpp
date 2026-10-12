@@ -6116,6 +6116,438 @@ int main()
             std::cout << "  CPU, 8 notes: " << juce::String (a, 2) << "% off, " << juce::String (b, 2) << "% reacting to every 16th (+" << juce::String (b - a, 2) << "% of a core)" << std::endl;
         }
     };
+    // ---- v0.1.68: Slice Keys On / Off / Auto, and Break React's rows (Kick / Snare / Hat), new actions, engines, hit choice
+    auto rowTests = [&]
+    {
+        std::cout << "Slice Keys and Break React rows" << std::endl;
+        auto plainOf = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+        auto clean = [&] (int wave = 3)
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain, P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain })
+                setP (*p, i, 0.0f);
+            setP (*p, P_osc1Gain, 0.8f); setP (*p, P_osc1Wave, (float) wave);
+            setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_lfoAssignAmt0, 0.0f); setP (*p, P_envAssignAmt0, 0.0f); setP (*p, P_ampA, 0.001f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.01f);
+            return p;
+        };
+        auto withBreak = [&] (MegaSynthProcessor& p)
+        {
+            setP (p, P_bcOn, 1.0f); setP (p, P_bcSliceMode, 3.0f);
+            p.loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, 0), 44100.0), "demo.wav", MegaSynthProcessor::kSlotBreak);
+        };
+        auto on = [] (double t, int n, int v = 100) { return std::pair<double, juce::MidiMessage> { t, juce::MidiMessage::noteOn (1, n, (juce::uint8) v) }; };
+        auto off = [] (double t, int n) { return std::pair<double, juce::MidiMessage> { t, juce::MidiMessage::noteOff (1, n) }; };
+        // blocks of 256 with a hook before each (to change settings mid-note), the output kept
+        auto run = [&] (MegaSynthProcessor& p, double seconds, std::vector<std::pair<double, juce::MidiMessage>> ev, std::function<void (int)> before, juce::AudioBuffer<float>* out)
+        {
+            const int total = (int) (seconds * sr);
+            if (out) out->setSize (2, total);
+            juce::AudioBuffer<float> buf (2, 256);
+            for (int pos = 0; pos < total; pos += 256)
+            {
+                const int n = std::min (256, total - pos);
+                if (before) before (pos);
+                buf.setSize (2, n, false, false, true); buf.clear();
+                juce::MidiBuffer m;
+                for (auto& e : ev) { const int at = (int) (e.first * sr); if (at >= pos && at < pos + n) m.addEvent (e.second, at - pos); }
+                p.processBlock (buf, m);
+                if (out) for (int c = 0; c < 2; ++c) out->copyFrom (c, pos, buf, c, 0, n);
+            }
+        };
+        auto rmsOf = [] (const juce::AudioBuffer<float>& b, int from, int to)
+        {
+            double e = 0; to = std::min (to, b.getNumSamples()); for (int i = from; i < to; ++i) e += (double) b.getSample (0, i) * b.getSample (0, i);
+            return std::sqrt (e / std::max (1, to - from));
+        };
+        const int sliceKey = 36 + 4;
+        // 1. Slice Keys: On (the slice, no synth note), Off (the synth), Auto (the synth while the sequencer plays)
+        {
+            auto synthLevel = [&] (int mode, bool seq, bool keyEntry)
+            {
+                auto p = clean(); withBreak (*p); setP (*p, P_mxBreakMute, 1.0f); setP (*p, P_bcSliceKeys, (float) mode);
+                if (seq) { setP (*p, P_bsOn, 1.0f); p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::original (d, 0, 16); }); }
+                if (keyEntry) setP (*p, P_bsKeyEntry, 1.0f);
+                juce::AudioBuffer<float> b; run (*p, 0.6, { on (0.2, sliceKey), off (0.5, sliceKey) }, nullptr, &b);
+                return rmsOf (b, (int) (0.25 * sr), (int) (0.45 * sr));
+            };
+            const double onL = synthLevel (0, false, false), offL = synthLevel (1, false, false), autoStopped = synthLevel (2, false, false),
+                         autoRunning = synthLevel (2, true, false), onRunning = synthLevel (0, true, false), autoKeyEntry = synthLevel (2, true, true);
+            std::cout << "  slice key " << sliceKey << ", synth level (break muted): On " << onL << ", Off " << offL << ", Auto stopped " << autoStopped
+                      << ", Auto with the sequencer playing " << autoRunning << " (On " << onRunning << ", Auto + Key Entry " << autoKeyEntry << ")" << std::endl;
+            CHECK (onL < 1.0e-6 && onRunning < 1.0e-6, "Slice Keys On: a slice key plays the break, not the synth (as before)");
+            CHECK (offL > 0.1, "Slice Keys Off: the slice keys play the synth");
+            CHECK (autoStopped < 1.0e-6 && autoRunning > 0.1, "Slice Keys Auto: the break while the sequencer is stopped, the synth while it plays");
+            CHECK (autoKeyEntry < 1.0e-6, "Slice Keys Auto with Key Entry on: the slice keys stay on");
+            // the Select Keys follow too
+            {
+                auto p = clean(); withBreak (*p); setP (*p, P_mxBreakMute, 1.0f); setP (*p, P_bcSliceKeys, 1.0f);
+                juce::AudioBuffer<float> b; run (*p, 0.6, { on (0.2, 35), off (0.5, 35) }, nullptr, &b);
+                CHECK (rmsOf (b, (int) (0.25 * sr), (int) (0.45 * sr)) > 0.1 && plainOf (*p, P_bcActive) == 1.0f, "Slice Keys Off: the Break Select keys play the synth too");
+            }
+            // Auto follows the sequencer starting and stopping (the same key, pressed while it plays and after)
+            {
+                auto p = clean(); withBreak (*p); setP (*p, P_mxBreakMute, 1.0f); setP (*p, P_bcSliceKeys, 2.0f);
+                p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::original (d, 0, 16); });
+                juce::AudioBuffer<float> b;
+                run (*p, 1.2, { on (0.1, sliceKey), off (0.4, sliceKey), on (0.7, sliceKey), off (1.0, sliceKey) },
+                     [&] (int pos) { setP (*p, P_bsOn, pos < (int) (0.5 * sr) ? 1.0f : 0.0f); }, &b);
+                const double whilePlaying = rmsOf (b, (int) (0.15 * sr), (int) (0.35 * sr)), afterStop = rmsOf (b, (int) (0.75 * sr), (int) (0.95 * sr));
+                std::cout << "  Auto: sequencer playing " << whilePlaying << ", then stopped " << afterStop << std::endl;
+                CHECK (whilePlaying > 0.1 && afterStop < 1.0e-6, "Slice Keys Auto follows the sequencer starting and stopping");
+            }
+            // no stuck notes: switching with a key held (Off -> On, and On -> Off)
+            {
+                auto p = clean(); withBreak (*p); setP (*p, P_mxBreakMute, 1.0f); setP (*p, P_bcSliceKeys, 1.0f);
+                run (*p, 1.0, { on (0.1, sliceKey), off (0.4, sliceKey) }, [&] (int pos) { if (pos == 256 * 50) setP (*p, P_bcSliceKeys, 0.0f); }, nullptr);
+                CHECK (p->getEngine().activeVoiceCount() == 0, "no stuck note: a key played as a note under Off, let go under On");
+                auto q = clean(); withBreak (*q); setP (*q, P_mxBreakMute, 1.0f); setP (*q, P_bcSliceKeys, 0.0f);
+                juce::AudioBuffer<float> b;
+                run (*q, 1.0, { on (0.1, sliceKey), off (0.4, sliceKey) }, [&] (int pos) { if (pos == 256 * 50) setP (*q, P_bcSliceKeys, 1.0f); }, &b);
+                CHECK (q->getEngine().activeVoiceCount() == 0 && rmsOf (b, 0, b.getNumSamples()) < 1.0e-6, "no stuck note: a slice key let go under Off (it releases the slice, no synth note)");
+            }
+        }
+        // 2. the rows: Kick / Snare / Hat, a type set by hand, None, and rows together
+        {
+            // slice keys 0-15 with types set by hand: 0-3 kick, 4-7 snare, 8-11 hat, 12-15 none
+            auto rowsPatch = [&] (std::function<void (MegaSynthProcessor&)> setup)
+            {
+                auto p = clean(); withBreak (*p); setP (*p, P_rxOn, 1.0f); setP (*p, P_rxMainOn, 0.0f);
+                p->breakStore.edit ([] (tg::BreakData& d) { for (int k = 0; k < 16; ++k) d.brk[0].slice[k].hitType = k < 4 ? 1 : (k < 8 ? 2 : (k < 12 ? 3 : 4)); });
+                setup (*p);
+                std::vector<std::pair<double, juce::MidiMessage>> ev;
+                for (int k = 0; k < 16; ++k) { ev.push_back (on (0.05 + k * 0.05, 36 + k)); ev.push_back (off (0.08 + k * 0.05, 36 + k)); }
+                run (*p, 1.0, ev, nullptr, nullptr);
+                const auto& en = p->getEngine();
+                return std::array<int, 4> { en.rxRowHitsShown[0].load(), en.rxRowHitsShown[1].load(), en.rxRowHitsShown[2].load(), en.rxRowHitsShown[3].load() };
+            };
+            const auto kick = rowsPatch ([&] (MegaSynthProcessor& p) { setP (p, P_rxKOn, 1.0f); });
+            const auto snare = rowsPatch ([&] (MegaSynthProcessor& p) { setP (p, P_rxSOn, 1.0f); });
+            const auto hat = rowsPatch ([&] (MegaSynthProcessor& p) { setP (p, P_rxHOn, 1.0f); });
+            const auto all3 = rowsPatch ([&] (MegaSynthProcessor& p) { setP (p, P_rxKOn, 1.0f); setP (p, P_rxSOn, 1.0f); setP (p, P_rxHOn, 1.0f); setP (p, P_rxMainOn, 1.0f); setP (p, P_rxListen, 0.0f); });
+            const auto mainKicks = rowsPatch ([&] (MegaSynthProcessor& p) { setP (p, P_rxMainOn, 1.0f); setP (p, P_rxListen, 1.0f); setP (p, P_rxKOn, 1.0f); });
+            std::cout << "  rows (16 slice keys: 4 kick, 4 snare, 4 hat, 4 None by hand): Kick row " << kick[1] << ", Snare row " << snare[2] << ", Hat row " << hat[3]
+                      << "; all rows + Main (all hits): " << all3[0] << " / " << all3[1] << " / " << all3[2] << " / " << all3[3] << std::endl;
+            CHECK (kick[1] == 4 && kick[2] == 0 && kick[3] == 0 && kick[0] == 0, "the Kick row reacts to the kicks only");
+            CHECK (snare[2] == 4 && snare[1] == 0 && hat[3] == 4 && hat[1] == 0, "the Snare and Hat rows react to their own hits only");
+            CHECK (all3[0] == 12 && all3[1] == 4 && all3[2] == 4 && all3[3] == 4, "rows combine (Main on all hits fires with them; None never counts)");
+            CHECK (mainKicks[0] == 4 && mainKicks[1] == 4, "the Main row (Listen: kicks) and the Kick row both fire on a kick");
+            // a type set by hand wins over the analysis: the analysis' kicks, set to Snare, fire the Snare row
+            {
+                auto p = clean(); withBreak (*p); setP (*p, P_rxOn, 1.0f); setP (*p, P_rxMainOn, 0.0f); setP (*p, P_rxKOn, 1.0f); setP (*p, P_rxSOn, 1.0f);
+                const auto d = p->breakStore.get();
+                int kicks = 0; std::vector<int> kickSlices;
+                for (int k = 0; k < d.brk[0].nSlices; ++k) if (d.brk[0].kick[k] >= d.brk[0].snare[k] && d.brk[0].kick[k] >= d.brk[0].hat[k] && d.brk[0].kick[k] >= 0.475f) { ++kicks; kickSlices.push_back (k); }
+                p->breakStore.edit ([&] (tg::BreakData& dd) { for (int k : kickSlices) dd.brk[0].slice[k].hitType = 2; });
+                std::vector<std::pair<double, juce::MidiMessage>> ev;
+                for (int k : kickSlices) { ev.push_back (on (0.05 + k * 0.05, 36 + k)); ev.push_back (off (0.08 + k * 0.05, 36 + k)); }
+                run (*p, 1.0, ev, nullptr, nullptr);
+                CHECK (kicks > 0 && p->getEngine().rxRowHitsShown[1].load() == 0 && p->getEngine().rxRowHitsShown[2].load() == kicks,
+                       "a slice's React Type wins over the analysis (its kicks, set to Snare, fire the Snare row: " + juce::String (kicks) + ")");
+            }
+        }
+        // 3. Env Retrigger: on the hit (within 1 sample), from where the envelope was (no step), held by the pedal
+        {
+            auto retrigPatch = [&] (int mode)
+            {
+                auto p = clean(); setP (*p, P_ampA, 0.05f); setP (*p, P_ampD, 0.1f); setP (*p, P_ampS, 0.3f); setP (*p, P_ampR, 0.05f);
+                setP (*p, P_rxOn, 1.0f); setP (*p, P_rxFromNote, 1.0f); setP (*p, P_rxNote, 24.0f); setP (*p, P_rxFromBreaks, 0.0f);
+                setP (*p, P_rxReset, 0.0f); setP (*p, P_rxRetrig, (float) mode);
+                return p;
+            };
+            const int T = (int) (0.5 * sr) + 37; const double tT = (T + 0.25) / sr;
+            juce::AudioBuffer<float> a, b;
+            { auto p = retrigPatch (1); tg::resetVoiceRandom(); render (*p, 0.8, { on (0.0, 57), on (tT, 24), off (tT + 0.01, 24) }, &a); }
+            { auto p = retrigPatch (0); tg::resetVoiceRandom(); render (*p, 0.8, { on (0.0, 57), on (tT, 24), off (tT + 0.01, 24) }, &b); }
+            int first = -1; for (int i = T - 2000; i < a.getNumSamples(); ++i) if (std::abs (a.getSample (0, i) - b.getSample (0, i)) > 1.0e-7f) { first = i; break; }
+            const double before = rmsOf (a, T - 2400, T - 200), after = rmsOf (a, T + 2200, T + 2600);
+            // (a step shows as a spike in the second difference; a sine's own is small and smooth)
+            auto d2 = [&] (int i) { return std::abs (a.getSample (0, i + 1) - 2.0f * a.getSample (0, i) + a.getSample (0, i - 1)); };
+            float natural = 0; for (int i = T + 2000; i < T + 2400; ++i) natural = std::max (natural, d2 (i));
+            float around = 0; for (int i = T - 2; i < T + 200; ++i) around = std::max (around, d2 (i));
+            std::cout << "  Env Retrigger (Amp): first change at " << first << " (hit " << T << "); level " << before << " before, " << after << " near the new peak; largest step "
+                      << around << " (the note's own " << natural << ")" << std::endl;
+            CHECK (std::abs (first - T) <= 1, "Env Retrigger: the amp envelope starts again within 1 sample of the hit");
+            CHECK (after > before * 2.5, "Env Retrigger: from the sustain level back up through the attack");
+            CHECK (around <= natural * 1.05f, "Env Retrigger: no step (it starts from where the envelope was; second difference around the hit no bigger than the note's own at its peak)");
+            // the sustain pedal: the key let go, the pedal down - still retriggered
+            juce::AudioBuffer<float> c;
+            {
+                auto p = retrigPatch (1); tg::resetVoiceRandom();
+                render (*p, 0.8, { on (0.0, 57), { 0.1, juce::MidiMessage::controllerEvent (1, 64, 127) }, off (0.2, 57), on (tT, 24), off (tT + 0.01, 24) }, &c);
+            }
+            CHECK (rmsOf (c, T + 2200, T + 2600) > rmsOf (c, T - 2400, T - 200) * 2.5, "Env Retrigger works with the sustain pedal holding the note");
+            // released notes aren't retriggered
+            juce::AudioBuffer<float> d;
+            { auto p = retrigPatch (1); setP (*p, P_ampR, 2.0f); tg::resetVoiceRandom(); render (*p, 0.8, { on (0.0, 57), off (0.3, 57), on (tT, 24), off (tT + 0.01, 24) }, &d); }
+            CHECK (rmsOf (d, T + 2200, T + 2600) < rmsOf (d, T - 2400, T - 200), "Env Retrigger leaves a released note alone");
+        }
+        // 4. Filter Kick: Filter 1 opens on the hit and is back after the decay
+        {
+            auto bright = [&] (const juce::AudioBuffer<float>& x, int from, int len)
+            {
+                // the share of the signal above ~2 kHz (a first difference against the signal)
+                double hi = 0, all = 0; for (int i = from + 1; i < from + len; ++i) { const double d = x.getSample (0, i) - x.getSample (0, i - 1); hi += d * d; all += (double) x.getSample (0, i) * x.getSample (0, i); }
+                return std::sqrt (hi / std::max (1e-12, all));
+            };
+            const int T = (int) (0.5 * sr);
+            juce::AudioBuffer<float> a;
+            {
+                auto p = clean (0); setP (*p, P_filterCutoff, 400.0f); setP (*p, P_filterRes, 0.7f);
+                setP (*p, P_rxOn, 1.0f); setP (*p, P_rxFromNote, 1.0f); setP (*p, P_rxNote, 24.0f); setP (*p, P_rxFromBreaks, 0.0f); setP (*p, P_rxReset, 0.0f);
+                setP (*p, P_rxCut, 3.0f); setP (*p, P_rxDecay, 60.0f);
+                tg::resetVoiceRandom(); render (*p, 1.0, { on (0.0, 45), on (T / sr, 24), off (T / sr + 0.01, 24) }, &a);
+            }
+            const double b0 = bright (a, T - 2400, 2000), b1 = bright (a, T + 48, 480), b2 = bright (a, T + (int) (0.3 * sr), 2000);
+            std::cout << "  Filter Kick +3 oct on a 400 Hz low-pass: brightness " << b0 << " before, " << b1 << " just after the hit, " << b2 << " after the decay" << std::endl;
+            CHECK (b1 > b0 * 1.6 && std::abs (b2 - b0) < b0 * 0.05, "Filter Kick: Filter 1 opens on the hit and is back after the decay");
+        }
+        // 5. Velocity Follow: a hit at half velocity reacts about half as much (the Level Duck's depth)
+        {
+            auto duckDepth = [&] (int vel)
+            {
+                auto p = clean(); setP (*p, P_rxOn, 1.0f); setP (*p, P_rxFromNote, 1.0f); setP (*p, P_rxNote, 24.0f); setP (*p, P_rxFromBreaks, 0.0f); setP (*p, P_rxReset, 0.0f);
+                setP (*p, P_rxDuck, 1.0f); setP (*p, P_rxVel, 1.0f); setP (*p, P_rxAttack, 0.5f); setP (*p, P_rxDecay, 400.0f);
+                juce::AudioBuffer<float> b; tg::resetVoiceRandom(); render (*p, 0.8, { on (0.0, 57), on (0.5, 24, vel), off (0.51, 24) }, &b);
+                const double lv = rmsOf (b, (int) (0.40 * sr), (int) (0.48 * sr)), dip = rmsOf (b, (int) (0.503 * sr), (int) (0.508 * sr));
+                return 1.0 - dip / lv;
+            };
+            const double full = duckDepth (127), half = duckDepth (64);
+            std::cout << "  Velocity Follow 100%, Level Duck 100%: a full-velocity hit ducks " << juce::String (full * 100.0, 1) << "%, a half-velocity one " << juce::String (half * 100.0, 1) << "%" << std::endl;
+            CHECK (full > 0.85 && std::abs (half / full - 0.5) < 0.08, "Velocity Follow: a half-velocity hit reacts about half as much");
+        }
+        // 6. which hits count: Beats, Every, Chance (16 bars of 16th trigger notes on the synth's own clock)
+        {
+            auto counts = [&] (int beats, int every, float chance, int seed, std::vector<int>* places = nullptr)
+            {
+                auto p = clean(); setP (*p, P_seqTempo, 120.0f);
+                setP (*p, P_rxOn, 1.0f); setP (*p, P_rxFromNote, 1.0f); setP (*p, P_rxNote, 24.0f); setP (*p, P_rxFromBreaks, 0.0f); setP (*p, P_rxReset, 0.0f);
+                setP (*p, P_rxBeats, (float) beats); setP (*p, P_rxEvery, (float) every); setP (*p, P_rxChance, chance); setP (*p, P_rxSeed, (float) seed);
+                std::vector<std::pair<double, juce::MidiMessage>> ev;
+                const double step = 0.125;   // a 16th at 120 BPM
+                for (int k = 0; k < 16 * 16; ++k) { ev.push_back (on (k * step + 0.5 / sr, 24)); ev.push_back (off (k * step + 0.02, 24)); }
+                run (*p, 16 * 2.0 + 0.1, ev, nullptr, nullptr);
+                const auto& en = p->getEngine();
+                if (places != nullptr) { const int c = en.rxLogCount.load(); for (int k = std::max (0, c - tg::Engine::kRxLog); k < c; ++k) places->push_back (en.rxLog[(size_t) (k % tg::Engine::kRxLog)].load()); }
+                return en.rxRowHitsShown[0].load();
+            };
+            const int all = counts (0, 0, 1.0f, 1), beat = counts (1, 0, 1.0f, 1), back = counts (2, 0, 1.0f, 1), offb = counts (3, 0, 1.0f, 1), ev2 = counts (0, 1, 1.0f, 1), ev4 = counts (0, 3, 1.0f, 1);
+            if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROWDBG", {}).isNotEmpty())
+            {
+                std::vector<int> pl; counts (2, 0, 1.0f, 1, &pl);
+                for (int v : pl) std::cout << "    backbeat hit at " << (v & 4095) / 4096.0 * 4.0 << " beats" << std::endl;
+            }
+            std::vector<int> pa, pb, pc;
+            const int ch1 = counts (0, 0, 0.5f, 7, &pa), ch2 = counts (0, 0, 0.5f, 7, &pb), ch3 = counts (0, 0, 0.5f, 8, &pc);
+            std::cout << "  16 bars of 16ths: all " << all << ", on the beat " << beat << ", backbeat " << back << ", off-beats " << offb << ", every 2nd " << ev2 << ", every 4th " << ev4
+                      << "; Chance 50%: " << ch1 << " (again " << ch2 << ", another seed " << ch3 << ")" << std::endl;
+            CHECK (all == 256 && beat == 64 && back == 32 && offb == 192, "Beats: on the beat 4 a bar, the backbeat 2, the off-beats 12");
+            CHECK (ev2 == 128 && ev4 == 64, "Every: every 2nd and every 4th hit, counted from each bar");
+            CHECK (ch1 > 96 && ch1 < 160 && ch1 == ch2 && pa == pb && pa != pc, "Chance: about half, the same hits every playthrough with the same seed, others with another");
+        }
+        // 7. the other engines: back where a fresh note starts them, after the reset
+        {
+            const int T = (int) (0.5 * sr) + 37; const double tT = (T + 0.25) / sr;
+            auto compare = [&] (const char* name, std::function<void (MegaSynthProcessor&)> setup)
+            {
+                auto mk = [&] (bool react)
+                {
+                    auto p = clean(); setP (*p, P_osc1Gain, 0.0f); setP (*p, P_supersawDrift, 0.0f); setup (*p);
+                    setP (*p, P_rxOn, react && juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROWDBG2", {}).isEmpty() ? 1.0f : 0.0f); setP (*p, P_rxFromNote, 1.0f); setP (*p, P_rxNote, 24.0f); setP (*p, P_rxFromBreaks, 0.0f);
+                    setP (*p, P_rxPitch, 0.0f); setP (*p, P_rxDuck, 0.0f);
+                    for (int i : { P_rxOsc1, P_rxOsc2, P_rxOsc3, P_rxSub, P_rxReese }) setP (*p, i, 0.0f);
+                    return p;
+                };
+                juce::AudioBuffer<float> a, b;
+                { auto p = mk (true); tg::resetVoiceRandom(); render (*p, 0.75, { on (0.0, 57), on (tT, 24), off (tT + 0.01, 24) }, &a); }
+                { auto p = mk (false); tg::resetVoiceRandom(); render (*p, 0.75, { on (tT, 57) }, &b); }
+                if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROWDBG", {}).isNotEmpty())
+                {
+                    int bestLag = 0; double best = 1e9;
+                    for (int lag = -400; lag <= 400; ++lag) { double e = 0; for (int i = T + 5000; i < T + 6000; ++i) { const double df = a.getSample (0, i) - b.getSample (0, i + lag); e += df * df; } if (e < best) { best = e; bestLag = lag; } }
+                    std::cout << "    " << name << " best lag " << bestLag << " err " << best << std::endl;
+                }
+                if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROWDBG", {}).isNotEmpty())
+                    for (int i = T + 5000; i < T + 5008; ++i) std::cout << "    " << name << " " << i << ": " << a.getSample (0, i) << " / " << b.getSample (0, i) << std::endl;
+                double d = 0, lv = 0;
+                // (from 100 ms on: a new note fades its sources in over the first few ms)
+                for (int i = T + 4800; i < T + 9600; ++i) { d = std::max (d, (double) std::abs (a.getSample (0, i) - b.getSample (0, i))); lv = std::max (lv, (double) std::abs (b.getSample (0, i))); }
+                float natural = 0; for (int i = T - 3000; i < T - 100; ++i) natural = std::max (natural, std::abs (a.getSample (0, i + 1) - a.getSample (0, i)));
+                float around = 0; int at = -1; for (int i = T - 2; i < T + 100; ++i) { const float st = std::abs (a.getSample (0, i + 1) - a.getSample (0, i)); if (st > around) { around = st; at = i; } }
+                if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROWDBG", {}).isNotEmpty())
+                    for (int i = at - 3; i < at + 4; ++i) std::cout << "    max step near " << i << ": " << a.getSample (0, i) << std::endl;
+                std::cout << "  " << name << ": after the reset, " << juce::String (juce::Decibels::gainToDecibels (d / std::max (1e-9, lv), -200.0), 1)
+                          << " dB from a note started on the hit; the reset's largest step " << around << " (its own " << natural << ")" << std::endl;
+                return std::pair<double, bool> { d / std::max (1e-9, lv), around <= natural * 1.6f };
+            };
+            const auto core = compare ("Core A", [&] (MegaSynthProcessor& p) { setP (p, P_cAEngine, 1.0f); setP (p, P_rxCoreA, 1.0f); });
+            const auto saw = compare ("SuperSaw", [&] (MegaSynthProcessor& p) { setP (p, P_supersawGain, 0.6f); setP (p, P_rxSaw, 1.0f); });
+            const auto cx = compare ("Complex", [&] (MegaSynthProcessor& p) { setP (p, P_complexGain, 0.6f); setP (p, P_rxComplex, 1.0f); });
+            CHECK (core.first < 1.0e-3 && core.second, "Core A reacts: phases and envelopes back where a fresh note starts them, declicked");
+            CHECK (saw.first < 1.0e-3 && saw.second, "SuperSaw reacts: phases back to the note's start, declicked");
+            CHECK (cx.first < 3.0e-3 && cx.second, "Complex reacts: phases back to the note's start, declicked");
+            // WT 1: back to its start (plus Jump), declicked
+            {
+                juce::AudioBuffer<float> smp (1, 44100);
+                for (int i = 0; i < smp.getNumSamples(); ++i) smp.setSample (0, i, 0.6f * (float) std::sin (2.0 * kPi * 220.0 * i / 44100.0 + 0.00002 * i * i / 44100.0));
+                const auto wav = tg::breaks::toWav16 (smp, 44100.0);
+                auto wtSetup = [&] (MegaSynthProcessor& p) { p.loadSampleData (wav, "wt.wav", 0); setP (p, P_osc4Gain, 0.7f); setP (p, P_rxWt1, 1.0f); };
+                if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROWDBG", {}).isNotEmpty())
+                {
+                    auto p = clean(); setP (*p, P_osc1Gain, 0.0f); wtSetup (*p);
+                    juce::AudioBuffer<float> x; render (*p, 1.5, { on (0.0, 57) }, &x);
+                    for (int k = 0; k < 15; ++k) std::cout << "    WT held rms " << k * 0.1 << " s: " << rmsOf (x, (int) (k * 0.1 * sr), (int) ((k + 1) * 0.1 * sr)) << std::endl;
+                }
+                // (a new note's wavetable starts at its first control update, up to one control block after the key: so the match is
+                // looked for within that many samples)
+                juce::AudioBuffer<float> a, b;
+                auto mk = [&] (bool react)
+                {
+                    auto p = clean(); setP (*p, P_osc1Gain, 0.0f); wtSetup (*p);
+                    setP (*p, P_rxOn, react ? 1.0f : 0.0f); setP (*p, P_rxFromNote, 1.0f); setP (*p, P_rxNote, 24.0f); setP (*p, P_rxFromBreaks, 0.0f);
+                    for (int i : { P_rxOsc1, P_rxOsc2, P_rxOsc3, P_rxSub, P_rxReese }) setP (*p, i, 0.0f);
+                    return p;
+                };
+                // two notes started at different times, both restarted by the same hit: the same from there on
+                { auto p = mk (true); tg::resetVoiceRandom(); render (*p, 0.75, { on (0.0, 57), on (tT, 24), off (tT + 0.01, 24) }, &a); }
+                { auto p = mk (true); tg::resetVoiceRandom(); render (*p, 0.75, { on (0.0131, 57), on (tT, 24), off (tT + 0.01, 24) }, &b); }
+                int bestLag = 0; double best = 1e9, lv = 0;
+                for (int lag = 0; lag <= 0; ++lag)
+                {
+                    double e = 0; for (int i = T + 4800; i < T + 9600; ++i) e = std::max (e, (double) std::abs (a.getSample (0, i) - b.getSample (0, i + lag)));
+                    if (e < best) { best = e; bestLag = lag; }
+                }
+                for (int i = T + 4800; i < T + 9600; ++i) lv = std::max (lv, (double) std::abs (b.getSample (0, i)));
+                float natural = 0; for (int i = T - 3000; i < T - 100; ++i) natural = std::max (natural, std::abs (a.getSample (0, i + 1) - a.getSample (0, i)));
+                float around = 0; for (int i = T - 2; i < T + 100; ++i) around = std::max (around, std::abs (a.getSample (0, i + 1) - a.getSample (0, i)));
+                std::cout << "  WT 1: after the reset, " << juce::String (juce::Decibels::gainToDecibels (best / lv, -200.0), 1) << " dB between two notes started at different times, both restarted by the hit (" << bestLag
+                          << " samples apart); the reset's largest step " << around << " (its own " << natural << ")" << std::endl;
+                CHECK (best / lv < 2.0e-3 && around <= natural * 1.6f, "WT 1 reacts: playback back at its start, declicked");
+            }
+            // Granular: a burst of grains with the hit envelope
+            {
+                auto grains = [&] (bool react)
+                {
+                    auto p = clean(); setP (*p, P_osc1Gain, 0.0f);
+                    juce::AudioBuffer<float> smp (1, 44100); for (int i = 0; i < smp.getNumSamples(); ++i) smp.setSample (0, i, 0.4f * (float) std::sin (2.0 * kPi * 330.0 * i / 44100.0));
+                    p->loadSampleData (tg::breaks::toWav16 (smp, 44100.0), "g.wav", MegaSynthProcessor::kSlotGranular);
+                    setP (*p, P_gsOn, 1.0f); setP (*p, P_gsDensity, 8.0f);
+                    setP (*p, P_rxOn, 1.0f); setP (*p, P_rxFromNote, 1.0f); setP (*p, P_rxNote, 24.0f); setP (*p, P_rxFromBreaks, 0.0f); setP (*p, P_rxDecay, 300.0f);
+                    setP (*p, P_rxGran, react ? 1.0f : 0.0f); setP (*p, P_rxGranBurst, 1.0f);
+                    int most = 0;
+                    run (*p, 0.8, { on (0.0, 57), on (0.5, 24), off (0.51, 24) }, [&] (int pos)
+                    {
+                        if (pos > (int) (0.5 * sr)) most = std::max (most, p->getEngine().granGrainsShown.load());
+                        if (react && juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROWDBG", {}).isNotEmpty() && pos > (int) (0.45 * sr) && pos < (int) (0.6 * sr))
+                            std::cout << "    grains at " << pos << ": " << p->getEngine().granGrainsShown.load() << " env " << p->getEngine().rxEnvShown.load() << std::endl;
+                    }, nullptr);
+                    return most;
+                };
+                const int with = grains (true), without = grains (false);
+                std::cout << "  Granular Burst 100%: up to " << with << " grains after the hit (" << without << " without)" << std::endl;
+                CHECK (with >= without * 3, "Granular reacts: a burst of grains on the hit");
+            }
+        }
+        // 8. detection: Classic and Band energy against the demo breaks' own hits
+        {
+            int okC = 0, okB = 0, total = 0;
+            for (int variant = 0; variant < 3; ++variant)
+            {
+                const double bpm = 170.0, step = 60.0 / bpm / 4.0, swing = step * (variant == 2 ? 0.14 : 0.08);
+                auto buf = tg::breaks::makeDemoBreak (44100.0, bpm, variant);
+                std::vector<int> label (32, -1);
+                auto mark = [&] (std::initializer_list<int> steps, int type) { for (int s : steps) if (label[(size_t) s] < 0 || type < label[(size_t) s]) label[(size_t) s] = type; };
+                if (variant == 1)
+                {
+                    mark ({ 0, 6, 16, 22, 26 }, 0); mark ({ 4, 12, 20, 28, 15, 31 }, 1);
+                    for (int s = 0; s < 32; ++s) mark ({ s }, 2);
+                }
+                else if (variant == 2)
+                {
+                    mark ({ 0, 10, 16, 26 }, 0); mark ({ 4, 12, 20, 28 }, 1); mark ({ 2, 3, 7, 9, 11, 14, 15, 18, 19, 23, 25, 27, 30, 31 }, 1);
+                    for (int s = 0; s < 32; s += 2) mark ({ s }, 2);
+                }
+                else
+                {
+                    mark ({ 0, 10, 16, 18, 26, 27 }, 0); mark ({ 4, 12, 20, 28 }, 1); mark ({ 7, 9, 15, 23, 25, 30 }, 1);
+                    for (int s = 0; s < 32; s += 2) mark ({ s }, 2);
+                    for (int s = 1; s < 32; s += 4) mark ({ s }, 2);
+                }
+                tg::WaveSample w; w.numChannels = 2; w.length = buf.getNumSamples(); w.sampleRate = 44100.0;
+                for (int c = 0; c < 2; ++c) w.ch[c].assign (buf.getReadPointer (c), buf.getReadPointer (c) + w.length);
+                tg::BreakSlot slot;
+                std::vector<int> steps;
+                for (int s = 0; s < 32; ++s) if (label[(size_t) s] >= 0) { steps.push_back (s); slot.markers[slot.nMarkers++] = (float) ((s * step + ((s & 1) ? swing : 0.0)) * 44100.0 / w.length); }
+                tg::breaks::analyse (&w, 5, 0.5f, 0, 0.0, slot);
+                for (int k = 0; k < slot.nSlices && k < (int) steps.size(); ++k)
+                {
+                    const int want = label[(size_t) steps[(size_t) k]];
+                    auto argmax = [] (float a, float b, float c) { return a >= b && a >= c ? 0 : (b >= c ? 1 : 2); };
+                    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROWDBG", {}).isNotEmpty())
+                        std::cout << "    v" << variant << " step " << steps[(size_t) k] << " want " << want << "  B " << slot.kickB[k] << " " << slot.snareB[k] << " " << slot.hatB[k]
+                                  << "  C " << slot.kick[k] << " " << slot.snare[k] << " " << slot.hat[k] << std::endl;
+                    okC += argmax (slot.kick[k], slot.snare[k], slot.hat[k]) == want ? 1 : 0;
+                    okB += argmax (slot.kickB[k], slot.snareB[k], slot.hatB[k]) == want ? 1 : 0;
+                    ++total;
+                }
+            }
+            std::cout << "  detection on the 3 demo breaks (" << total << " labelled hits): Classic " << juce::String (100.0 * okC / total, 1) << "%, Band energy "
+                      << juce::String (100.0 * okB / total, 1) << "%" << std::endl;
+            CHECK (total > 60 && okB >= okC, "Band energy detection is at least as accurate as Classic on the demo breaks");
+        }
+        // 10. CPU: 8 notes, every row and engine reacting to a hit on every 16th at 172 BPM, each quality
+        {
+            auto cost = [&] (int quality, bool react)
+            {
+                double best = 1e9;
+                for (int rep = 0; rep < 2; ++rep)
+                {
+                    auto q = make(); setP (*q, P_quality, (float) quality); setP (*q, P_seqTempo, 172.0f);
+                    for (int i : { P_reverbMix, P_delayMix, P_chorusMix }) setP (*q, i, 0.0f);
+                    setP (*q, P_supersawGain, 0.3f); setP (*q, P_complexGain, 0.3f); setP (*q, P_cAEngine, 1.0f); setP (*q, P_rsLevel, 0.4f);
+                    // (both: the trigger note is taken by Break React, so it never plays a voice; off: no row on)
+                    setP (*q, P_rxOn, 1.0f); setP (*q, P_rxFromNote, 1.0f); setP (*q, P_rxNote, 24.0f); setP (*q, P_rxFromBreaks, 0.0f); setP (*q, P_rxListen, 0.0f);
+                    if (! react) setP (*q, P_rxMainOn, 0.0f);
+                    if (react)
+                    {
+                        for (int r = 0; r < kRxRows; ++r)
+                        {
+                            setP (*q, rxRowParam (r, RXF_On), 1.0f); setP (*q, rxRowParam (r, RXF_Pitch), 2.0f); setP (*q, rxRowParam (r, RXF_Duck), 0.3f);
+                            setP (*q, rxRowParam (r, RXF_Cut), 1.0f); setP (*q, rxRowParam (r, RXF_Retrig), 3.0f); setP (*q, rxRowParam (r, RXF_Drive), 0.2f);
+                        }
+                        for (int i : { P_rxWt1, P_rxWt2, P_rxCoreA, P_rxCoreB, P_rxSaw, P_rxComplex, P_rxGran }) setP (*q, i, 1.0f);
+                    }
+                    std::vector<std::pair<double, juce::MidiMessage>> ev;
+                    for (int nn : { 36, 43, 48, 55, 60, 64, 67, 72 }) ev.push_back (on (0.0, nn));
+                    const double six = 60.0 / 172.0 / 4.0;
+                    for (int k = 0; k < (int) (3.0 / six); ++k) { ev.push_back (on (k * six + 0.001, 24)); ev.push_back (off (k * six + 0.02, 24)); }
+                    double cpu = 0; render (*q, 3.0, ev, nullptr, &cpu);
+                    best = std::min (best, cpu / 3.0 * 100.0);
+                }
+                return best;
+            };
+            const char* qn[3] = { "Eco", "Normal", "High" };
+            for (int qu = 0; qu < 3; ++qu)
+            {
+                const double a = cost (qu, false), b = cost (qu, true);
+                std::cout << "  CPU, 8 notes (Osc 1, SuperSaw, Complex, Core A, Reese), every row and engine reacting to every 16th at 172 BPM, " << qn[qu] << ": "
+                          << juce::String (a, 1) << "% off, " << juce::String (b, 1) << "% reacting (+" << juce::String (b - a, 1) << "% of a core)" << std::endl;
+            }
+        }
+        // 9. presets: only the Break React controls, one undo step; saved and loaded
+        {
+            auto p = clean(); setP (*p, P_filterCutoff, 1234.0f); p->pushHistory ("start");
+            p->applyReactPreset (2);
+            CHECK (plainOf (*p, P_rxOn) == 1.0f && plainOf (*p, P_rxSOn) == 1.0f && plainOf (*p, P_rxSCut) == 2.0f && std::abs (plainOf (*p, P_filterCutoff) - 1234.0f) < 1.0f,
+                   "a Break React preset sets its rows, nothing else");
+            p->undo();
+            CHECK (plainOf (*p, P_rxOn) == 0.0f && plainOf (*p, P_rxSOn) == 0.0f, "a Break React preset is one undo step");
+            p->applyReactPreset (1);
+            juce::MemoryBlock st; p->getStateInformation (st);
+            auto q = make(); q->setStateInformation (st.getData(), (int) st.getSize());
+            bool same = true; for (int i = P_bcSliceKeys; i <= P_rxGranBurst; ++i) same &= q->param (i)->getValue() == p->param (i)->getValue();
+            CHECK (same, "the new Slice Keys / Break React settings are saved with the project");
+        }
+    };
     // ---- patch categories: category, tags, author, note; the browser's filters; many at once; Deleted; import / export
     auto categoryTests = [&]
     {
@@ -7416,6 +7848,12 @@ int main()
         std::cout << (failures == 0 ? "CATEGORY TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROWSONLY", {}).isNotEmpty())
+    {
+        rowTests();
+        std::cout << (failures == 0 ? "ROW TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_REACTONLY", {}).isNotEmpty())
     {
         reactTests();
@@ -7425,7 +7863,7 @@ int main()
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BANKSEQ", {}).isNotEmpty())
     {
         // (the full run's order up to the bank, to check it in that state)
-        reeseTests(); reactTests(); coreTests(); categoryTests(); tg::resetVoiceRandom(); presetBankTests();
+        reeseTests(); reactTests(); rowTests(); coreTests(); categoryTests(); tg::resetVoiceRandom(); presetBankTests();
         std::cout << (failures == 0 ? "BANKSEQ PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
@@ -7445,6 +7883,68 @@ int main()
             for (int ch = 0; ch < 2; ++ch) all.append (c.getReadPointer (ch), sizeof (float) * (size_t) c.getNumSamples());
         }
         juce::File (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_COREREF", {})).replaceWithData (all.getData(), all.getSize());
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RXDEMO", {}).isNotEmpty())
+    {
+        // Break React reel: 172 BPM, the demo break from the Break Sequencer, a held Reese + sub bass played in the slice zone
+        // (Slice Keys Auto), four passes of 5 bars: Lock bass to kicks, Snare stabs, Rolling Reese, all three together
+        auto p = make();
+        setP (*p, P_osc1Gain, 0.0f); setP (*p, P_subGain, 0.45f); setP (*p, P_subWave, 0.0f);
+        setP (*p, P_rsLevel, 0.45f); setP (*p, P_rsVoices, 1.0f); setP (*p, P_rsNotch, 0.3f);
+        setP (*p, P_filterCutoff, 1400.0f); setP (*p, P_filterRes, 2.0f); setP (*p, P_ampA, 0.004f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.08f);
+        setP (*p, P_fEnvA, 0.002f); setP (*p, P_fEnvD, 0.25f); setP (*p, P_fEnvS, 0.2f); setP (*p, P_fEnvAmt, 1200.0f);
+        setP (*p, P_reverbMix, 0.08f); setP (*p, P_delayMix, 0.0f); setP (*p, P_chorusMix, 0.0f); setP (*p, P_polyphony, 1.0f);
+        setP (*p, P_bcOn, 1.0f); setP (*p, P_bcSliceMode, 3.0f); setP (*p, P_bcLevel, 0.8f); setP (*p, P_bsOn, 1.0f); setP (*p, P_bcSliceKeys, 2.0f); setP (*p, P_bcSync, 1.0f);
+        p->loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, 0), 44100.0), "Mega Break.wav", MegaSynthProcessor::kSlotBreak);
+        p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::original (d, 0, 32); });
+        setP (*p, P_bsSteps, 1.0f);
+        struct Head : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+        Head head; p->prepareToPlay (sr, 256); p->setPlayHead (&head);
+        const double bpm = 172.0, inc = bpm / 60.0 / sr;
+        const int barsPerPass = 5, total = (int) (4 * barsPerPass * 4.0 / inc);
+        juce::AudioBuffer<float> out (2, total), buf (2, 256);
+        const int bass[] = { 38, 41, 43, 36, 38 };   // D2, F2, G2, C2, D2: all in the slice zone, played as the bass
+        double ppq = 0.0; int heldNote = -1;
+        for (int pos = 0; pos < total; pos += 256)
+        {
+            const int n = std::min (256, total - pos);
+            const int bar = (int) std::floor (ppq / 4.0), pass = std::min (3, bar / barsPerPass);
+            if (bar % barsPerPass == 0 && std::fmod (ppq, 4.0) < 256 * inc)
+            {
+                switch (pass)
+                {
+                    case 0: p->applyReactPreset (1); break;
+                    case 1: p->applyReactPreset (2); break;
+                    case 2: p->applyReactPreset (3); break;
+                    default:
+                        p->applyReactPreset (1);
+                        setP (*p, P_rxSOn, 1.0f); setP (*p, P_rxSReset, 0.0f); setP (*p, P_rxSCut, 2.0f); setP (*p, P_rxSRes, 0.3f); setP (*p, P_rxSRetrig, 2.0f); setP (*p, P_rxSVel, 0.5f);
+                        setP (*p, P_rxHOn, 1.0f); setP (*p, P_rxHReset, 0.0f); setP (*p, P_rxHNotch, 0.6f); setP (*p, P_rxHVel, 0.5f);
+                        break;
+                }
+                if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RXDEMO", {}) == "off") setP (*p, P_rxOn, 0.0f);   // (the same without the reactions, to compare)
+                std::cout << "RXDEMO pass " << (pass + 1) << " from " << juce::String (pos / sr, 2) << " s" << std::endl;
+            }
+            head.info.setIsPlaying (true); head.info.setBpm (bpm); head.info.setPpqPosition (ppq); head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+            juce::MidiBuffer m;
+            const int want = bass[bar % 5];
+            if (want != heldNote && std::fmod (ppq, 4.0) < 256 * inc)
+            {
+                if (heldNote >= 0) m.addEvent (juce::MidiMessage::noteOff (1, heldNote), 0);
+                m.addEvent (juce::MidiMessage::noteOn (1, want, (juce::uint8) 100), 1);
+                heldNote = want;
+            }
+            buf.setSize (2, n, false, false, true); buf.clear(); p->processBlock (buf, m);
+            for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, buf, c, 0, n);
+            ppq += n * inc;
+        }
+        p->setPlayHead (nullptr);
+        const float pk = out.getMagnitude (0, total);
+        if (pk > 0.0f && juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RXDEMO", {}) != "off") out.applyGain (juce::Decibels::decibelsToGain (-3.0f) / pk);
+        writeWav (out, sr, juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RXDEMO", {}) == "off" ? "break_react_reel_172_off.wav" : "break_react_reel_172.wav");
+        std::cout << "RXDEMO written: renders/break_react_reel_172.wav, " << juce::String (total / sr, 1) << " s, peak was " << juce::String (juce::Decibels::gainToDecibels (pk), 1)
+                  << " dBFS (normalised to -3)" << std::endl;
         return 0;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMDEMO", {}).isNotEmpty())
@@ -7777,11 +8277,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.67.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.68.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.67 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React, the Core A / B slots, Core Envelope and Key Entry added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.68 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React, the Core A / B slots, Core Envelope, Key Entry, Slice Keys and the Break React rows added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",
@@ -9188,6 +9688,7 @@ int main()
     perfTests();
     reeseTests();
     reactTests();
+    rowTests();
     coreTests();
     keyEntryTests();
     randomTests (40);

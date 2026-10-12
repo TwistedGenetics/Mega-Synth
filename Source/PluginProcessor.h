@@ -166,6 +166,20 @@ public:
     bool randomBusy() const { return rpBusy.load(); }
     juce::String randomReport() const { const juce::ScopedLock sl (rpLock); return rpReport; }
     std::atomic<int> randomReportVersion { 0 };
+    std::atomic<bool> sliceKeysActive { false };   // the slice keys took notes in the last block
+    // for the pages: do the slice keys take notes now (Slice Keys On; Off never; Auto unless the Break Sequencer is playing, or with Key Entry)
+    // Break React's starting points (0 Off, 1 Lock bass to kicks, 2 Snare stabs, 3 Rolling Reese, 4 Duck on kick): set only
+    // the Break React controls, as one undo step
+    static constexpr int kNumReactPresets = 5;
+    static const char* reactPresetName (int k);
+    void applyReactPreset (int k);
+    bool sliceKeysTakeNotes() const
+    {
+        const int sk = juce::roundToInt (params[(size_t) tg::P_bcSliceKeys]->convertFrom0to1 (params[(size_t) tg::P_bcSliceKeys]->getValue()));
+        if (sk == 0) return true;
+        if (sk == 1) return false;
+        return bsStepShown.load() < 0 || params[(size_t) tg::P_bsKeyEntry]->getValue() > 0.5f;
+    }
     // the phrase a patch of a category is measured on (and auditioned with): { beat, length in beats, note } at 172 BPM
     static std::vector<std::array<double, 3>> auditionPhrase (const juce::String& category, bool breakKeys);
     float labVariation = 0.1f;
@@ -261,7 +275,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 27;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry
+    static constexpr int kStateVersion = 28;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -314,7 +328,8 @@ private:
     double rpMeasure (int category, double& seconds);                                                            // the calibrator only (any thread)
     juce::String rpFinish (const tg::randompatch::Options&, const tg::randompatch::Result&);                     // message thread
     void setRandomReport (const juce::String& r) { { const juce::ScopedLock sl (rpLock); rpReport = r; } randomReportVersion.fetch_add (1); }
-    void setV27DefaultsForOldPatch();       // ... and from before the Core envelope mode / key entry
+    void setV27DefaultsForOldPatch();
+    void setV28DefaultsForOldPatch();       // ... and from before Slice Keys / the Break React rows       // ... and from before the Core envelope mode / key entry
     void setCoreDefaultsForOldPatch();      // ... and from before the Core oscillator slots
     void setReeseDefaultsForOldPatch();     // ... and from before the Reese engine
     void setReactDefaultsForOldPatch();     // ... and from before Break-Reactive mode
@@ -395,6 +410,7 @@ private:
     int64_t bsLastStep = INT64_MIN;
     int bsPlaying = 0, bsChainIdx = -1;
     bool bsRunning = false;
+    uint8_t sliceKeyOwner[128] {};   // Slice Keys Off / Auto: 1 = this key's note-on went to the Break Chopper
     uint32_t bsRng = 0x9E3779B9u;
     struct BsRoll { double beat; tg::BreakChopper::Trigger t; };
     BsRoll bsRolls[16]; int bsNumRolls = 0;

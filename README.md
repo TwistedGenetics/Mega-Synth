@@ -202,18 +202,45 @@ A second oscillator built for jungle and drum & bass basses: 2, 3 or 4 detuned v
 
 ## Break React (Oscillators > Break React)
 
-Break-Reactive mode: the synth listens to the breaks and reacts on the hits you choose, so a bass locks to the drums. It's **off by default**; off, the sound is bit-for-bit what it was, and older patches and projects load with it off.
+Break-Reactive mode: the synth listens to the breaks and reacts on the hits you choose, so a bass locks to the drums. It's **off by default**; off, the sound is bit-for-bit what it was, and older patches and projects load as they were (everything new below starts off or at no change).
 
-- **Listen to** All hits, Kicks, Snares or Hats, **From** any break or one of the three. A slice counts as a kick, snare or hat from the Break Chopper's analysis of its first few milliseconds (a rough guess, not a drum detector); **Sensitivity** lets in weaker ones (ghost notes).
-- **Triggers:** **Breaks** (every slice played by the Break Sequencer, the slice keys or a fill), a **Note** of your own (Key; it isn't played, so a MIDI clip can fire the reactions anywhere), and the host's **Sidechain** (drum hits found in the sidechain input, with SC Sens). With the sidechain, listening for kicks, snares or hats needs 5 ms to tell them apart, so those hits land 5 ms after the transient; listening to all hits, they land on it.
-- **Actions:**
-  - **Phase Reset:** the ticked oscillators start their cycle again exactly on the hit (the old phase fades out over 1.5 ms so it doesn't click). For the Reese, its beating starts again too (Reese Phase goes back to 0).
-  - **Pitch Kick** (±24 st), **Drive Kick** (a burst of saturation), **Level Duck** (smoothed over about 1 ms) and **Notch Jump** (the Reese's notch leaps up, two octaves at 100%, and slides back).
-- **Oscillators:** Osc 1, Osc 2, Osc 3, Sub and Reese each have a tick box. Unticked ones don't react at all. The wavetables, Complex, SuperSaw and Granular Synth don't react.
-- **Shape & Timing:** **Attack**, then **Decay** (down to 1% over that time) shapes the kicks and the **Break Hit** source. **Offset** (-10 to +30 ms) moves the reaction later, or earlier. Earlier works by playing the breaks that much later, because the synth can't know a hit is coming; the page says when that's happening. **Humanise** moves each hit a random few ms: either way for the breaks, only later for a note or the sidechain.
-- **Mod Matrix:** two new sources, **Break Hit** (the attack/decay envelope, 0 to 1) and **Break Hit Type** (the last hit: 0 kick, 0.5 snare, 1 hat). Drag them from the chips in the title. The amounts are per voice, so they can be modulated; Sensitivity, the shape and the timing follow the global sources, like the arpeggiator's settings.
-- **Measured:** the reaction lands on the slice's first sample, from the slice keys and from the Break Sequencer (0 samples apart); Offset +10 ms is 480 samples later at 48 kHz and -5 ms plays the break 240 samples late. After a MIDI trigger, the oscillator's phase is within 0.005 samples of a note started on that sample. The reset's largest step is about the same as the sine's own steepest step, so no click; the duck's is smaller.
-- **CPU:** small. With 8 notes and a reaction on every 16th at 172 BPM it measured 1-3% of a core more, within run-to-run noise.
+- **Rows:** four rows, each with its own actions:
+  - **Main**, the original row, with its **Listen** choice (All hits, Kicks, Snares or Hats). Older patches use this row exactly as before.
+  - **Kick**, **Snare** and **Hat**: each reacts to its own kind of hit. Off by default.
+  - Each row has **On**, **Sens** (lets in weaker hits, like ghost notes) and its actions. Rows combine: a kick can pitch-dive the sub while a snare opens the filter and a hat flicks the Reese notch.
+- **From:** any break, or one of the three.
+- **Detection:** how a slice is sorted into kick, snare or hat.
+  - **Classic** (the default, as before): the low end against the bright noisy part in its first 60 ms.
+  - **Band energy:** what the slice adds in its first 20 ms against the 20 ms before it, split at 300 Hz and 2 kHz. A kick adds low with little top, a snare both, a hat top with almost no low. So a hat over a kick's tail counts as a hat.
+  - Measured on the three built-in demo breaks against their own 86 hits: Band energy sorted 84.9% right, Classic 66.3%. Both are guesses, not a drum detector.
+  - A slice's **React Type** (Break Chopper page) wins over either.
+- **Triggers:** **Breaks** (every slice played by the Break Sequencer, the slice keys or a fill), a **Note** of your own (Key; it isn't played, so a MIDI clip can fire the reactions anywhere; it's a hit for every row that's on), and the host's **Sidechain** (drum hits found in the sidechain input, with SC Sens). With the sidechain, telling kicks, snares and hats apart needs 5 ms, so those hits land 5 ms after the transient; the Main row listening to all hits lands on it.
+- **Actions (per row):**
+  - **Reset:** the ticked engines start their cycle again exactly on the hit (the old phase fades out over 1.5 ms so it doesn't click). For the Reese, its beating starts again too (Reese Phase goes back to 0).
+  - **Pitch** (±24 st), **Drive** (a burst of saturation), **Duck** (a level dip, smoothed over about 1 ms) and **Notch** (the Reese's notch leaps up, two octaves at 100%, and slides back).
+  - **Retrigger:** Off, Amp, Filter or Amp + Filter. On a hit, held notes (and notes held by the sustain pedal) start their amp and / or filter envelope again, from the attack, from where the envelope is now, so there's no step. Hold one bass note and it re-articulates with the break. Released notes aren't touched. The amp envelope restarts on the hit's own sample; the filter envelope at the next control step (within about 0.7 ms).
+  - **Filter** (±4 octaves) and **Res**: Filter 1's cutoff and resonance jump on the hit and fall back with the row's envelope.
+  - **Vel** (Velocity Follow): how much a quieter hit reacts less. At 100% a hit at half velocity reacts half as much (measured: a full-velocity hit ducked 94%, a half-velocity one 46%). For breaks, the hit's level is the slice's velocity times its level.
+- **Which hits count (per row):** **Beats** (All hits, On the beat, Backbeat (2 and 4), Off-beats), **Every** (every hit, 2nd, 3rd or 4th, counted from the start of each bar) and **Chance** (0-100%). The chance is seeded by **Seed** and by where the hit falls in the song, so a playthrough repeats exactly; another seed gives other hits. Beats needs a beat clock: the DAW's while it plays, otherwise the synth's own tempo.
+- **Engines:** which engines react.
+  - **Osc 1, Osc 2, Osc 3, Sub, Reese** take every action.
+  - **WT 1 / WT 2:** start again from their position on a Reset hit, plus **Jump** (a share of the loop, so each hit starts somewhere else).
+  - **Core A / B:** their operators' phases and envelopes start again on a Reset hit. The envelopes restart from where they are, and the old sound is crossfaded out over 3 ms.
+  - **SuperSaw** and **Complex:** their phases go back to where the note started them.
+  - **Granular:** a burst of grains on any hit (**Burst**: up to 8 times the density, following the hit envelope).
+  - The new ones are all off by default.
+- **Shape & Timing:** **Attack**, then **Decay** (down to 1% over that time) shapes every row's envelope. **Offset** (-10 to +30 ms) moves the reaction later, or earlier. Earlier works by playing the breaks that much later, because the synth can't know a hit is coming; the page says when that's happening. **Humanise** moves each hit a random few ms: either way for the breaks, only later for a note or the sidechain.
+- **Hits:** K, S and H lights flash on each kick, snare and hat it reacts to (? for a trigger note or an unsorted sidechain hit). The lane shows one bar: the last 32 hits, where they fell in it, a row per type.
+- **Presets...:** Lock bass to kicks, Snare stabs, Rolling Reese, Duck on kick, Off. They set only the Break React controls (the rest back to their defaults first) as one undo step.
+- **Mod Matrix:** sources **Break Hit** (the Main row's envelope, 0 to 1), **Break Hit Type** (the last hit: 0 kick, 0.5 snare, 1 hat), and **Kick Hit**, **Snare Hit** and **Hat Hit** (those rows' envelopes; a row must be on, and its actions can all be 0 to use it only as a source). Drag them from the chips in the title. The amounts are per voice, so they can be modulated; Sensitivity, the shape and the timing follow the global sources, like the arpeggiator's settings.
+- **Measured:**
+  - **Timing:** the reaction lands on the slice's first sample, from the slice keys and from the Break Sequencer (0 samples apart). Offset +10 ms is 480 samples later at 48 kHz; -5 ms plays the break 240 samples late. The amp Retrigger starts within 1 sample of the hit.
+  - **Phase:** after a MIDI trigger, the oscillator's phase is within 0.005 samples of a note started on that sample. After a reset, Core A matched a note started on the hit to -79 dB, SuperSaw to -71 dB and Complex to -56 dB (its smoothers). Two WT notes started at different times matched each other to -60 dB once both were reset.
+  - **Clicks:** no reset's largest step was bigger than about 1.6 times the sound's own.
+  - **Which hits count:** over 16 bars of 16ths, On the beat let 64 hits through, Backbeat 32, Off-beats 192, Every 2nd 128 and Every 4th 64. Chance 50% let 118 through, the same 118 again with the same seed.
+- **CPU** (our build machine, run-to-run noise of a few percent):
+  - The Main row alone, 8 notes, a reaction on every 16th at 172 BPM: 1-3% of a core more.
+  - Every row and every engine reacting, on 8 notes of Osc 1, SuperSaw, Complex, Core A and Reese, with Pitch, Drive, Duck, Filter and Amp + Filter Retrigger on each row: about 5-6% of a core more on every quality (Eco 17% to 23%, Normal 19% to 25%, High 24% to 30%).
 
 ## Core A and Core B (Oscillators > Core A, Core B)
 
@@ -288,8 +315,10 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
 - **Keys:**
   - Slices play from **First Key** up. The default is C1 (MIDI 36), and the key names are drawn on the wave.
   - Those keys play slices only while the chopper is on. Performance FX keys, if set to the same range, take priority.
+  - **Slice Keys** (in the All Breaks title): **On** (the default, as before), **Off** (the slice keys and the Break Select keys play the synth as ordinary notes) or **Auto** (they play the synth while the Break Sequencer is playing, so Break React gets its hits from the patterns and you get the whole keyboard; when it's stopped, or with Key Entry on, they play the breaks). The pattern keys and the Fill key keep their jobs in every mode. The keyboard tints the zone only while it takes notes, and a line next to the setting (and on the Break React page) says what it's doing. Each key's release goes where its press went, so switching with keys held leaves nothing hanging.
   - Clicking a slice plays it and selects it.
-- **Per slice:** Pitch, Gain, Pan, Trim Start and Trim End, Attack, Decay (off means it plays to its end), Choke group, Stretch, Cycle, Reverse and Loop.
+- **Per slice:** Pitch, Gain, Pan, Trim Start and Trim End, Attack, Decay (off means it plays to its end), Choke group, Stretch, Cycle, React Type, Reverse and Loop.
+  - **React Type:** what Break React counts this slice as: Auto (from the analysis), Kick, Snare, Hat or None (never a hit). It wins over the analysis, so you can fix a slice it guessed wrong. Saved with the break.
   - **Stretch** and **Cycle** override the break's stretch mode and Cycle Length for that slice. "Break's" means no override. A sequencer step's own Stretch and Cycle win over these.
   - **Choke group:** slices in the same group cut each other off with a 3 ms fade. The default is group 1, so a new hit stops the last one, like a mono sampler. Set it to none to let hits ring over each other.
   - **Loop:** the slice loops while its key is held.

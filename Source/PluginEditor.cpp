@@ -1581,6 +1581,67 @@ namespace
         juce::ComboBox box;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> att;
     };
+
+    juce::Colour rxTypeColour (int type)
+    {
+        static const juce::Colour c[4] = { juce::Colour (0xffff5a5a), juce::Colour (0xffffd166), juce::Colour (0xff4dd0e1), juce::Colour (0xffb0b8c8) };
+        return c[juce::jlimit (0, 3, type)];
+    }
+
+    // Break React's hit lights (K, S, H and any) and a lane of the recent hits, where they fell in the bar
+    struct ReactLights : juce::Component
+    {
+        explicit ReactLights (MegaSynthProcessor& p) : proc (p) {}
+        void tick()
+        {
+            const auto& en = proc.getEngine();
+            const int c = en.rxLogCount.load();
+            for (int k = std::max (lastCount, c - tg::Engine::kRxLog); k < c; ++k)
+            {
+                const int v = en.rxLog[(size_t) (k % tg::Engine::kRxLog)].load();
+                flash[(v >> 12) & 3] = 1.0f;
+            }
+            lastCount = c;
+            for (auto& f : flash) f *= 0.8f;
+            repaint();
+        }
+        void paint (juce::Graphics& g) override
+        {
+            const char* names[4] = { "K", "S", "H", "?" };
+            const auto& en = proc.getEngine();
+            g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+            for (int k = 0; k < 4; ++k)
+            {
+                const auto r = juce::Rectangle<float> (4.0f + k * 30.0f, 4.0f, 22.0f, 22.0f);
+                g.setColour (rxTypeColour (k).withAlpha (0.18f + 0.82f * flash[k]));
+                g.fillEllipse (r);
+                g.setColour (rxTypeColour (k));
+                g.drawEllipse (r, 1.2f);
+                g.setColour (flash[k] > 0.4f ? juce::Colours::black : rxTypeColour (k));
+                g.drawText (names[k], r, juce::Justification::centred);
+            }
+            // the lane: one bar, its beats, and the last 32 hits (newest brightest), a row per type
+            const auto lane = juce::Rectangle<float> (128.0f, 2.0f, (float) getWidth() - 132.0f, 26.0f);
+            g.setColour (juce::Colour (0xff141a24)); g.fillRoundedRectangle (lane, 3.0f);
+            g.setColour (juce::Colours::white.withAlpha (0.12f));
+            for (int b = 1; b < 16; ++b) g.fillRect (lane.getX() + lane.getWidth() * b / 16.0f, lane.getY() + (b % 4 == 0 ? 0.0f : 18.0f), 1.0f, b % 4 == 0 ? lane.getHeight() : 8.0f);
+            const int c = en.rxLogCount.load();
+            const int n = std::min (32, c);
+            for (int j = 0; j < n; ++j)
+            {
+                const int k = c - 1 - j;
+                const int v = en.rxLog[(size_t) (k % tg::Engine::kRxLog)].load();
+                const float place = (float) (v & 4095) / 4096.0f;
+                const int type = (v >> 12) & 3;
+                const float y = lane.getY() + 2.0f + (type == 3 ? 0 : type) * 7.5f;
+                g.setColour (rxTypeColour (type).withAlpha (1.0f - 0.8f * (float) j / 32.0f));
+                g.fillRect (lane.getX() + place * lane.getWidth() - 1.0f, y, 3.0f, 7.0f);
+            }
+        }
+        MegaSynthProcessor& proc;
+        int lastCount = 0;
+        float flash[4] {};
+    };
 }
 
 void MegaSynthEditor::buildPages()
@@ -2343,6 +2404,24 @@ void MegaSynthEditor::buildPages()
                                "hard it searches. Tempo Sync stretches every break to the song's tempo. Through Synth Filter sends the breaks through "
                                "Filter 1's settings. Select Keys: the three keys below the zone choose the Active Break (On the Beat: it changes on "
                                "the next beat). Level, Pan, Mute and Solo are the Mixer's Break strip.)", col::complex);
+        {
+            // Slice Keys: On (as always), Off (the keys play the synth), Auto (off while the Break Sequencer plays)
+            auto* skLbl = new juce::Label ({}, "Slice Keys");
+            skLbl->setFont (juce::Font (juce::FontOptions (12.0f)));
+            skLbl->setColour (juce::Label::textColourId, col::muted);
+            skLbl->setJustificationType (juce::Justification::centredRight);
+            all->addTitleChip (skLbl, 70);
+            auto* sk = new BareChoice (proc, P_bcSliceKeys);
+            sk->box.setTooltip ("Slice Keys. On: the slice keys (from First Key up) and the Select Keys play the breaks. Off: they play the synth. "
+                                "Auto: they play the synth while the Break Sequencer is playing (so Break React gets its hits from the patterns "
+                                "and you get the whole keyboard), and the breaks when it's stopped or Key Entry is on.");
+            all->addTitleChip (sk, 84);
+            auto* skState = new juce::Label();
+            skState->setFont (juce::Font (juce::FontOptions (11.5f)));
+            skState->setColour (juce::Label::textColourId, juce::Colour (0xffffb347));
+            all->addTitleChip (skState, 230);
+            sliceKeysStateLabel = skState;
+        }
         all->add (new ParamToggle (proc, P_bcSync, "Tempo Sync", col::complex), 110, 40);
         all->knob (P_bcCycle, "Cycle", 62);
         all->knob (P_bcXfade, "Crossfade", 62);
@@ -2379,10 +2458,14 @@ void MegaSynthEditor::buildPages()
                                   [] (double v) { return v < 10.0 ? juce::String ("Break's") : juce::String (v, 1) + " ms"; }));
         knobs.getLast()->setTooltip ("This slice's Akai Cyclic cycle length (Break's: the Cycle Length knob). Used when a step doesn't set its own.");
         knobs[knobs.size() - 2]->setTooltip ("This slice's stretch (Break's: the break's Stretch). A step's own Stretch wins over this.");
+        knobs.add (new StoreKnob ("React Type", 0, 4, 1, col::complex, sliceGet ([] (const tg::BreakSlice& x) { return (float) x.hitType; }), sliceSet ([] (tg::BreakSlice& x, float v) { x.hitType = juce::roundToInt (v); }),
+                                  [] (double v) { static const char* n[] = { "Auto", "Kick", "Snare", "Hat", "None" }; return juce::String (n[juce::jlimit (0, 4, juce::roundToInt (v))]); }));
+        knobs.getLast()->setTooltip ("What Break React counts this slice as: Auto (from the analysis), Kick, Snare, Hat, or None (never a hit)");
         toggles.add (new StoreToggle ("Reverse", col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.reverse; }), sliceSet ([] (tg::BreakSlice& x, bool v) { x.reverse = v; })));
         toggles.add (new StoreToggle ("Loop", col::complex, sliceGet ([] (const tg::BreakSlice& x) { return x.loop; }), sliceSet ([] (tg::BreakSlice& x, bool v) { x.loop = v; })));
-        for (auto* k : knobs) ed->add (k, 70, 84);
-        for (auto* t : toggles) ed->add (t, 80, 40);
+        for (auto* k : knobs) ed->add (k, 64, 84);
+        ed->add (toggles[0], 78, 40);
+        ed->add (toggles[1], 60, 40);
         auto* sliceName = page->own (new juce::Label());
         sliceName->setColour (juce::Label::textColourId, col::text);
         sliceName->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
@@ -2404,6 +2487,13 @@ void MegaSynthEditor::buildPages()
             for (auto* k : knobs) k->refresh();
             for (auto* t : toggles) t->refresh();
             info->setText (breakInfoText (proc, a), juce::dontSendNotification);
+            if (sliceKeysStateLabel != nullptr)
+            {
+                const int sk = juce::roundToInt (proc.param (P_bcSliceKeys)->convertFrom0to1 (proc.param (P_bcSliceKeys)->getValue()));
+                const juce::String st = sk == 0 ? juce::String() : proc.sliceKeysTakeNotes() ? juce::String ("on (Auto, sequencer stopped)")
+                                      : (sk == 1 ? juce::String ("off: the keys play the synth") : juce::String ("off (Auto, sequencer running)"));
+                if (sliceKeysStateLabel->getText() != st) sliceKeysStateLabel->setText (st, juce::dontSendNotification);
+            }
             const auto d = proc.breakStore.get();
             if (*selected >= std::max (1, d.brk[a].nSlices)) *selected = 0;
             const int kb = juce::roundToInt (proc.param (P_bcKeyBase)->convertFrom0to1 (proc.param (P_bcKeyBase)->getValue()));
@@ -2662,82 +2752,155 @@ void MegaSynthEditor::buildPages()
         const auto c = juce::Colour (0xffffb347);
         auto* top = sec (page, "Break React", c);
         top->addInfo ("Break-Reactive mode: the synth listens to the breaks (and, if you like, a MIDI note or the host's sidechain) and "
-                      "reacts on the hits you choose: the oscillators' phases reset, the pitch and drive kick, the level ducks, the Reese's "
-                      "notch jumps. Off, it changes nothing. A slice counts as a kick, snare or hat from the Break Chopper's analysis; "
-                      "Sensitivity lets in weaker ones (ghost notes).");
+                      "reacts on their hits. Four rows below: the Main row (the original one, with its Listen choice) and a row each for kicks, "
+                      "snares and hats, each with its own actions. Off, it changes nothing. A slice counts as a kick, snare or hat from the "
+                      "Break Chopper's analysis (Detection: Classic, or Band energy: low / mid / top in the first 20 ms), or as you set it per "
+                      "slice on the Break Chopper page. Slice Keys: Auto hands the slice keys back to the synth while the Break Sequencer plays. "
+                      "Presets set only these controls (one undo step).");
         top->addTitleChip (new ModSourceChip (MS_BreakHit, "Hit"), 34);
         top->addTitleChip (new ModSourceChip (MS_BreakHitType, "Type"), 40);
+        top->addTitleChip (new ModSourceChip (MS_KickHit, "Kick"), 38);
+        top->addTitleChip (new ModSourceChip (MS_SnareHit, "Snare"), 44);
+        top->addTitleChip (new ModSourceChip (MS_HatHit, "Hat"), 34);
         top->add (new ParamToggle (proc, P_rxOn, "On", c), 56, 40);
-        top->choice (P_rxListen, "Listen to", 110);
-        top->choice (P_rxBreak, "From", 110);
-        top->knob (P_rxSens, "Sensitivity", 70);
+        top->choice (P_rxBreak, "From", 104);
+        top->choice (P_rxDetect, "Detection", 120);
+        top->choice (P_bcSliceKeys, "Slice Keys", 92);
+        auto* presetBtn = new juce::TextButton ("Presets...");
+        top->add (presetBtn, 96, 28);
+        presetBtn->onClick = [this, presetBtn]
+        {
+            juce::PopupMenu m;
+            for (int k = 1; k < MegaSynthProcessor::kNumReactPresets; ++k) m.addItem (k + 1, MegaSynthProcessor::reactPresetName (k));
+            m.addSeparator();
+            m.addItem (1, "Off");
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (presetBtn), [this] (int r)
+            {
+                if (r <= 0) return;
+                proc.applyReactPreset (r - 1);
+                setStatus (juce::String ("Break React: ") + MegaSynthProcessor::reactPresetName (r - 1));
+            });
+        };
         auto* trg = sec (page, "Triggers", c);
         trg->addInfo ("Where hits come from. Breaks: every slice the Break Sequencer, the slice keys or a fill plays. Note: a key of your own "
-                      "(it isn't played) - put it in a MIDI clip to fire the reactions anywhere. Sidechain: drum hits found in the host's "
-                      "sidechain input (a rough guess at kick / snare / hat from its low and high end).");
+                      "(it isn't played) - put it in a MIDI clip to fire the reactions anywhere; it's a hit for every row that's on. Sidechain: "
+                      "drum hits found in the host's sidechain input (a rough guess at kick / snare / hat from its low and high end).");
         trg->add (new ParamToggle (proc, P_rxFromBreaks, "Breaks", c), 80, 40);
         trg->add (new ParamToggle (proc, P_rxFromNote, "Note", c), 70, 40);
         auto* kNote = trg->knob (P_rxNote, "Key", 64);
         trg->add (new ParamToggle (proc, P_rxFromSc, "Sidechain", c), 96, 40);
         auto* kSc = trg->knob (P_rxScSens, "SC Sens", 64);
-        auto* act = sec (page, "Actions", c);
-        act->addInfo ("What a hit does. Phase Reset: the ticked oscillators start their cycle again exactly on the hit (faded over 1.5 ms "
-                      "so it doesn't click) - the bass locks to the drums. Pitch Kick: a jump (up or down) that falls back over the Decay. "
-                      "Drive Kick: a burst of saturation. Level Duck: a dip, like sidechain compression. Notch Jump: the Reese's notch leaps "
-                      "up (two octaves at 100%) and slides back.");
-        act->add (new ParamToggle (proc, P_rxReset, "Phase Reset", c), 116, 40);
-        act->knob (P_rxPitch, "Pitch Kick", 66);
-        act->knob (P_rxDrive, "Drive Kick", 66);
-        act->knob (P_rxDuck, "Level Duck", 66);
-        act->knob (P_rxNotch, "Notch Jump", 66);
+
+        auto* rows = sec (page, "Rows", c);
+        rows->addInfo ("One row per kind of hit, each with its own actions. Reset: the ticked engines start their cycle again on the hit (faded "
+                       "over 1.5 ms). Pitch: a jump that falls back over the Decay. Drive: a burst of saturation. Duck: a dip. Notch: the "
+                       "Reese's notch leaps up. Retrigger: held notes start their amp and / or filter envelope again on the hit (from where "
+                       "they are, so no click). Filter: Filter 1's cutoff jumps (octaves); Res: its resonance. Vel: how much a quieter hit "
+                       "(a ghost note) reacts less. Beats / Every / Chance: which hits count - on the beat, the backbeat or the off-beats; "
+                       "every 2nd, 3rd or 4th (counted from each bar); a chance per hit, seeded (Seed) so each playthrough is the same.");
+        juce::Array<juce::Component*> rowParts[4];
+        const char* rowNames[4] = { "Main", "Kick", "Snare", "Hat" };
+        for (int r = 0; r < 4; ++r)
+        {
+            if (r > 0) rows->newRow();
+            const auto rc = r == 0 ? c : rxTypeColour (r - 1);
+            auto* lbl = new juce::Label ({}, rowNames[r]);
+            lbl->setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+            lbl->setColour (juce::Label::textColourId, rc);
+            rows->add (lbl, 50, 58);
+            auto* on = new ParamToggle (proc, rxRowParam (r, RXF_On), "On", rc);
+            rows->add (on, 50, 24);
+            juce::Array<juce::Component*>& parts = rowParts[r];
+            if (r == 0) { auto* l = new Choice (proc, P_rxListen, "Listen"); rows->add (l, 96, 44); parts.add (l); }
+            else { auto* sp = new juce::Label ({}, juce::String (r == 1 ? "kicks" : (r == 2 ? "snares" : "hats"))); sp->setColour (juce::Label::textColourId, col::muted); sp->setJustificationType (juce::Justification::centred); rows->add (sp, 96, 44); parts.add (sp); }
+            auto knob = [&] (int f, const juce::String& cap, int w) { auto* kn = new Knob (proc, rxRowParam (r, f), cap, rc); rows->add (kn, w, 60); parts.add (kn); };
+            auto pick = [&] (int f, const juce::String& cap, int w) { auto* ch = new Choice (proc, rxRowParam (r, f), cap); rows->add (ch, w, 44); parts.add (ch); };
+            knob (RXF_Sens, "Sens", 50);
+            { auto* t = new ParamToggle (proc, rxRowParam (r, RXF_Reset), "Reset", rc); rows->add (t, 64, 24); parts.add (t); }
+            knob (RXF_Pitch, "Pitch", 50); knob (RXF_Drive, "Drive", 50); knob (RXF_Duck, "Duck", 50); knob (RXF_Notch, "Notch", 50);
+            pick (RXF_Retrig, "Retrigger", 102);
+            knob (RXF_Cut, "Filter", 50); knob (RXF_Res, "Res", 44); knob (RXF_Vel, "Vel", 44);
+            pick (RXF_Beats, "Beats", 122); pick (RXF_Every, "Every", 98);
+            knob (RXF_Chance, "Chance", 52);
+        }
+
         auto* shp = sec (page, "Shape & Timing", c);
-        shp->addInfo ("The kicks' shape: Attack, then down to 1% over the Decay (the Break Hit source follows it too). Offset moves the "
-                      "reaction later (or earlier: then the breaks play that much later, as the synth can't know a hit is coming). "
-                      "Humanise: a random few ms either way on each hit.");
-        shp->knob (P_rxAttack, "Attack", 62);
-        shp->knob (P_rxDecay, "Decay", 62);
-        shp->knob (P_rxOffset, "Offset", 62);
-        shp->knob (P_rxHuman, "Humanise", 66);
-        auto* osc = sec (page, "Oscillators", c);
-        osc->addInfo ("Which oscillators react (to all the actions; the Notch Jump is the Reese's own).");
-        osc->add (new ParamToggle (proc, P_rxOsc1, "Osc 1", c), 72, 40);
-        osc->add (new ParamToggle (proc, P_rxOsc2, "Osc 2", c), 72, 40);
-        osc->add (new ParamToggle (proc, P_rxOsc3, "Osc 3", c), 72, 40);
-        osc->add (new ParamToggle (proc, P_rxSub, "Sub", c), 62, 40);
-        osc->add (new ParamToggle (proc, P_rxReese, "Reese", c), 76, 40);
+        shp->addInfo ("The hits' shape: Attack, then down to 1% over the Decay (the Hit sources follow it too). Offset moves the reaction "
+                      "later (or earlier: then the breaks play that much later, as the synth can't know a hit is coming). Humanise: a random "
+                      "few ms either way on each hit. Seed: the rows' Chance.");
+        shp->knob (P_rxAttack, "Attack", 54);
+        shp->knob (P_rxDecay, "Decay", 54);
+        shp->knob (P_rxOffset, "Offset", 54);
+        shp->knob (P_rxHuman, "Humanise", 62);
+        shp->knob (P_rxSeed, "Seed", 52);
+        auto* eng = sec (page, "Engines", c);
+        eng->addInfo ("Which engines react. Osc 1-3, Sub and Reese take every action (the Notch is the Reese's own). WT 1 / WT 2 start again "
+                      "from their position on a Reset hit, plus Jump (a share of the loop, so each hit starts somewhere else). Core A / B: "
+                      "their operators' phases and envelopes start again. SuperSaw and Complex: their phases start again. Granular: a burst "
+                      "of grains (Burst) with the hit envelope.");
+        eng->add (new ParamToggle (proc, P_rxOsc1, "Osc 1", c), 62, 24);
+        eng->add (new ParamToggle (proc, P_rxOsc2, "Osc 2", c), 62, 24);
+        eng->add (new ParamToggle (proc, P_rxOsc3, "Osc 3", c), 62, 24);
+        eng->add (new ParamToggle (proc, P_rxSub, "Sub", c), 52, 24);
+        eng->add (new ParamToggle (proc, P_rxReese, "Reese", c), 66, 24);
+        eng->add (new ParamToggle (proc, P_rxCoreA, "Core A", c), 70, 24);
+        eng->add (new ParamToggle (proc, P_rxCoreB, "Core B", c), 70, 24);
+        eng->newRow();
+        eng->add (new ParamToggle (proc, P_rxWt1, "WT 1", c), 58, 24);
+        eng->add (new ParamToggle (proc, P_rxWt2, "WT 2", c), 58, 24);
+        eng->add (new ParamToggle (proc, P_rxSaw, "SuperSaw", c), 84, 24);
+        eng->add (new ParamToggle (proc, P_rxComplex, "Complex", c), 78, 24);
+        eng->add (new ParamToggle (proc, P_rxGran, "Granular", c), 80, 24);
+        eng->knob (P_rxWtJump, "Jump", 50);
+        eng->knob (P_rxGranBurst, "Burst", 50);
+        auto* hits = sec (page, "Hits", c);
+        hits->addInfo ("K, S and H light on each kick, snare and hat it reacts to (? for a trigger note or an unsorted sidechain hit). The lane is "
+                       "one bar: the last 32 hits, where they fell in it, a row per type.");
+        auto* lights = new ReactLights (proc);
+        hits->add (lights, 290, 30);
         auto* info = page->own (new juce::Label());
         info->setColour (juce::Label::textColourId, col::muted);
         info->setFont (juce::Font (juce::FontOptions (12.0f)));
         info->setJustificationType (juce::Justification::topLeft);
         auto* ticker = page->own (new StoreTicker());
-        ticker->tick = [this, kNote, kSc, info]
+        ticker->tick = [this, kNote, kSc, info, lights, rowParts]
         {
             auto plain = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
             kNote->setAlpha (plain (P_rxFromNote) > 0.5f ? 1.0f : 0.4f);
             kSc->setAlpha (plain (P_rxFromSc) > 0.5f ? 1.0f : 0.4f);
+            for (int r = 0; r < 4; ++r)
+            {
+                const float a = plain (rxRowParam (r, RXF_On)) > 0.5f ? 1.0f : 0.45f;
+                for (auto* pc : rowParts[r]) pc->setAlpha (a);
+            }
+            lights->tick();
             juce::String t;
             if (plain (P_rxOn) < 0.5f) t << "Off: switch it on to react.";
             else
             {
                 const auto& en = proc.getEngine();
-                const float ty = en.rxTypeShown.load();
-                t << "Hits so far: " << en.rxHitsShown.load() << "    last: " << (en.rxHitsShown.load() == 0 ? "-" : (ty < 0.25f ? "kick" : (ty < 0.75f ? "snare" : "hat")))
-                  << "    envelope: " << juce::String (juce::roundToInt (en.rxEnvShown.load() * 100.0f)) << "%";
+                t << "Hits: " << en.rxHitsShown.load() << "   (kick row " << en.rxRowHitsShown[1].load() << ", snare " << en.rxRowHitsShown[2].load()
+                  << ", hat " << en.rxRowHitsShown[3].load() << ")";
                 if (plain (P_rxFromBreaks) > 0.5f && plain (P_rxOffset) - plain (P_rxHuman) < 0.0f)
                     t << "\nThe breaks play " << juce::String (plain (P_rxHuman) - plain (P_rxOffset), 1) << " ms late, so the synth can react first.";
             }
-            info->setText (t, juce::dontSendNotification);
+            const int sk = juce::roundToInt (plain (P_bcSliceKeys));
+            t << "\nSlice keys: " << (plain (P_bcOn) < 0.5f ? juce::String ("off (Break Chopper off)")
+                                     : proc.sliceKeysTakeNotes() ? (sk == 2 ? juce::String ("on (Auto, sequencer stopped)") : juce::String ("on"))
+                                     : (sk == 1 ? juce::String ("off: those keys play the synth") : juce::String ("off (Auto, sequencer running): those keys play the synth")));
+            if (info->getText() != t) info->setText (t, juce::dontSendNotification);
         };
         ticker->tick();
-        page->onResize = [page, top, trg, act, shp, osc, info]
+        page->onResize = [page, top, trg, rows, shp, eng, hits, info]
         {
             const int g = 10, W = page->getWidth();
-            top->setBounds (g, g, 560, 130);
-            trg->setBounds (g + 570, g, W - 2 * g - 570, 130);
-            act->setBounds (g, g + 140, 560, 130);
-            shp->setBounds (g + 570, g + 140, W - 2 * g - 570, 130);
-            osc->setBounds (g, g + 280, 560, 100);
-            info->setBounds (g + 580, g + 290, W - 2 * g - 590, 60);
+            top->setBounds (g, g, 600, 100);
+            trg->setBounds (g + 610, g, W - 2 * g - 610, 100);
+            rows->setBounds (g, g + 108, W - 2 * g, 296);
+            shp->setBounds (g, g + 412, 320, 160);
+            eng->setBounds (g + 330, g + 412, 530, 160);
+            hits->setBounds (g + 870, g + 412, W - 2 * g - 870, 160);
+            info->setBounds (g + 880, g + 482, W - 2 * g - 890, 66);
         };
     }
 
@@ -4681,7 +4844,8 @@ void MegaSynthEditor::timerCallback()
     {
         // the Break Chopper's key zone on the keyboard: the Active Break's slices, and the three Break Select keys
         auto plainOf = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
-        const bool on = plainOf (P_bcOn) > 0.5f, sel = plainOf (P_bcSelKeys) > 0.5f;
+        // (Slice Keys Off, or Auto while the Break Sequencer runs: the keys play the synth, so no zone)
+        const bool on = plainOf (P_bcOn) > 0.5f && proc.sliceKeysTakeNotes(), sel = plainOf (P_bcSelKeys) > 0.5f;
         const int kb = juce::roundToInt (plainOf (P_bcKeyBase)), a = juce::jlimit (0, 2, juce::roundToInt (plainOf (P_bcActive)) - 1);
         const int ns = on ? proc.breakStore.get().brk[a].nSlices : 0;
         juce::String key; key << (on ? 1 : 0) << (sel ? 1 : 0) << kb << a << ns;

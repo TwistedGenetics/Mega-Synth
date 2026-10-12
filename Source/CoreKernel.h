@@ -117,6 +117,16 @@ public:
         started = true;
         first = true;
     }
+    // Break React: the phases back to where a Reset note starts them, and (on a held note) the envelopes started
+    // again from where they are (so they don't step)
+    void rxRestart()
+    {
+        if (! started) return;
+        for (int u = 0; u < kMaxUni; ++u)
+            for (int k = 0; k < kOps; ++k) { ph[k][u] = u == 0 ? 0u : hashPhase ((uint32_t) (u * 7 + k)); y[k][u] = yp[k][u] = 0.0f; }
+        if (! released) for (int k = 0; k < kOps; ++k) { stage[k] = 0; stageT[k] = 0; }
+        for (auto& d : dn) d.clear();   // (a fresh start for the down-sampler too: the old one is crossfaded out by the voice)
+    }
     bool isStarted() const { return started; }
     void stop() { started = false; }
     void release()

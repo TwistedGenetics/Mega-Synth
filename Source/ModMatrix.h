@@ -89,7 +89,10 @@ enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_
     X(CoreAAudio,  "Core A (audio rate)", K_AUDIO, true)  \
     X(CoreBAudio,  "Core B (audio rate)", K_AUDIO, true)  \
     X(CoreAEnv,    "Core A Op 1 Env",   K_ENV,    false) \
-    X(CoreBEnv,    "Core B Op 1 Env",   K_ENV,    false)
+    X(CoreBEnv,    "Core B Op 1 Env",   K_ENV,    false) \
+    X(KickHit,     "Kick Hit",          K_ENV,    false) \
+    X(SnareHit,    "Snare Hit",         K_ENV,    false) \
+    X(HatHit,      "Hat Hit",           K_ENV,    false)
 
 enum ModSource
 {

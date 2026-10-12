@@ -20,7 +20,8 @@ struct BreakSlice
     bool reverse = false, loop = false;
     int stretch = 0;        // 0: the break's own; 1 Repitch, 2 Akai Cyclic, 3 Clean (a step's own setting wins over this)
     float cycleMs = 0.0f;   // 0: the break's Cycle Length; else this one (Akai Cyclic only)
-    bool isDefault() const { return pitch == 0.0f && gain == 1.0f && pan == 0.0f && trimStart == 0.0f && trimEnd == 1.0f && attack == 0.0f && decay == 0.0f && choke == 1 && ! reverse && ! loop && stretch == 0 && cycleMs == 0.0f; }
+    int hitType = 0;        // for Break React: 0 Auto (detected), 1 Kick, 2 Snare, 3 Hat, 4 None (never a hit)
+    bool isDefault() const { return pitch == 0.0f && gain == 1.0f && pan == 0.0f && trimStart == 0.0f && trimEnd == 1.0f && attack == 0.0f && decay == 0.0f && choke == 1 && ! reverse && ! loop && stretch == 0 && cycleMs == 0.0f && hitType == 0; }
 };
 
 struct BreakStep
@@ -49,6 +50,7 @@ struct BreakSlot
     int nSlices = 0;
     int start[kSlices + 1] {};   // slice k: frames start[k] .. start[k + 1]
     float kick[kSlices] {}, snare[kSlices] {}, hat[kSlices] {};   // 0..1: how much each slice sounds like a kick / snare / hat
+    float kickB[kSlices] {}, snareB[kSlices] {}, hatB[kSlices] {};   // the same from band energy (Break React's Detection: Band energy)
     double origBpm = 0.0;        // the break's tempo (detected, from the bars, or typed in)
     int bars = 0;
     double sampleRate = 44100.0;
@@ -60,6 +62,9 @@ struct BreakSlot
         std::copy (std::begin (a.kick), std::end (a.kick), std::begin (kick));
         std::copy (std::begin (a.snare), std::end (a.snare), std::begin (snare));
         std::copy (std::begin (a.hat), std::end (a.hat), std::begin (hat));
+        std::copy (std::begin (a.kickB), std::end (a.kickB), std::begin (kickB));
+        std::copy (std::begin (a.snareB), std::end (a.snareB), std::begin (snareB));
+        std::copy (std::begin (a.hatB), std::end (a.hatB), std::begin (hatB));
         origBpm = a.origBpm; bars = a.bars; sampleRate = a.sampleRate; rms = a.rms;
     }
 };
@@ -129,6 +134,7 @@ public:
             x->setProperty ("choke", s.choke); x->setProperty ("rev", s.reverse); x->setProperty ("loop", s.loop);
             if (s.stretch != 0) x->setProperty ("st", s.stretch);
             if (s.cycleMs != 0.0f) x->setProperty ("cyc", s.cycleMs);
+            if (s.hitType != 0) x->setProperty ("ht", s.hitType);
             sl.add (juce::var (x));
         }
         o.setProperty ("slices", sl);
@@ -156,6 +162,7 @@ public:
                 s.loop = (bool) x.getProperty ("loop", false);
                 s.stretch = juce::jlimit (0, 3, (int) x.getProperty ("st", 0));
                 s.cycleMs = juce::jlimit (0.0f, 200.0f, (float) x.getProperty ("cyc", 0.0));
+                s.hitType = juce::jlimit (0, 4, (int) x.getProperty ("ht", 0));
             }
         if (auto* mk = v["markers"].getArray())
         {

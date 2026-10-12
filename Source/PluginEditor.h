@@ -536,6 +536,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> latencyAtt;   // Break Chopper: chop tap latency
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> markerSnapAtt;   // Break Chopper: marker snap
 public:
+    juce::Label* sliceKeysStateLabel = nullptr;   // the Break Chopper page: what Slice Keys is doing now
     juce::Component* breakWaveForTests = nullptr;
     juce::Component* breakGridForTests = nullptr;
 private:

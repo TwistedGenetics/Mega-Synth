@@ -168,6 +168,10 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     }
     for (int k = 0; k < 5; ++k) { driftPh[k] = voiceRand01(); driftRate[k] = 0.08f + 0.35f * voiceRand01(); }
     for (auto& p : ssPh) p = voiceRand01();
+    std::copy (std::begin (ssPh), std::end (ssPh), std::begin (ssPh0));
+    for (auto* d : { &rxDcWt[0], &rxDcWt[1], &rxDcSaw, &rxDcCx }) d->n = 0;
+    coreXf[0] = coreXf[1] = 0;
+    rxFiltKick = false;
     std::fill (std::begin (srcVals), std::end (srcVals), 0.0f);
     for (auto& w : wt) { w.pos = -1.0; w.stopped = false; w.loaded = false; w.wav = nullptr; }   // start set on the first control update
 
@@ -586,6 +590,7 @@ void Voice::updateWt (int slot, const Snapshot& s, const ModState& mod, double b
     }
     w.le = std::max (w.ls + 0.001 * w.wav->sampleRate, w.le);
     w.reverse = s.i (P.dir) == 1;
+    w.start = startPos;
     if (w.pos < 0.0) { w.pos = startPos; w.stopped = false; }
 }
 
@@ -923,6 +928,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             srcV[MS_DnaSeq] = mc.dnaSeq; srcV[MS_DnaSeq2] = mc.dnaSeq2; srcV[MS_DnaGate] = mc.dnaGate;
             srcV[MS_BreakHit] = mc.rx != nullptr ? mc.rx->envelope()[done] : 0.0f;
             srcV[MS_BreakHitType] = mc.rx != nullptr ? mc.rx->hitType() : 0.0f;
+            for (int r = 1; r < kRxRows; ++r) srcV[MS_KickHit + r - 1] = mc.rx != nullptr && mc.rx->rowLive (r) ? mc.rx->envelope (r)[done] : 0.0f;
             modSnap = s;
             if (mc.morph && mc.scenes != nullptr && mc.routes->anySceneXY)
             {
@@ -946,7 +952,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         ModState mod;
         computeMod (ps, mod);
         updateControl (ps, wavs, mod, false);
-        for (int c = 0; c < 2; ++c) if (coreRun[c]) core[c].configure (coreSet[c], coreHz[c], n);
+        for (int c = 0; c < 2; ++c) if (coreRun[c]) { core[c].configure (coreSet[c], coreHz[c], n); if (coreXf[c] > 0) coreOld[c].configure (coreSet[c], coreHz[c], n); }
         updatePitchEnv (ps);
         modOut = mod;
 
@@ -1077,6 +1083,54 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             rxPitchAmt = clampv (ps.f (P_rxPitch), -24.0f, 24.0f); rxDriveAmt = clampv (ps.f (P_rxDrive), 0.0f, 1.0f);
             rxDuckAmt = clampv (ps.f (P_rxDuck), 0.0f, 1.0f); rxNotchAmt = clampv (ps.f (P_rxNotch), 0.0f, 1.0f);
         }
+        // ... the Kick / Snare / Hat rows live this call, the Main row's new actions, and the other engines
+        struct RxRowV { const float* env; const uint8_t* hit; float pitch, drive, duck, notch, cut, res; bool reset; int retrig; };
+        RxRowV rxRow[4]; int nRxRow = 0;
+        float rxCut0 = 0.0f, rxRes0 = 0.0f; int rxRt0 = 0;
+        bool rxFilt = false, rxRtA = false, rxRtF = false, rxEngWt[2] { false, false }, rxEngCore[2] { false, false }, rxEngSaw = false, rxEngCx = false, rxEngGran = false;
+        float rxJump = 0.0f, rxBurst = 0.0f;
+        uint8_t rxRtHitA[kCtrl], rxRtHitF[kCtrl];
+        if (rx != nullptr)
+        {
+            rxCut0 = clampv (ps.f (P_rxCut), -4.0f, 4.0f); rxRes0 = clampv (ps.f (P_rxRes), 0.0f, 1.0f); rxRt0 = clampv (ps.i (P_rxRetrig), 0, 3);
+            for (int r = 1; r < kRxRows; ++r)
+            {
+                if (! rx->rowLive (r)) continue;
+                RxRowV& w = rxRow[nRxRow++];
+                w.env = rx->envelope (r); w.hit = rx->hits (r);
+                w.pitch = clampv (ps.f (rxRowParam (r, RXF_Pitch)), -24.0f, 24.0f); w.drive = clampv (ps.f (rxRowParam (r, RXF_Drive)), 0.0f, 1.0f);
+                w.duck = clampv (ps.f (rxRowParam (r, RXF_Duck)), 0.0f, 1.0f); w.notch = clampv (ps.f (rxRowParam (r, RXF_Notch)), 0.0f, 1.0f);
+                w.cut = clampv (ps.f (rxRowParam (r, RXF_Cut)), -4.0f, 4.0f); w.res = clampv (ps.f (rxRowParam (r, RXF_Res)), 0.0f, 1.0f);
+                w.reset = ps.v[rxRowParam (r, RXF_Reset)] > 0.5f; w.retrig = clampv (ps.i (rxRowParam (r, RXF_Retrig)), 0, 3);
+                rxFilt |= w.cut != 0.0f || w.res != 0.0f;
+            }
+            rxFilt |= rxCut0 != 0.0f || rxRes0 != 0.0f;
+            rxEngWt[0] = ps.v[P_rxWt1] > 0.5f; rxEngWt[1] = ps.v[P_rxWt2] > 0.5f; rxEngCore[0] = ps.v[P_rxCoreA] > 0.5f; rxEngCore[1] = ps.v[P_rxCoreB] > 0.5f;
+            rxEngSaw = ps.v[P_rxSaw] > 0.5f; rxEngCx = ps.v[P_rxComplex] > 0.5f; rxEngGran = ps.v[P_rxGran] > 0.5f && gsRun;
+            rxJump = clampv (ps.f (P_rxWtJump), 0.0f, 1.0f); rxBurst = clampv (ps.f (P_rxGranBurst), 0.0f, 1.0f);
+            // Env Retrigger: which samples start the amp / filter envelope again (held notes)
+            auto rtFor = [] (int mode, bool amp) { return amp ? (mode == 1 || mode == 3) : (mode == 2 || mode == 3); };
+            for (int pass = 0; pass < 2; ++pass)
+            {
+                const bool amp = pass == 0;
+                uint8_t* out = amp ? rxRtHitA : rxRtHitF;
+                bool any = false;
+                std::fill (out, out + n, (uint8_t) 0);
+                if (rtFor (rxRt0, amp)) { const uint8_t* h = rx->hits(); for (int i = 0; i < n; ++i) if (h[done + i]) { out[i] = 1; any = true; } }
+                for (int k = 0; k < nRxRow; ++k)
+                    if (rtFor (rxRow[k].retrig, amp)) for (int i = 0; i < n; ++i) if (rxRow[k].hit[done + i]) { out[i] = 1; any = true; }
+                (amp ? rxRtA : rxRtF) = any;
+            }
+        }
+        float rxCutO[kCtrl], rxResA[kCtrl];
+        const float gsDensBase = gsP.density;
+        // a reacting engine's restart: the step it makes faded out over 1.5 ms (n -1: it restarted on this sample)
+        auto rxDeclick = [rxXfLen] (RxDeclick& d, float& l, float& r, float* prev)
+        {
+            if (d.n == -1) { d.l = prev[0] - l; d.r = prev[1] - r; d.n = rxXfLen; }
+            if (d.n > 0) { const float w = (float) d.n / (float) rxXfLen; l += d.l * w; r += d.r * w; --d.n; }
+            prev[0] = l; prev[1] = r;
+        };
         auto kickSat = [] (float x, float d)
         {
             // the drive kick: pushed into a soft curve, faded in from nothing
@@ -1101,7 +1155,11 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         // the filter, and the Core's own operator envelopes shape it (the amp stage below is then left out)
         float coreBL[kCtrl], coreBR[kCtrl], ampPre[kCtrl];
         if (opsOnlyAny)
-            for (int i = 0; i < n; ++i) { coreBL[i] = coreBR[i] = 0.0f; ampPre[i] = (float) ampEnv.eval (t + i * isr); }
+            for (int i = 0; i < n; ++i)
+            {
+                if (rxRtA && rxRtHitA[i]) ampEnv.retrigger (t + i * isr);
+                coreBL[i] = coreBR[i] = 0.0f; ampPre[i] = (float) ampEnv.eval (t + i * isr);
+            }
         auto sampleLoop = [&] (auto arTag)
         {
         using ARType = decltype (arTag);   // a type, not a constexpr local, so nested lambdas see it on every compiler
@@ -1137,14 +1195,20 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             // Break-Reactive mode: a hit here resets the ticked oscillators' phases; its envelope kicks the
             // pitch, the drive and the level, and moves the Reese's notch
             float rxPm = 1.0f, rxG = 1.0f, rxD = 0.0f;
+            bool rxResetNow = false;
+            float rxEAny = 0.0f;
             if (rx != nullptr)
             {
                 const int gi = done + i;
-                if (rxResetOn && rx->hits()[gi] != 0)
+                bool resetHit = rxResetOn && rx->hits()[gi] != 0, anyHit = rx->hits()[gi] != 0;
+                for (int k = 0; k < nRxRow; ++k) { if (rxRow[k].reset && rxRow[k].hit[gi] != 0) resetHit = true; anyHit |= rxRow[k].hit[gi] != 0; }
+                if (anyHit && rxEngGran) gran.burstNow();
+                if (resetHit)
                 {
                     double* phs[4] = { &ph1, &ph2, &ph3, &phSub };
                     for (int k = 0; k < 4; ++k) if (rxT[k]) { rxOldPh[k] = *phs[k]; *phs[k] = 0.0; rxXf[k] = rxXfLen; }
                     if (rxT[4] && rsRun) reese.resetPhases (rxXfLen);
+                    rxResetNow = true;
                 }
                 const float e = rx->envelope()[gi];
                 if (e > 0.0f)
@@ -1152,7 +1216,40 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                     if (rxPitchAmt != 0.0f) rxPm = (float) pow2 ((double) (rxPitchAmt * e) / 12.0);
                     rxG = 1.0f - rxDuckAmt * e; rxD = rxDriveAmt * e;
                 }
-                if (rsRun) { reese.setPitchMul (rxT[4] ? rxPm : 1.0); reese.setNotchJump (rxT[4] ? 2.0f * rxNotchAmt * e : 0.0f); }
+                rxEAny = e;
+                float notchT = 0.0f, cutO = rxCut0 * e, resA = rxRes0 * e;
+                for (int k = 0; k < nRxRow; ++k)
+                {
+                    const RxRowV& w = rxRow[k];
+                    const float er = w.env[gi];
+                    if (er <= 0.0f) continue;
+                    if (w.pitch != 0.0f) rxPm *= (float) pow2 ((double) (w.pitch * er) / 12.0);
+                    rxG *= 1.0f - w.duck * er; rxD = std::min (1.0f, rxD + w.drive * er);
+                    notchT += w.notch * er; cutO += w.cut * er; resA += w.res * er;
+                    rxEAny = std::max (rxEAny, er);
+                }
+                if (rxFilt) { rxCutO[i] = cutO; rxResA[i] = resA; }
+                if (rsRun) { reese.setPitchMul (rxT[4] ? rxPm : 1.0); reese.setNotchJump (rxT[4] ? (nRxRow > 0 ? 2.0f * (rxNotchAmt * e + notchT) : 2.0f * rxNotchAmt * e) : 0.0f); }
+                if (rxResetNow)
+                {
+                    // the other engines that react: back to the start (the jump each makes is faded out below)
+                    for (int w = 0; w < 2; ++w)
+                        if (rxEngWt[w] && wt[w].loaded)
+                        {
+                            const double span = std::max (1.0, wt[w].le - wt[w].ls);
+                            double p0 = wt[w].start + rxJump * span;
+                            if (wt[w].loop && p0 >= wt[w].le) p0 = wt[w].ls + std::fmod (p0 - wt[w].ls, span);
+                            wt[w].pos = p0; wt[w].stopped = false; rxDcWt[w].n = -1;
+                        }
+                    for (int c = 0; c < 2; ++c) if (rxEngCore[c] && coreRun[c]) { coreOld[c] = core[c]; core[c].rxRestart(); coreXf[c] = 2 * rxXfLen; }
+                    if (rxEngSaw && ssCount > 0) { std::copy (std::begin (ssPh0), std::end (ssPh0), std::begin (ssPh)); rxDcSaw.n = -1; }
+                    if (rxEngCx && needComplex) { phCar = phMod = 0.0; rxDcCx.n = -1; }
+                }
+                if (rxEngGran && rxEAny > 0.0f)
+                {
+                    gsP.density = std::min (100.0f, gsDensBase * (1.0f + 7.0f * rxBurst * rxEAny));
+                    gran.limitWait (sr / std::max (0.5, (double) gsP.density));
+                }
                 rxDuckSm += (rxG - rxDuckSm) * rxDuckC;   // (the duck smoothed over about 1 ms, so it doesn't click)
                 if (std::abs (rxDuckSm - rxG) < 1.0e-6f) rxDuckSm = rxG;
                 rxG = rxDuckSm;
@@ -1232,6 +1329,11 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 wt[0].tick (fmIn (3) + wt[0].rate.v * (peRatio[4] * pm (AD_PWt1) - 1.0), isr, o4L, o4R);
                 wt[1].tick (wt[1].rate.v * (peRatio[5] * pm (AD_PWt2) - 1.0), isr, w2L, w2R);
             }
+            if (rx != nullptr)
+            {
+                if (rxEngWt[0]) rxDeclick (rxDcWt[0], o4L, o4R, rxPrevWt[0]);
+                if (rxEngWt[1]) rxDeclick (rxDcWt[1], w2L, w2R, rxPrevWt[1]);
+            }
             const float o4m = 0.5f * (o4L + o4R);
             srcVals[3] = o4m;
             for (int w = 0; w < 2; ++w)
@@ -1261,6 +1363,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 phCar = wrap01 (phCar + cf * isr);
                 const float shapeK = ! ARType::value ? cShapeK : clampv (cShapeK + ad[AD_CxShape], 1.0f, 25.0f);
                 cRaw = driveShape (oc * cMixS.v + om * (1.0f - cMixS.v), shapeK);
+                if (rx != nullptr && rxEngCx) { float dummy = cRaw, prev2[2] = { rxPrevCx, rxPrevCx }; rxDeclick (rxDcCx, cRaw, dummy, prev2); rxPrevCx = prev2[0]; }
                 cOut = cRaw * lvl (lC.v, AD_LCx);
                 if (uniN[5] > 1)
                 {
@@ -1297,6 +1400,13 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                     const float sw = bank.sample (W_SAW, ssPh[u], (float) std::abs (f) * fisr) * g;
                     ssPh[u] = wrap01 (ssPh[u] + f * isr);
                     ssMono += sw; ssL += sw * ssPanL[u]; ssR += sw * ssPanR[u];
+                }
+                if (rx != nullptr && rxEngSaw)
+                {
+                    // (the mono sum follows the left / right offsets' mean)
+                    const float l0 = ssL, r0 = ssR;
+                    rxDeclick (rxDcSaw, ssL, ssR, rxPrevSaw);
+                    ssMono += 0.5f * ((ssL - l0) + (ssR - r0));
                 }
                 const float gss = lvl (lSS.v, AD_LSs);
                 ssRaw = ssMono;
@@ -1404,6 +1514,13 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 if (! coreRun[c]) continue;
                 // a Core slot, through its own Mixer strip, into the mix before the filters
                 float a, b; core[c].tick (a, b);
+                if (coreXf[c] > 0)
+                {
+                    float oa, ob; coreOld[c].tick (oa, ob);
+                    const float w = (float) coreXf[c] / (float) (2 * rxXfLen);
+                    a += (oa - a) * w; b += (ob - b) * w;
+                    --coreXf[c];
+                }
                 a *= lCore[c].v; b *= lCore[c].v;
                 aPrev[4 + c] = 0.5f * (a + b);
                 if (mc.meters) mxPeak[kMxCoreStrip + c] = std::max (mxPeak[kMxCoreStrip + c], std::max (std::abs (a), std::abs (b)));
@@ -1518,6 +1635,22 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         for (int i = 0; i < n; ++i)
         {
             if (arCut) filter.update (cutB[i], resB[i], sr);
+            if (rxFilt)
+            {
+                // Break React's Filter Kick: Filter 1's cutoff (octaves) and resonance jump with the hit envelopes
+                if (rxCutO[i] != 0.0f || rxResA[i] != 0.0f)
+                {
+                    const float c0 = arCut ? cutB[i] : cutoff.v, r0 = arCut ? resB[i] : res.v;
+                    filter.update (clampv (c0 * (float) pow2 ((double) rxCutO[i]), 20.0f, 20000.0f), clampv (r0 + 12.0f * rxResA[i], 0.1f, 30.0f), sr);
+                    rxFiltKick = true;
+                }
+                else if (rxFiltKick && ! arCut) { filter.update (cutoff.v, res.v, sr); rxFiltKick = false; }
+            }
+            if (rx != nullptr)
+            {
+                if (rxRtA && rxRtHitA[i] && ! opsOnlyAny) ampEnv.retrigger (t);
+                if (rxRtF && rxRtHitF[i]) filtEnv.retrigger (t);
+            }
             const float xL = xb[0][i], xR = xb[1][i];
             float yL, yR;
             filter.processFrame (xL, xR, stereo, yL, yR);
@@ -1590,6 +1723,18 @@ BreakReact::Settings Engine::reactSettings (const Snapshot& s) const
     r.fromBreaks = s.v[P_rxFromBreaks] > 0.5f; r.fromSc = s.v[P_rxFromSc] > 0.5f; r.scSens = clampv (s.f (P_rxScSens), 0.0f, 1.0f);
     r.attackMs = clampv (s.f (P_rxAttack), 0.0f, 100.0f); r.decayMs = clampv (s.f (P_rxDecay), 5.0f, 2000.0f);
     r.offsetMs = clampv (s.f (P_rxOffset), -10.0f, 30.0f); r.humanMs = clampv (s.f (P_rxHuman), 0.0f, 10.0f);
+    for (int k = 0; k < kRxRows; ++k)
+    {
+        auto& w = r.row[k];
+        w.on = s.v[rxRowParam (k, RXF_On)] > 0.5f;
+        w.sens = clampv (s.f (rxRowParam (k, RXF_Sens)), 0.0f, 1.0f);
+        w.vel = clampv (s.f (rxRowParam (k, RXF_Vel)), 0.0f, 1.0f);
+        w.chance = clampv (s.f (rxRowParam (k, RXF_Chance)), 0.0f, 1.0f);
+        w.beats = clampv (s.i (rxRowParam (k, RXF_Beats)), 0, 3);
+        w.every = 1 + clampv (s.i (rxRowParam (k, RXF_Every)), 0, 3);
+    }
+    r.seed = juce::roundToInt (s.f (P_rxSeed));
+    r.beat0 = s.fxBeat; r.beatInc = s.fxBeatInc; r.barOrigin = s.fxBarOrigin; r.beatsPerBar = s.fxBeatsPerBar;
     return r;
 }
 
@@ -1825,13 +1970,35 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             {
                 const BreakSlot& b = bd.brk[clampv (hl[k].brk, 0, BreakChopper::kBreaks - 1)];
                 const int sl = clampv (hl[k].slice, 0, BreakSlot::kSlices - 1);
-                react.breakHit (rxs, hl[k].brk, b.kick[sl], b.snare[sl], b.hat[sl], hl[k].vel);
+                const int ht = b.slice[sl].hitType;
+                if (ht == 4) continue;                                                      // set to None: never a hit
+                if (ht >= 1) { react.typedHit (rxs, hl[k].brk, ht - 1, hl[k].vel); continue; }  // set by hand
+                if (s.i (P_rxDetect) == 1) react.breakHit (rxs, hl[k].brk, b.kickB[sl], b.snareB[sl], b.hatB[sl], hl[k].vel);
+                else react.breakHit (rxs, hl[k].brk, b.kick[sl], b.snare[sl], b.hat[sl], hl[k].vel);
             }
             react.begin (numSamples, rxs, scL, scR);
             mc.rx = &react;
             if (react.hitCount() > 0) rxHitsShown.fetch_add (react.hitCount(), std::memory_order_relaxed);
             rxTypeShown.store (react.hitType(), std::memory_order_relaxed);
             rxEnvShown.store (react.envelope()[numSamples - 1], std::memory_order_relaxed);
+            for (int r = 0; r < kRxRows; ++r)
+            {
+                if (react.rowHitCount (r) > 0) rxRowHitsShown[r].fetch_add (react.rowHitCount (r), std::memory_order_relaxed);
+                rxRowEnvShown[r].store (react.rowLive (r) ? react.envelope (r)[numSamples - 1] : 0.0f, std::memory_order_relaxed);
+            }
+            for (int k = 0; k < react.callHitCount(); ++k)
+            {
+                const auto& h = react.callHitAt (k);
+                double place = 0.0;
+                if (s.fxBeatInc > 0.0)
+                {
+                    const double bpb = std::max (1.0, s.fxBeatsPerBar), b = s.fxBeat + h.at * s.fxBeatInc - s.fxBarOrigin;
+                    place = (b - bpb * std::floor (b / bpb)) / bpb;
+                }
+                const int packed = clampv ((int) (place * 4096.0), 0, 4095) | (clampv (h.type, 0, 3) << 12) | ((int) (h.mask & 15u) << 16);
+                const int at = rxLogCount.fetch_add (1, std::memory_order_relaxed);
+                rxLog[(size_t) (at % kRxLog)].store (packed, std::memory_order_relaxed);
+            }
         }
         else react.idle (numSamples);
     }
@@ -1919,6 +2086,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         globalSrc[MS_DnaSeq] = dsValue; globalSrc[MS_DnaSeq2] = dsValue2; globalSrc[MS_DnaGate] = dsGate;
         globalSrc[MS_BreakHit] = mc.rx != nullptr ? react.envelope()[numSamples - 1] : 0.0f;
         globalSrc[MS_BreakHitType] = mc.rx != nullptr ? react.hitType() : 0.0f;
+        for (int r = 1; r < kRxRows; ++r) globalSrc[MS_KickHit + r - 1] = mc.rx != nullptr && react.rowLive (r) ? react.envelope (r)[numSamples - 1] : 0.0f;
     }
     float* srcW = newest != nullptr ? newest->srcV : globalSrc;
     if (mc.any() && (routeSet.anyGlobal || (mc.morph && scenes != nullptr && routeSet.anySceneXY)))

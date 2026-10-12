@@ -951,6 +951,22 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
             return;
         }
         const int kb = juce::jlimit (0, 127, snap.i (P_bcKeyBase));
+        // Slice Keys Off, or Auto while the Break Sequencer runs (Key Entry keeps them on): the slice zone and
+        // the Break Select keys play the synth. Each key's note-off goes where its note-on went, so switching
+        // with keys held leaves nothing hanging. (On: exactly as before.)
+        const int skMode = juce::jlimit (0, 2, snap.i (P_bcSliceKeys));
+        if (skMode != 0)
+        {
+            const bool keysOn = skMode == 2 && (! bsRunning || snap.v[P_bsKeyEntry] > 0.5f);
+            const bool inZone = nn >= kb - 3 && nn < kb + tg::BreakData::kSlices;
+            if (m.isNoteOn()) sliceKeyOwner[(size_t) nn] = (uint8_t) (keysOn && inZone ? 1 : (inZone ? 2 : 0));
+            else if (sliceKeyOwner[(size_t) nn] != 1 && inZone) { sliceKeyOwner[(size_t) nn] = 0; goto playAsNote; }
+            else sliceKeyOwner[(size_t) nn] = 0;
+            if (m.isNoteOn() && ! (keysOn && inZone)) goto playAsNote;
+        }
+        else if (m.isNoteOn()) sliceKeyOwner[(size_t) nn] = 1;
+        else if (sliceKeyOwner[(size_t) nn] == 2) { sliceKeyOwner[(size_t) nn] = 0; goto playAsNote; }   // (played as a note before On was chosen)
+        else sliceKeyOwner[(size_t) nn] = 0;
         // the three Break Select keys just below the zone choose the Active Break
         if (snap.v[P_bcSelKeys] > 0.5f && nn >= kb - 3 && nn < kb)
         {
@@ -988,6 +1004,7 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
             return;
         }
     }
+playAsNote:
     if (m.isNoteOn())
     {
         monNoteCount.fetch_add (1, std::memory_order_relaxed); monCh.store (ch, std::memory_order_relaxed);
@@ -1312,6 +1329,10 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         const bool run = bcOn && snap.v[P_bsOn] > 0.5f && anySlices > 0 && fxBeatInc > 0.0 && (hostPlaying || ! hostTransport);
         if (run && ! bsRunning) bsStart (beatAt (0));
         if (! run && bsRunning) { bsRunning = false; bsNumRolls = 0; bsStepShown.store (-1); bsFillState = 0; bsFillCountdown.store (-1); bsFillPosShown.store (-1); bsFillFirstIdx.store (-1); modInputs.bsFill = 0.0f; }
+        {
+            const int sk = juce::jlimit (0, 2, snap.i (P_bcSliceKeys));
+            sliceKeysActive.store (bcOn && (sk == 0 || (sk == 2 && (! run || snap.v[P_bsKeyEntry] > 0.5f))), std::memory_order_relaxed);
+        }
         if (run)
         {
             // a jump in the song position (or the DAW starting): pick up from where it is now
@@ -1699,6 +1720,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 25) setReactDefaultsForOldPatch();
     if (version < 26) setCoreDefaultsForOldPatch();
     if (version < 27) setV27DefaultsForOldPatch();
+    if (version < 28) setV28DefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1940,6 +1962,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("rxOn")) setReactDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("cAEngine")) setCoreDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("cAEnvMode")) setV27DefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("bcSliceKeys")) setV28DefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2263,6 +2286,55 @@ void MegaSynthProcessor::resetCoreSlot (int slot)
 void MegaSynthProcessor::setV27DefaultsForOldPatch()
 {
     for (int i = P_cAEnvMode; i <= P_bsAdvance; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+const char* MegaSynthProcessor::reactPresetName (int k)
+{
+    static const char* n[kNumReactPresets] = { "Off", "Lock bass to kicks", "Snare stabs", "Rolling Reese", "Duck on kick" };
+    return n[juce::jlimit (0, kNumReactPresets - 1, k)];
+}
+
+void MegaSynthProcessor::applyReactPreset (int k)
+{
+    using namespace tg;
+    auto set = [this] (int i, float plain)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (plain)); prm->endChangeGesture();
+    };
+    // every Break React control back to its default first (the old ones and the rows), then the preset's own
+    for (int i = P_rxOn; i <= P_rxReese; ++i) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture(); }
+    for (int i = P_rxDetect; i <= P_rxGranBurst; ++i) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture(); }
+    switch (k)
+    {
+        case 1:   // the sub and the Reese start their cycle on each kick, with a small pitch kick
+            set (P_rxOn, 1); set (P_rxMainOn, 0); set (P_rxKOn, 1); set (P_rxKReset, 1); set (P_rxKPitch, 2.0f); set (P_rxDecay, 80.0f);
+            break;
+        case 2:   // each snare opens the filter and restarts its envelope
+            set (P_rxOn, 1); set (P_rxMainOn, 0); set (P_rxSOn, 1); set (P_rxSReset, 0); set (P_rxSCut, 2.0f); set (P_rxSRes, 0.3f);
+            set (P_rxSRetrig, 2.0f); set (P_rxSVel, 0.5f); set (P_rxDecay, 150.0f);
+            break;
+        case 3:   // the hats flick the Reese's notch; the kicks restart its phase
+            set (P_rxOn, 1); set (P_rxMainOn, 0); set (P_rxKOn, 1); set (P_rxKReset, 1); set (P_rxHOn, 1); set (P_rxHReset, 0);
+            set (P_rxHNotch, 0.6f); set (P_rxHVel, 0.5f); set (P_rxDecay, 90.0f);
+            break;
+        case 4:   // a duck on each kick, deeper for the harder ones
+            set (P_rxOn, 1); set (P_rxMainOn, 0); set (P_rxKOn, 1); set (P_rxKReset, 0); set (P_rxKDuck, 0.7f); set (P_rxKVel, 0.6f); set (P_rxDecay, 140.0f);
+            break;
+        default:
+            set (P_rxOn, 0);
+            break;
+    }
+    pushHistory (juce::String ("Break React: ") + reactPresetName (k));
+}
+
+void MegaSynthProcessor::setV28DefaultsForOldPatch()
+{
+    for (int i = P_bcSliceKeys; i <= P_rxGranBurst; ++i)
     {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();

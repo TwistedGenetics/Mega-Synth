@@ -150,6 +150,54 @@ inline void analyse (const WaveSample* w, int mode, float sens, int barsChoice, 
         maxK = std::max (maxK, b.kick[k]); maxS = std::max (maxS, b.snare[k]); maxH = std::max (maxH, b.hat[k]);
     }
     for (int k = 0; k < b.nSlices; ++k) { b.kick[k] /= maxK; b.snare[k] /= maxS; b.hat[k] /= maxH; }
+
+    // Band energy (Break React's Detection: Band energy): what each slice adds in its first 20 ms, against the 20 ms before it
+    // (so a hat over a kick's tail counts as a hat), split into the low (under 300 Hz) and the top (over 2 kHz). A kick adds
+    // mostly low and little top; a snare both (its body and its noise); a hat top with almost no low. Each score is scaled by
+    // how loud the new part is against the break's loudest, so ghost notes score lower.
+    {
+        const float sr = (float) w->sampleRate;
+        auto coef = [sr] (float hz) { return 1.0f - std::exp (-2.0f * 3.14159265f * hz / sr); };
+        const float c300 = coef (300.0f), c2k = coef (2000.0f);
+        const int win = std::max (16, (int) (0.02 * w->sampleRate));
+        std::vector<double> newL ((size_t) b.nSlices), newM ((size_t) b.nSlices), newH ((size_t) b.nSlices);
+        double maxNew = 1e-12;
+        for (int k = 0; k < b.nSlices; ++k)
+        {
+            const int s0 = b.start[k], from = std::max (0, s0 - win - win / 2), to = std::min (len, s0 + win);
+            float l1 = 0.0f, l2 = 0.0f, m1 = 0.0f, m2 = 0.0f, h1 = 0.0f, h2 = 0.0f;
+            double e[2][3] {};
+            for (int i = from; i < to; ++i)
+            {
+                const float x = 0.5f * (a[i] + r[i]);
+                l1 += (x - l1) * c300; l2 += (l1 - l2) * c300;                 // low: two poles at 300 Hz
+                h1 += (x - h1) * c2k; h2 += (h1 - h2) * c2k;                   // top: what's over two poles at 2 kHz
+                const float top = x - h2;
+                m2 = h2 - l2; juce::ignoreUnused (m1);                         // the middle
+                if (i < s0 - win) continue;                                    // (the filters settle first)
+                auto& d = e[i >= s0 ? 1 : 0];
+                d[0] += (double) l2 * l2; d[1] += (double) m2 * m2; d[2] += (double) top * top;
+            }
+            newL[(size_t) k] = std::max (0.0, e[1][0] - e[0][0]);
+            newM[(size_t) k] = std::max (0.0, e[1][1] - e[0][1]);
+            newH[(size_t) k] = std::max (0.0, e[1][2] - e[0][2]);
+            maxNew = std::max (maxNew, newL[(size_t) k] + newM[(size_t) k] + newH[(size_t) k]);
+        }
+        for (int k = 0; k < b.nSlices; ++k)
+        {
+            const double all = newL[(size_t) k] + newM[(size_t) k] + newH[(size_t) k] + 1e-12;
+            const double fl = newL[(size_t) k] / all, fh = newH[(size_t) k] / all;
+            const double loud = std::sqrt (all / maxNew);
+            b.kickB[k] = (float) (fl * (1.0 - fh) * loud);
+            b.snareB[k] = (float) (4.0 * fl * fh * loud);
+            b.hatB[k] = (float) (fh * std::max (0.0, 1.0 - 2.0 * fl) * loud);
+        }
+        // (scaled so the break's strongest of each kind is near 1, as the Sensitivity expects)
+        float mK = 1e-9f, mS = 1e-9f, mH = 1e-9f;
+        for (int k = 0; k < b.nSlices; ++k) { mK = std::max (mK, b.kickB[k]); mS = std::max (mS, b.snareB[k]); mH = std::max (mH, b.hatB[k]); }
+        const float top = std::max (mK, std::max (mS, mH));
+        for (int k = 0; k < b.nSlices; ++k) { b.kickB[k] /= top; b.snareB[k] /= top; b.hatB[k] /= top; }
+    }
 }
 
 // ---- the factory demo break: two bars, synthesised (kick, snare with ghost notes, hats), at the given tempo

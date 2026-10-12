@@ -141,6 +141,7 @@ private:
         double pos = -1.0;
         bool stopped = false, loop = true, reverse = false;
         double ls = 0, le = 0;
+        double start = 0;   // where a note starts (Break React's restart goes back here, plus its Jump)
         float comp = 1.0f;
 
         inline void tick (double fmRate, double isr, float& outL, float& outR)
@@ -187,6 +188,14 @@ private:
     double rxOldPh[4] {};
     int rxXf[4] {};
     float rxDuckSm = 1.0f;   // the level duck, smoothed
+    // ... the other engines that react: a reset there is declicked by fading out the jump it makes (offset, 1.5 ms)
+    struct RxDeclick { float l = 0.0f, r = 0.0f; int n = 0; };
+    RxDeclick rxDcWt[2], rxDcSaw, rxDcCx;
+    float rxPrevWt[2][2] {}, rxPrevSaw[2] {}, rxPrevCx = 0.0f;
+    CoreKernel coreOld[2];   // a Core slot as it was before a Break React restart, crossfaded out over 3 ms
+    int coreXf[2] {};
+    double ssPh0[9] {};      // the SuperSaw's phases at note-on (a reset goes back to them)
+    bool rxFiltKick = false; // the Filter Kick moved Filter 1 this block (put it back when it ends)
     GranVoice::Params gsP;
     const WaveSample* gsWav = nullptr;
     S lGs;
@@ -346,6 +355,12 @@ public:
     const BreakReact& breakReact() const { return react; }
     std::atomic<int> rxHitsShown { 0 };          // for the page: hits so far, the last one's type, the envelope now
     std::atomic<float> rxTypeShown { 0.0f }, rxEnvShown { 0.0f };
+    // the page's hit lights and the last bar's lane: each hit's place in the bar (0..1), its type and the rows it fired
+    static constexpr int kRxLog = 64;
+    std::atomic<int> rxLog[kRxLog] {};   // packed: place * 4096 | type << 12 | rows << 16
+    std::atomic<int> rxLogCount { 0 };
+    std::atomic<int> rxRowHitsShown[4] {};
+    std::atomic<float> rxRowEnvShown[4] {};
     int polyFloor = 0;   // chord memory: a chord's notes always get their own voices, even in mono
     // Arpeggiator Swing / Gate as moved by the Mod Matrix last block (offsets; 0 when unmodulated)
     float arpModOffset (int which) const { return arpMod[juce::jlimit (0, 1, which)]; }

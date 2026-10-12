@@ -140,7 +140,12 @@ inline juce::String formatParam (int idx, float v)
     if (id == "rsNotchFreq") return v >= 1000.0f ? fixed (v / 1000.0f, 2) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz";
     // ---- Break-Reactive mode
     if (id == "rxSens" || id == "rxScSens" || id == "rxDrive" || id == "rxDuck" || id == "rxNotch") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
-    if (id == "rxPitch") return (v > 0 ? "+" : "") + fixed (v, 1) + " st";
+    if (id.startsWith ("rx") && (id.endsWith ("Sens") || id.endsWith ("Drive") || id.endsWith ("Duck") || id.endsWith ("Notch") || id.endsWith ("Res")
+                                 || id.endsWith ("Vel") || id.endsWith ("Chance") || id == "rxWtJump" || id == "rxGranBurst"))
+        return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    if (id.startsWith ("rx") && id.endsWith ("Pitch")) return (v > 0 ? "+" : "") + fixed (v, 1) + " st";
+    if (id.startsWith ("rx") && id.endsWith ("Cut")) return (v > 0 ? "+" : "") + fixed (v, 2) + " oct";
+    if (id == "rxSeed") return juce::String (juce::roundToInt (v));
     if (id == "rxAttack" || id == "rxHuman") return fixed (v, v < 10.0f ? 1 : 0) + " ms";
     if (id == "rxDecay") return v >= 1000.0f ? fixed (v / 1000.0f, 2) + " s" : juce::String (juce::roundToInt (v)) + " ms";
     if (id == "rxOffset") return (v > 0.05f ? "+" : "") + fixed (v, 1) + " ms";
@@ -230,7 +235,7 @@ inline float parseParam (int idx, const juce::String& text)
     if ((id == "bcTempo" || id == "bcTempo2" || id == "bcTempo3") && text.containsIgnoreCase ("auto")) return 0.0f;
     if (id == "bsFillKey" && text.containsIgnoreCase ("off")) return -1.0f;
     if (id == "bcActive") return juce::jlimit (1.0f, 3.0f, (float) text.retainCharacters ("0123456789").getIntValue());
-    if ((id == "rxSens" || id == "rxScSens" || id == "rxDrive" || id == "rxDuck" || id == "rxNotch") && text.contains ("%")) return v / 100.0f;
+    if (id.startsWith ("rx") && text.contains ("%")) return v / 100.0f;
     if ((id == "bcLevel1" || id == "bcLevel2" || id == "bcLevel3" || id == "bsAmount" || id == "bsVarAmount" || id == "bsAutoFillProb") && text.contains ("%")) return v / 100.0f;
     if ((id == "bcXfade" || id == "bcVelSens" || id == "bcLevel" || id == "bcSens" || id == "bcSens2" || id == "bcSens3" || id == "bsSwing") && text.contains ("%")) return v / 100.0f;
     if (id == "pfDjPos") { const float n = text.retainCharacters ("-0123456789.").getFloatValue(); const float a = text.contains ("%") ? n / 100.0f : n; return text.containsIgnoreCase ("lp") ? -std::abs (a) : (text.containsIgnoreCase ("centre") ? 0.0f : a); }

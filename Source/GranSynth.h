@@ -38,6 +38,8 @@ public:
     }
     void stop() { started = false; for (auto& g : grains) g.on = false; }
     int activeGrains() const { int n = 0; for (auto& g : grains) n += g.on ? 1 : 0; return n; }
+    void burstNow() { untilNext = 0.0; }   // (Break React: a grain right away)
+    void limitWait (double samples) { if (untilNext > samples) untilNext = samples; }   // (... and the next ones as dense as the burst asks)
     double playhead() const { return scanPos; }   // in sample frames (for the display)
 
     // Adds one stereo sample of the cloud (unscaled by the level)

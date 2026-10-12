@@ -231,6 +231,7 @@ struct EnvState
     double a = 0.01, d = 0.2, s = 0.75, r = 0.45;
     double releaseTime = -1.0;
     double releaseLevel = 0.0;
+    double rtAt = -1.0, rtLevel = 0.0;   // Break React's Env Retrigger: started again at rtAt, from rtLevel
 
     void init (double A, double D, double S, double R)
     {
@@ -239,6 +240,7 @@ struct EnvState
         s = clampv (S, 0.0, 1.0);
         r = std::max (0.012, R);
         releaseTime = -1.0;
+        rtAt = -1.0;
     }
 
     double held (double t) const
@@ -250,7 +252,16 @@ struct EnvState
 
     double eval (double t) const
     {
-        if (releaseTime < 0.0 || t <= releaseTime) return clampv (held (std::max (0.0, t)), 0.0, 1.0);
+        if (releaseTime < 0.0 || t <= releaseTime)
+        {
+            if (rtAt >= 0.0 && t >= rtAt)
+            {
+                // started again: the attack from where it was (no step), then decay and sustain as usual
+                const double tt = t - rtAt;
+                return clampv (tt < a ? rtLevel + (1.0 - rtLevel) * (tt / std::max (0.0001, a)) : held (tt), 0.0, 1.0);
+            }
+            return clampv (held (std::max (0.0, t)), 0.0, 1.0);
+        }
         const double rx = (t - releaseTime) / std::max (0.0001, r);
         return clampv (releaseLevel * (1.0 - rx), 0.0, 1.0);
     }
@@ -260,6 +271,14 @@ struct EnvState
         if (releaseTime >= 0.0) return;
         releaseLevel = eval (t);
         releaseTime = t;
+    }
+
+    // Break React: start the envelope again at t, from its level now (held notes only)
+    void retrigger (double t)
+    {
+        if (releaseTime >= 0.0) return;
+        rtLevel = eval (t);
+        rtAt = t;
     }
 
     bool finished (double t) const { return releaseTime >= 0.0 && t > releaseTime + r; }

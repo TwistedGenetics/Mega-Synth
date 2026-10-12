@@ -169,6 +169,16 @@ inline const char* const kCoreEnvModeKeys[]   = { "amp","ops" };
 inline const char* const kCoreEnvModeLabels[] = { "Amp + Operators","Operators only" };
 inline const char* const kBsAdvanceKeys[]   = { "0","1","2","4" };
 inline const char* const kBsAdvanceLabels[] = { "No advance","Advance 1","Advance 2","Advance 4" };
+inline const char* const kSliceKeysKeys[]   = { "on","off","auto" };
+inline const char* const kSliceKeysLabels[] = { "On","Off","Auto" };
+inline const char* const kRxRetrigKeys[]    = { "off","amp","filter","both" };
+inline const char* const kRxRetrigLabels[]  = { "Off","Amp","Filter","Amp + Filter" };
+inline const char* const kRxBeatsKeys[]     = { "all","beat","back","off" };
+inline const char* const kRxBeatsLabels[]   = { "All hits","On the beat","Backbeat (2 & 4)","Off-beats" };
+inline const char* const kRxEveryKeys[]     = { "1","2","3","4" };
+inline const char* const kRxEveryLabels[]   = { "Every hit","Every 2nd","Every 3rd","Every 4th" };
+inline const char* const kRxDetectKeys[]    = { "classic","bands" };
+inline const char* const kRxDetectLabels[]  = { "Classic","Band energy" };
 inline const char* const kMfModelKeys[]   = { "clean","lp","sallenkey","ladder","steiner","svf","ota","polivoks","swcap","acid","ms20","oberheim","sem","tb303","moogfat","arpodyssey","cs15","sh2" };
 inline const char* const kMfModelLabels[] = { "Clean (SVF)","Standard LP","Sallen-Key LP","Ladder","Steiner-Parker","State Variable","Discrete OTA","Polivoks","Switched Capacitor","Acid Filter Approx","MS-20","Oberheim","SEM","TB-303","Minimoog - Fat Cat","Arp Odyssey","CS-15","SH-2" };
 inline const char* const kMfSlopeKeys[]   = { "12","24" };
@@ -409,6 +419,11 @@ inline const ChoiceList kListCoreRetrig = TG_LIST(kCoreRetrig);
 inline const ChoiceList kListCoreWave   = TG_LIST(kCoreWave);
 inline const ChoiceList kListCoreEnvMode = TG_LIST(kCoreEnvMode);
 inline const ChoiceList kListBsAdvance  = TG_LIST(kBsAdvance);
+inline const ChoiceList kListSliceKeys  = TG_LIST(kSliceKeys);
+inline const ChoiceList kListRxRetrig   = TG_LIST(kRxRetrig);
+inline const ChoiceList kListRxBeats    = TG_LIST(kRxBeats);
+inline const ChoiceList kListRxEvery    = TG_LIST(kRxEvery);
+inline const ChoiceList kListRxDetect   = TG_LIST(kRxDetect);
 inline const ChoiceList kListRxListen   = TG_LIST(kRxListen);
 inline const ChoiceList kListRxBreak    = TG_LIST(kRxBreak);
 inline const ChoiceList kListPfAkaiMode = TG_LIST(kPfAkaiMode);
@@ -1519,7 +1534,69 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(cAEnvMode, "Core A Envelope", kListCoreEnvMode, 0) \
     C(cBEnvMode, "Core B Envelope", kListCoreEnvMode, 0) \
     B(bsKeyEntry, "Break Seq Key Entry", false) \
-    C(bsAdvance, "Break Seq Advance", kListBsAdvance, 0)
+    C(bsAdvance, "Break Seq Advance", kListBsAdvance, 0) \
+    C(bcSliceKeys, "Break Slice Keys", kListSliceKeys, 0) \
+    C(rxDetect, "Break React Detection", kListRxDetect, 0) \
+    F(rxSeed, "Break React Seed", 0, 999, 1, 1, 0) \
+    B(rxMainOn, "Break React Main Row", true) \
+    C(rxRetrig, "Break React Env Retrigger", kListRxRetrig, 0) \
+    F(rxCut, "Break React Filter Kick", -4, 4, 0, 0.01, 0) \
+    F(rxRes, "Break React Res Kick", 0, 1, 0, 0.01, 0) \
+    F(rxVel, "Break React Velocity Follow", 0, 1, 0, 0.01, 0) \
+    C(rxBeats, "Break React Beats", kListRxBeats, 0) \
+    C(rxEvery, "Break React Every", kListRxEvery, 0) \
+    F(rxChance, "Break React Chance", 0, 1, 1, 0.01, 0) \
+    B(rxKOn, "Break React Kick Row", false) \
+    F(rxKSens, "Break React Kick Sensitivity", 0, 1, 0.5, 0.01, 0) \
+    B(rxKReset, "Break React Kick Phase Reset", true) \
+    F(rxKPitch, "Break React Kick Pitch Kick", -24, 24, 0, 0.1, 0) \
+    F(rxKDrive, "Break React Kick Drive Kick", 0, 1, 0, 0.01, 0) \
+    F(rxKDuck, "Break React Kick Level Duck", 0, 1, 0, 0.01, 0) \
+    F(rxKNotch, "Break React Kick Notch Jump", 0, 1, 0, 0.01, 0) \
+    C(rxKRetrig, "Break React Kick Env Retrigger", kListRxRetrig, 0) \
+    F(rxKCut, "Break React Kick Filter Kick", -4, 4, 0, 0.01, 0) \
+    F(rxKRes, "Break React Kick Res Kick", 0, 1, 0, 0.01, 0) \
+    F(rxKVel, "Break React Kick Velocity Follow", 0, 1, 0, 0.01, 0) \
+    C(rxKBeats, "Break React Kick Beats", kListRxBeats, 0) \
+    C(rxKEvery, "Break React Kick Every", kListRxEvery, 0) \
+    F(rxKChance, "Break React Kick Chance", 0, 1, 1, 0.01, 0) \
+    B(rxSOn, "Break React Snare Row", false) \
+    F(rxSSens, "Break React Snare Sensitivity", 0, 1, 0.5, 0.01, 0) \
+    B(rxSReset, "Break React Snare Phase Reset", true) \
+    F(rxSPitch, "Break React Snare Pitch Kick", -24, 24, 0, 0.1, 0) \
+    F(rxSDrive, "Break React Snare Drive Kick", 0, 1, 0, 0.01, 0) \
+    F(rxSDuck, "Break React Snare Level Duck", 0, 1, 0, 0.01, 0) \
+    F(rxSNotch, "Break React Snare Notch Jump", 0, 1, 0, 0.01, 0) \
+    C(rxSRetrig, "Break React Snare Env Retrigger", kListRxRetrig, 0) \
+    F(rxSCut, "Break React Snare Filter Kick", -4, 4, 0, 0.01, 0) \
+    F(rxSRes, "Break React Snare Res Kick", 0, 1, 0, 0.01, 0) \
+    F(rxSVel, "Break React Snare Velocity Follow", 0, 1, 0, 0.01, 0) \
+    C(rxSBeats, "Break React Snare Beats", kListRxBeats, 0) \
+    C(rxSEvery, "Break React Snare Every", kListRxEvery, 0) \
+    F(rxSChance, "Break React Snare Chance", 0, 1, 1, 0.01, 0) \
+    B(rxHOn, "Break React Hat Row", false) \
+    F(rxHSens, "Break React Hat Sensitivity", 0, 1, 0.5, 0.01, 0) \
+    B(rxHReset, "Break React Hat Phase Reset", true) \
+    F(rxHPitch, "Break React Hat Pitch Kick", -24, 24, 0, 0.1, 0) \
+    F(rxHDrive, "Break React Hat Drive Kick", 0, 1, 0, 0.01, 0) \
+    F(rxHDuck, "Break React Hat Level Duck", 0, 1, 0, 0.01, 0) \
+    F(rxHNotch, "Break React Hat Notch Jump", 0, 1, 0, 0.01, 0) \
+    C(rxHRetrig, "Break React Hat Env Retrigger", kListRxRetrig, 0) \
+    F(rxHCut, "Break React Hat Filter Kick", -4, 4, 0, 0.01, 0) \
+    F(rxHRes, "Break React Hat Res Kick", 0, 1, 0, 0.01, 0) \
+    F(rxHVel, "Break React Hat Velocity Follow", 0, 1, 0, 0.01, 0) \
+    C(rxHBeats, "Break React Hat Beats", kListRxBeats, 0) \
+    C(rxHEvery, "Break React Hat Every", kListRxEvery, 0) \
+    F(rxHChance, "Break React Hat Chance", 0, 1, 1, 0.01, 0) \
+    B(rxWt1, "Break React WT 1", false) \
+    B(rxWt2, "Break React WT 2", false) \
+    F(rxWtJump, "Break React WT Jump", 0, 1, 0, 0.01, 0) \
+    B(rxCoreA, "Break React Core A", false) \
+    B(rxCoreB, "Break React Core B", false) \
+    B(rxSaw, "Break React SuperSaw", false) \
+    B(rxComplex, "Break React Complex", false) \
+    B(rxGran, "Break React Granular", false) \
+    F(rxGranBurst, "Break React Grain Burst", 0, 1, 0.5, 0.01, 0)
 
 enum ParamIndex
 {
@@ -1559,6 +1636,16 @@ constexpr int kCoreSlotHead = 11, kCoreOpStride = 21, kCoreOps = 6, kCoreSlotStr
 enum CoreSlotParam { CS_Engine, CS_Level, CS_Oct, CS_Semi, CS_Fine, CS_Uni, CS_Detune, CS_Spread, CS_Retrig, CS_Bright, CS_EnvSpd };
 enum CoreOpParam { CO_Wave, CO_Ratio, CO_Fixed, CO_Hz, CO_Fine, CO_Level, CO_Vel, CO_Key, CO_Dly, CO_Att, CO_Hold, CO_Dec, CO_Sus, CO_Rel, CO_M1, CO_Out = CO_M1 + 6 };
 inline constexpr int coreEnvModeParam (int slot) { return slot == 0 ? P_cAEnvMode : P_cBEnvMode; }
+
+// Break React rows: 0 the Main row (the original controls, with its Listen choice), 1 Kick, 2 Snare, 3 Hat
+enum RxRowField { RXF_On, RXF_Sens, RXF_Reset, RXF_Pitch, RXF_Drive, RXF_Duck, RXF_Notch, RXF_Retrig, RXF_Cut, RXF_Res, RXF_Vel, RXF_Beats, RXF_Every, RXF_Chance, RXF_COUNT };
+inline constexpr int kRxRows = 4;
+inline constexpr int rxRowParam (int row, int field)
+{
+    constexpr int mainRow[RXF_COUNT] = { P_rxMainOn, P_rxSens, P_rxReset, P_rxPitch, P_rxDrive, P_rxDuck, P_rxNotch, P_rxRetrig, P_rxCut, P_rxRes, P_rxVel, P_rxBeats, P_rxEvery, P_rxChance };
+    return row == 0 ? mainRow[field] : P_rxKOn + (row - 1) * RXF_COUNT + field;
+}
+static_assert (rxRowParam (3, RXF_Chance) == P_rxHChance && rxRowParam (2, RXF_On) == P_rxSOn, "Break React row layout");
 inline constexpr int coreParam (int slot, int which) { return P_cAEngine + slot * kCoreSlotStride + which; }
 inline constexpr int coreOpParam (int slot, int op, int which) { return P_cAEngine + slot * kCoreSlotStride + kCoreSlotHead + op * kCoreOpStride + which; }
 static_assert (coreParam (1, 0) == P_cBEngine && coreOpParam (0, 5, CO_Out) == P_cA6Out && coreOpParam (1, 5, CO_Out) == P_cB6Out && P_mxCoreAPan == P_cB6Out + 1, "Core parameter layout");

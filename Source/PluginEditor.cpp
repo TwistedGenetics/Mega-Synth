@@ -1575,7 +1575,7 @@ void MegaSynthEditor::buildPages()
     struct TabDef { const char* name; juce::StringArray subs; juce::Colour colour; };
     const TabDef layout[] = {
         { "Perform", { "Perform", "Performance FX" }, col::accent }, { "Overview", {}, col::accent },
-        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Break Chopper" }, col::osc },
+        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Break Chopper", "Reese" }, col::osc },
         { "Mixer", {}, col::mixer }, { "Filters", {}, col::filter },
         { "Envelopes", { "Amp & Filter", "Mod Envelopes", "Pitch Envelope", "MSEG 1 & 2" }, col::env },
         { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Space", "Dirt", "Motion", "Rack" }, col::fx },
@@ -2429,6 +2429,94 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Oscillators > Reese
+    {
+        auto* page = addPage ("Reese");
+        const auto c = juce::Colour (0xffff7a59);
+        auto* eng = sec (page, "Reese Engine", c);
+        eng->addInfo ("2, 3 or 4 detuned saws (or squares) per note, made for jungle and drum & bass basses. It goes through the filters "
+                      "and everything else like the other oscillators, with its own Mixer strip. Off (Level 0) it costs nothing and "
+                      "changes nothing.");
+        eng->knob (P_rsLevel, "Level", 62);
+        eng->choice (P_rsVoices, "Voices", 100);
+        eng->choice (P_rsWave, "Waveform", 120);
+        eng->knob (P_rsOct, "Octave", 60);
+        eng->knob (P_rsSemi, "Semi", 60);
+        eng->choice (P_rsRetrig, "Retrigger", 100)->box.setTooltip ("Free: the voices run on from the last note (analogue). Reset: they start together (tight). Random: a new start each note.");
+        auto* det = sec (page, "Detune", c);
+        det->addInfo ("Cents: as usual (the beating speeds up with the note). Hz: the same beating on every note. Beats: the beating is a "
+                      "note value at the song's tempo, worked out for every note, so the Reese wobble lands on the beat at any pitch "
+                      "(and follows tempo changes). Voices 3 and 4 beat x3 or x5 as fast (still locked) or at the golden ratio (free).");
+        det->choice (P_rsDetMode, "Mode", 180);
+        auto* kCents = det->knob (P_rsCents, "Cents", 62);
+        auto* kHz = det->knob (P_rsHz, "Hz", 62);
+        auto* cBeat = det->choice (P_rsBeat, "Beat", 110);
+        det->choice (P_rsRatio, "Voices 3-4", 120);
+        auto* info = page->own (new juce::Label());
+        info->setColour (juce::Label::textColourId, col::muted);
+        info->setFont (juce::Font (juce::FontOptions (11.5f)));
+        info->setJustificationType (juce::Justification::topLeft);
+        auto* mv = sec (page, "Phase & Width", c);
+        mv->addInfo ("Phase Twist pushes the voices' phases back and forth: slow is the classic swirl, fast (10-40 Hz) a growl. Width spreads "
+                     "the voices; Rotation moves them round the stereo field. Mono Below keeps everything under that frequency in the "
+                     "middle (off at 0).");
+        mv->knob (P_rsTwist, "Twist", 60);
+        mv->knob (P_rsTwistRate, "Twist Rate", 66);
+        mv->knob (P_rsWidth, "Width", 60);
+        mv->knob (P_rsRotate, "Rotation", 62);
+        mv->knob (P_rsRotRate, "Rot. Rate", 62);
+        mv->knob (P_rsMonoBelow, "Mono Below", 70);
+        auto* nt = sec (page, "Notch", c);
+        nt->addInfo ("A moving notch inside the oscillator: the hollow, phasey Reese movement without using the filters. Synced: it moves with "
+                     "the beating; off, at its own Rate. Move: how far it sweeps (up to two octaves each way).");
+        nt->knob (P_rsNotch, "Depth", 60);
+        nt->knob (P_rsNotchFreq, "Freq", 62);
+        nt->knob (P_rsNotchMove, "Move", 60);
+        nt->add (new ParamToggle (proc, P_rsNotchSync, "Synced", c), 86, 40);
+        auto* kNr = nt->knob (P_rsNotchRate, "Rate", 60);
+        auto* ch = sec (page, "Character", c);
+        ch->addInfo ("Sub: a sine an octave down, locked to voice 1. Drive: a soft saturator inside the oscillator (before the filters); Tone: "
+                     "darker to the left.");
+        ch->knob (P_rsSub, "Sub", 60);
+        ch->knob (P_rsDrive, "Drive", 60);
+        ch->knob (P_rsTone, "Tone", 60);
+        auto* ticker = page->own (new StoreTicker());
+        ticker->tick = [this, kCents, kHz, cBeat, kNr, info]
+        {
+            auto plain = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+            const int mode = juce::roundToInt (plain (P_rsDetMode));
+            kCents->setAlpha (mode == 0 ? 1.0f : 0.4f); kHz->setAlpha (mode == 1 ? 1.0f : 0.4f); cBeat->setAlpha (mode == 2 ? 1.0f : 0.4f);
+            kNr->setAlpha (plain (P_rsNotchSync) > 0.5f ? 0.4f : 1.0f);
+            // what the detune means now: the beating, and the voices at A1
+            const double tempo = proc.getHostTempoShown() > 0.0 ? proc.getHostTempoShown() : (double) plain (P_seqTempo);
+            tg::ReeseSettings rs;
+            rs.voices = juce::roundToInt (plain (P_rsVoices)); rs.mode = mode; rs.beat = juce::roundToInt (plain (P_rsBeat)); rs.ratio = juce::roundToInt (plain (P_rsRatio));
+            rs.cents = plain (P_rsCents); rs.hz = plain (P_rsHz);
+            tg::ReeseOsc o; o.prepare (48000.0);
+            const double a1 = 55.0 * std::pow (2.0, std::round (plain (P_rsOct)) + std::round (plain (P_rsSemi)) / 12.0);
+            o.setFrequency (a1, tempo, rs);
+            juce::String t;
+            t << "Beating: " << juce::String (o.beatRate(), 2) << " Hz";
+            if (mode == 2) t << " (one per " << tg::kRsBeatLabels[juce::jlimit (0, 12, rs.beat)] << " at " << juce::String (tempo, 1) << " BPM)";
+            t << "\nAt A1 the voices are ";
+            for (int k = 0; k < o.voiceCount(); ++k) t << (k ? " / " : "") << juce::String (o.voiceFrequency (k), 2);
+            t << " Hz";
+            if (plain (P_rsLevel) <= 0.0f) t << "\nLevel is 0: the Reese is off.";
+            info->setText (t, juce::dontSendNotification);
+        };
+        ticker->tick();
+        page->onResize = [page, eng, det, info, mv, nt, ch]
+        {
+            const int g = 10, W = page->getWidth();
+            eng->setBounds (g, g, 560, 130);
+            det->setBounds (g + 570, g, W - 2 * g - 570, 130);
+            info->setBounds (g + 590, g + 140, W - 2 * g - 600, 60);
+            mv->setBounds (g, g + 140, 560, 130);
+            nt->setBounds (g, g + 280, 560, 130);
+            ch->setBounds (g + 570, g + 210, W - 2 * g - 570, 130);
+        };
+    }
+
     // ---------------------------------------------------------------- Sequencers > Break Sequencer
     {
         auto* page = addPage ("Break Sequencer");
@@ -2650,7 +2738,8 @@ void MegaSynthEditor::buildPages()
             { "SuperSaw", P_supersawGain, P_supersawVoices, "Voices", 8, col::supersaw },
             { "Ring", P_ringGain, P_ringMix, "Ring Mix", -1, col::fm },
             { "Granular", P_gsLevel, P_gsDensity, "Density", 99, col::supersaw },
-            { "Break", P_bcLevel, P_bcPitch, "Pitch", -1, col::complex } };   // (99: lit only when the pitch envelope moves all)
+            { "Break", P_bcLevel, P_bcPitch, "Pitch", -1, col::complex },
+            { "Reese", P_rsLevel, P_rsWidth, "Width", 99, juce::Colour (0xffff7a59) } };   // (99: lit only when the pitch envelope moves all)
         juce::Array<ChannelStrip*> stripList;
         for (int k = 0; k < kMxStrips; ++k)
             stripList.add (page->own (new ChannelStrip (proc, k, strips[k].name, strips[k].level, strips[k].extra, strips[k].extraCap, strips[k].pEnv, strips[k].c)));
@@ -2737,7 +2826,7 @@ void MegaSynthEditor::buildPages()
         page->onResize = [page, stripList, srcHelp, engS, chipList, rt, w, outS, outL, outR, rtg]
         {
             const int g = 10, W = page->getWidth();
-            const int stripW = 70, stripsW = stripW * kMxStrips + 2 * 4;
+            const int stripW = 64, stripsW = stripW * kMxStrips + 2 * 4;
             srcHelp->setBounds (g, g, stripsW + 8, 32 + 360 + 8);
             for (int k = 0; k < stripList.size(); ++k) { stripList[k]->setBounds (g + 4 + k * stripW, g + 32, stripW - 4, 360); stripList[k]->toFront (false); }
             w->setBounds (g, g + 410, 260, 130);

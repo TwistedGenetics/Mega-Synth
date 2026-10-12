@@ -157,7 +157,7 @@ The character models, with ideas from Beep Street's Sunrizer plus extras:
 
 A console, in the order the sound flows:
 
-- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, the Ring modulator, the Granular Synth and the Break Chopper, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
+- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, the Ring modulator, the Granular Synth, the Break Chopper and the Reese engine, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
   - Pan is a balance: centred, both sides stay at full level, so a centred mix sounds exactly as it did before the strips. Panning turns the other side down.
   - A muted source still works as an FM or ring modulator. With any Solo on, only soloed sources are heard. Mute and Solo ramp over a few milliseconds, so they don't click.
   - Pan is a Mod Matrix destination. The strips aren't changed by Mutate.
@@ -166,6 +166,26 @@ A console, in the order the sound flows:
 - **Effect Returns**: Delay, Reverb, Shimmer, Chorus, Reverse.
 - **Analog**: Warmth, Bass Keep, Drift.
 - **Output**: Master Volume (before the effects, as always), the Master Filter's On and Cutoff, the Output trim, and a stereo meter with the peak held.
+
+## Reese Engine (Oscillators > Reese)
+
+A second oscillator built for jungle and drum & bass basses: 2, 3 or 4 detuned voices per note whose beating you can lock to the song. It's **off by default** (Level 0). At Level 0 the sound is bit-for-bit what it was, whatever its other settings, so older patches and projects are unchanged and load with it off.
+
+- **Reese Engine:** Level, **Voices** (2, 3 or 4), **Waveform** (Saw, Square, or a Saw/Square blend; band-limited), **Octave** and **Semi** (relative to the note; the pitch bend, pitch LFOs and the pitch envelope set to "all oscillators" move it too), **Retrigger** (Free: the voices carry on from where they were; Reset: every note starts the same; Random).
+- **Detune:** **Mode** chooses how far apart the voices are:
+  - **Cents** - the usual way: the beating speeds up as you play higher.
+  - **Hz** - the same beating on every note.
+  - **Beats (locked to tempo)** - the beating is a note value at the song's tempo (1/16 up to 4 bars, dotted and triplet), worked out for each note, so the wobble lands on the beat at any pitch. It follows the host's tempo (or the Sequencer's tempo when the host has none), and tempo changes.
+  - **Voices 3-4:** beat at **x3** or **x5** the main rate (still locked: the whole pattern repeats once per note value), or at the **golden** ratio (free; never quite repeats).
+  - The line under Detune shows the beating now and the voices' frequencies at A1.
+- **Phase & Width:** **Twist** pushes the voices' phases back and forth at **Twist Rate** (slow: a swirl, fast: a growl). **Width** spreads the voices; **Rotation** moves them round the stereo field at **Rot. Rate**. **Mono Below** (60-250 Hz) keeps everything under it in the middle (the side signal is high-passed, 24 dB/octave).
+- **Notch:** a moving notch, **Depth**, **Freq**, **Move** (up to two octaves either way). **Synced** moves it with the beating; otherwise at its own **Rate**.
+- **Character:** **Sub** (a sine an octave below voice 1, phase-locked to it), **Drive** (a smooth saturation, faded in from zero) and **Tone** (a low-pass after the drive).
+- It has its own **Mixer** strip (Level, Pan, Width, Mute, Solo, meter) and shows in the Overview ("Oscillators + Reese" lights when it's on). It goes into the voice's filters with the other oscillators.
+- **Modulation:** every continuous control is a Mod Matrix destination (Octave, Semi and the switches aren't). The new source **Reese Phase** runs 0 to 1 once per beating cycle, so you can lock anything else (a filter, the notch, a width swing) to the wobble. Mutate leaves the Reese alone.
+- **Quality:** the voices are band-limited at every setting. The Drive is oversampled x2 on Normal and x4 on High (with anti-aliasing on the curve itself); on Eco it isn't.
+- **Measured** (our build machine, 48 kHz): the beating period within 0.04% of the note value across 90/140/172/174 BPM and C1-C5 (1% allowed); at C7 on High, aliasing at -114 dB without the drive, -64 dB (2 saws, drive 60%) and -70 dB (2 squares, drive 100%); with full drive on Normal it's about -48 dB and on Eco about -25 dB. Mono Below 120 Hz takes the side signal under 70 Hz from -5 dB to -34 dB. The sub stays locked to voice 1 (no measurable drift over 18 s).
+- **CPU** (8 notes held): about 3-6% of one core for the Reese on top of Init at 2-4 voices; with the Drive at 4 voices, about 5% on Eco, 9% on Normal and 15% on High. The numbers vary a few percent from run to run.
 
 ## Granular Synth (Oscillators > Granular Synth)
 

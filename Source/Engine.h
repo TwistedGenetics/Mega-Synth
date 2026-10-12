@@ -9,6 +9,7 @@
 #include "Mut/AudioRate.h"
 #include "Mut/DnaSplice.h"
 #include "Mut/Resonator.h"
+#include "Reese.h"
 #include "Fx/MasterFilter.h"
 #include "Fx/PerfFx.h"
 #include "GranSynth.h"
@@ -167,6 +168,9 @@ private:
     WtPlayer wt[2];
     // the Granular Synth (sample slot 2)
     GranVoice gran;
+    ReeseOsc reese;          // the Reese engine
+    S lRs;                   // its level (smoothed)
+    bool rsRun = false;      // on, or still fading out
     GranVoice::Params gsP;
     const WaveSample* gsWav = nullptr;
     S lGs;

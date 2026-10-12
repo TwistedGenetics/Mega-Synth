@@ -93,6 +93,15 @@ inline juce::String formatParam (int idx, float v)
     if (id == "bcTempo" || id == "bcTempo2" || id == "bcTempo3") return v < 1.0f ? juce::String ("auto") : fixed (v, 1) + " BPM";
     if (id == "bcActive") return "Break " + juce::String (juce::roundToInt (v));
     if (id == "bcChopLatency") return fixed (v, 1) + " ms";
+    // ---- the Reese engine
+    if (id == "rsLevel" || id == "rsTwist" || id == "rsWidth" || id == "rsRotate" || id == "rsNotch" || id == "rsNotchMove" || id == "rsSub" || id == "rsDrive" || id == "rsTone")
+        return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    if (id == "rsOct") { const int n = juce::roundToInt (v); return (n > 0 ? "+" : "") + juce::String (n) + " oct"; }
+    if (id == "rsSemi") { const int n = juce::roundToInt (v); return (n > 0 ? "+" : "") + juce::String (n) + " st"; }
+    if (id == "rsCents") return fixed (v, 1) + " cents";
+    if (id == "rsHz" || id == "rsTwistRate" || id == "rsRotRate" || id == "rsNotchRate") return fixed (v, v < 10.0f ? 2 : 1) + " Hz";
+    if (id == "rsMonoBelow") return v < 1.0f ? juce::String ("off") : juce::String (juce::roundToInt (v)) + " Hz";
+    if (id == "rsNotchFreq") return v >= 1000.0f ? fixed (v / 1000.0f, 2) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz";
     if (id == "bcLevel1" || id == "bcLevel2" || id == "bcLevel3" || id == "bsAmount" || id == "bsVarAmount" || id == "bsAutoFillProb") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id == "bsFillKey") { const int n = juce::roundToInt (v); return n < 0 ? juce::String ("Off") : juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")"; }
     if (id == "bcKeyBase") { const int n = juce::roundToInt (v); return juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")"; }

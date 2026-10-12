@@ -38,7 +38,7 @@ namespace
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
             || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni") || id.startsWith ("pEnv") || id.startsWith ("mseg")
-            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx") || id.startsWith ("flt") || id.startsWith ("pf") || id.startsWith ("gs") || id.startsWith ("bc") || id.startsWith ("bs");
+            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx") || id.startsWith ("flt") || id.startsWith ("pf") || id.startsWith ("gs") || id.startsWith ("bc") || id.startsWith ("bs") || id.startsWith ("rs");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -1638,6 +1638,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 21) setMfModelDefaultsForOldPatch();
     if (version < 22) setRouteDefaultsForOldPatch();
     if (version < 23) setAkaiDefaultsForOldPatch();
+    if (version < 24) setReeseDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1871,6 +1872,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("mfModel")) setMfModelDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("subRoute")) setRouteDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("pfAkai")) setAkaiDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("rsLevel")) setReeseDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2135,6 +2137,15 @@ void MegaSynthProcessor::setBreak3DefaultsForOldPatch()
 void MegaSynthProcessor::setChopDefaultsForOldPatch()
 {
     for (int i = P_bcChopMode; i <= P_bcMarkerSnap; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setReeseDefaultsForOldPatch()
+{
+    for (int i = P_rsLevel; i <= P_mxReeseSolo; ++i)
     {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();

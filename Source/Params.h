@@ -139,6 +139,19 @@ inline const char* const kPfAkaiSpeedKeys[]   = { "gentle","hard" };
 inline const char* const kPfAkaiSpeedLabels[] = { "x0.75 / x1.5","x0.5 / x2" };
 inline const char* const kPfAkaiSyncKeys[]   = { "free","32","64" };
 inline const char* const kPfAkaiSyncLabels[] = { "Cycle: free (ms)","Cycle: 1/32","Cycle: 1/64" };
+inline const char* const kRsVoicesKeys[]   = { "2","3","4" };
+inline const char* const kRsVoicesLabels[] = { "2 voices","3 voices","4 voices" };
+inline const char* const kRsWaveKeys[]   = { "saw","square","sawsquare" };
+inline const char* const kRsWaveLabels[] = { "Saw","Square","Saw + Square" };
+inline const char* const kRsModeKeys[]   = { "cents","hz","beats" };
+inline const char* const kRsModeLabels[] = { "Cents","Hz (same on every note)","Beats (locked to tempo)" };
+inline const char* const kRsBeatKeys[]   = { "4bar","2bar","1bar","1/2","1/4","1/8","1/16","1/2d","1/4d","1/8d","1/2t","1/4t","1/8t" };
+inline const char* const kRsBeatLabels[] = { "4 bars","2 bars","1 bar","1/2","1/4","1/8","1/16","1/2 dotted","1/4 dotted","1/8 dotted","1/2 triplet","1/4 triplet","1/8 triplet" };
+inline constexpr double kRsBeatBeats[]   = { 16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 3.0, 1.5, 0.75, 4.0 / 3.0, 2.0 / 3.0, 1.0 / 3.0 };
+inline const char* const kRsRatioKeys[]   = { "x3","x5","golden" };
+inline const char* const kRsRatioLabels[] = { "x3 (locked)","x5 (locked)","Golden (free)" };
+inline const char* const kRsRetrigKeys[]   = { "free","reset","random" };
+inline const char* const kRsRetrigLabels[] = { "Free","Reset","Random" };
 inline const char* const kMfModelKeys[]   = { "clean","lp","sallenkey","ladder","steiner","svf","ota","polivoks","swcap","acid","ms20","oberheim","sem","tb303","moogfat","arpodyssey","cs15","sh2" };
 inline const char* const kMfModelLabels[] = { "Clean (SVF)","Standard LP","Sallen-Key LP","Ladder","Steiner-Parker","State Variable","Discrete OTA","Polivoks","Switched Capacitor","Acid Filter Approx","MS-20","Oberheim","SEM","TB-303","Minimoog - Fat Cat","Arp Odyssey","CS-15","SH-2" };
 inline const char* const kMfSlopeKeys[]   = { "12","24" };
@@ -367,6 +380,12 @@ inline const ChoiceList kListBsAltBreak = TG_LIST(kBsAltBreak);
 inline const ChoiceList kListBsToolSrc  = TG_LIST(kBsToolSrc);
 inline const ChoiceList kListMfModel    = TG_LIST(kMfModel);
 inline const ChoiceList kListSubRoute   = TG_LIST(kSubRoute);
+inline const ChoiceList kListRsVoices   = TG_LIST(kRsVoices);
+inline const ChoiceList kListRsWave     = TG_LIST(kRsWave);
+inline const ChoiceList kListRsMode     = TG_LIST(kRsMode);
+inline const ChoiceList kListRsBeat     = TG_LIST(kRsBeat);
+inline const ChoiceList kListRsRatio    = TG_LIST(kRsRatio);
+inline const ChoiceList kListRsRetrig   = TG_LIST(kRsRetrig);
 inline const ChoiceList kListPfAkaiMode = TG_LIST(kPfAkaiMode);
 inline const ChoiceList kListPfAkaiSpeed = TG_LIST(kPfAkaiSpeed);
 inline const ChoiceList kListPfAkaiSync = TG_LIST(kPfAkaiSync);
@@ -387,7 +406,7 @@ constexpr int kUniStride = 5, kUniOscs = 6;
 // Mixer channel strips: Pan, Mute, Solo per source (Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, Ring), from P_mxOsc1Pan
 constexpr int kMxStride = 3, kMxSources = 9;
 // ... plus strips added later, each Pan / Mute / Solo in a row: 9 = Granular Synth, 10 = Break Chopper
-constexpr int kMxStrips = 11;
+constexpr int kMxStrips = 12;
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
@@ -1140,7 +1159,35 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(pfAkaiCycle, "Perf Akai Cycle Length", 10, 200, 40, 0.1, 50) \
     F(pfAkaiXfade, "Perf Akai Crossfade", 0, 1, 0.35, 0.01, 0) \
     F(pfAkaiPitch, "Perf Akai Pitch", -12, 12, 0, 0.1, 0) \
-    F(pfAkaiMix,   "Perf Akai Mix", 0, 1, 1, 0.01, 0)
+    F(pfAkaiMix,   "Perf Akai Mix", 0, 1, 1, 0.01, 0) \
+    F(rsLevel,     "Reese Level", 0, 1, 0, 0.01, 0) \
+    C(rsVoices,    "Reese Voices", kListRsVoices, 0) \
+    C(rsWave,      "Reese Waveform", kListRsWave, 0) \
+    F(rsOct,       "Reese Octave", -3, 2, 0, 1, 0) \
+    F(rsSemi,      "Reese Semi", -12, 12, 0, 1, 0) \
+    C(rsDetMode,   "Reese Detune Mode", kListRsMode, 2) \
+    F(rsCents,     "Reese Detune Cents", 0, 100, 14, 0.1, 0) \
+    F(rsHz,        "Reese Detune Hz", 0, 20, 1.5, 0.01, 0) \
+    C(rsBeat,      "Reese Beat", kListRsBeat, 3) \
+    C(rsRatio,     "Reese Voice 3-4 Ratio", kListRsRatio, 0) \
+    F(rsTwist,     "Reese Phase Twist", 0, 1, 0.15, 0.01, 0) \
+    F(rsTwistRate, "Reese Twist Rate", 0.05, 40, 0.6, 0.01, 1) \
+    C(rsRetrig,    "Reese Retrigger", kListRsRetrig, 0) \
+    F(rsWidth,     "Reese Width", 0, 1, 0.6, 0.01, 0) \
+    F(rsRotate,    "Reese Rotation", 0, 1, 0, 0.01, 0) \
+    F(rsRotRate,   "Reese Rotation Rate", 0.02, 5, 0.15, 0.01, 0.5) \
+    F(rsMonoBelow, "Reese Mono Below", 0, 250, 120, 1, 0) \
+    F(rsNotch,     "Reese Notch Depth", 0, 1, 0, 0.01, 0) \
+    F(rsNotchFreq, "Reese Notch Freq", 100, 8000, 900, 1, -1) \
+    F(rsNotchMove, "Reese Notch Move", 0, 1, 0.5, 0.01, 0) \
+    B(rsNotchSync, "Reese Notch Synced", true) \
+    F(rsNotchRate, "Reese Notch Rate", 0.05, 10, 0.5, 0.01, 0.5) \
+    F(rsSub,       "Reese Sub", 0, 1, 0, 0.01, 0) \
+    F(rsDrive,     "Reese Drive", 0, 1, 0, 0.01, 0) \
+    F(rsTone,      "Reese Tone", 0, 1, 1, 0.01, 0) \
+    F(mxReesePan,  "Reese Pan", -1, 1, 0, 0.01, 0) \
+    B(mxReeseMute, "Reese Mute", false) \
+    B(mxReeseSolo, "Reese Solo", false)
 
 enum ParamIndex
 {
@@ -1171,7 +1218,8 @@ inline const char* const kParamIds[] = {
 };
 
 // a Mixer strip's Pan parameter (Mute and Solo follow it)
-inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : (strip == kMxSources ? P_mxGranPan : P_mxBreakPan); }
+inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : (strip == kMxSources ? P_mxGranPan : (strip == kMxSources + 1 ? P_mxBreakPan : P_mxReesePan)); }
+constexpr int kMxReeseStrip = kMxSources + 2;
 
 // The Break Chopper's per-break parameters (break k = 0, 1, 2)
 struct BreakParamSet { int sliceMode, sens, bars, tempo, stretch, colour, level, pan; };

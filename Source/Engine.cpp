@@ -51,6 +51,7 @@ void Voice::prepare (double sampleRate)
 {
     sr = sampleRate;
     gran.prepare (sampleRate);
+    reese.prepare (sampleRate);
     waveMut.prepare (sampleRate);
     dna.prepare (sampleRate);
     reso.prepare (sampleRate);
@@ -84,6 +85,7 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     released = false;
     t = 0.0;
     { const int r = clampv (s.i (P_subRoute), 0, 2); for (int j = 0; j < 3; ++j) subRG[j] = j == r ? 1.0f : 0.0f; }   // (a new note starts on its route)
+    if (s.f (P_rsLevel) > 0.0f) reese.start (clampv (s.i (P_rsRetrig), 0, 2), (uint32_t) (ord * 131u + (uint64_t) k));
     startedAt = voiceRand01() * 1000.0;
     for (int i = 0; i < 9; ++i) ssDriftSin[i] = std::sin ((startedAt + i * 0.37) * 7.123);   // fixed per note
     gran.start (ord * 131u + (uint64_t) k);   // its own random sequence (the shared voice one is left alone)
@@ -248,6 +250,7 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
         v[MS_ArpGate]     = in->arpGate;
         v[MS_Sidechain]   = in->sidechain;
         v[MS_BsStep] = in->bsStep; v[MS_BsPattern] = in->bsPattern; v[MS_BsSlice] = in->bsSlice; v[MS_BsBreak] = in->bsBreak; v[MS_BsFill] = in->bsFill;
+        v[MS_ReesePhase] = rsRun ? (float) reese.beatPhase() : 0.0f;
     }
     v[MS_RandNote] = randNote;
     v[MS_CellNoise] = inst.value (CI_Source);
@@ -643,6 +646,27 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
         }
     }
 
+    // the Reese engine: its voices' frequencies for this block (Beats: the beating at the song's tempo)
+    lRs.target = clampv (s.f (P_rsLevel), 0.0f, 1.0f);
+    if (first) lRs.v = lRs.target; else lRs.step (c10);
+    if (lRs.target <= 0.0f && lRs.v < 1.0e-5f) lRs.v = 0.0f;
+    rsRun = lRs.target > 0.0f || lRs.v > 0.0f;
+    if (rsRun)
+    {
+        ReeseSettings rs;
+        rs.voices = clampv (s.i (P_rsVoices), 0, 2); rs.wave = clampv (s.i (P_rsWave), 0, 2); rs.mode = clampv (s.i (P_rsDetMode), 0, 2);
+        rs.beat = clampv (s.i (P_rsBeat), 0, 12); rs.ratio = clampv (s.i (P_rsRatio), 0, 2); rs.retrig = clampv (s.i (P_rsRetrig), 0, 2);
+        rs.cents = s.f (P_rsCents); rs.hz = s.f (P_rsHz); rs.twist = s.f (P_rsTwist); rs.twistRate = s.f (P_rsTwistRate);
+        rs.width = clampv (s.f (P_rsWidth), 0.0f, 1.0f); rs.rotate = clampv (s.f (P_rsRotate), 0.0f, 1.0f); rs.rotRate = s.f (P_rsRotRate);
+        rs.monoHz = s.f (P_rsMonoBelow); rs.notch = clampv (s.f (P_rsNotch), 0.0f, 1.0f); rs.notchFreq = s.f (P_rsNotchFreq);
+        rs.notchMove = clampv (s.f (P_rsNotchMove), 0.0f, 1.0f); rs.notchSync = s.v[P_rsNotchSync] > 0.5f; rs.notchRate = s.f (P_rsNotchRate);
+        rs.quality = clampv (s.i (P_quality), 0, 2);
+        rs.sub = clampv (s.f (P_rsSub), 0.0f, 1.0f); rs.drive = clampv (s.f (P_rsDrive), 0.0f, 1.0f); rs.tone = clampv (s.f (P_rsTone), 0.0f, 1.0f);
+        const double pe = s.i (P_pEnvTarget) == 0 ? (double) peRatio[0] : 1.0;   // the pitch envelope when it targets all oscillators
+        const double fr = baseFreq * pow2 (std::round (s.f (P_rsOct))) * pow2 ((100.0 * std::round (s.f (P_rsSemi)) + pitch) / 1200.0) * pe;
+        reese.setFrequency (fr, s.fxTempo > 0.0 ? s.fxTempo : (double) s.f (P_seqTempo), rs);
+    }
+
     // --- mixer levels
     l1.target   = hardMuted (s.f (P_osc1Gain), mod[MT_osc1Gain], 2);
     l2.target   = hardMuted (s.f (P_osc2Gain), mod[MT_osc2Gain], 2);
@@ -664,7 +688,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
 
     // --- "source mute": silence the voice when every source is at zero
     const float audible = l1.target + l2.target + l3.target + lSub.target + wt[0].level.target + wt[1].level.target + lC.target + lSS.target
-                        + rm * std::max (0.0f, s.f (P_ringGain)) + lGs.target;   // (+ 0 when the Granular Synth is off: unchanged)
+                        + rm * std::max (0.0f, s.f (P_ringGain)) + lGs.target + lRs.target;   // (+ 0 when the Granular Synth and the Reese are off: unchanged)
     const float mute = audible > 0.0001f ? 1.0f : 0.0f;
     srcMute.target = mute;
     srcMute.step (first ? 1.0f : smoothCoef (dtc, mute > 0 ? 0.008 : 0.02));
@@ -815,7 +839,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     updateUnison (s);
     updateMixer (s, first, c10);
     // stereo processing is only needed for the SuperSaw spread, a stereo sample, spread unison or a panned source
-    bool stereoWt = uniAny || mxActive;
+    bool stereoWt = uniAny || mxActive || (rsRun && (s.f (P_rsWidth) > 0.001f || s.f (P_rsRotate) > 0.001f));
     for (auto& w : wt) if (w.loaded && w.wav->numChannels > 1 && w.level.target > 0) stereoWt = true;
     if (! stereo && ((lSS.target > 0 && width > 0.001f) || stereoWt))
     {
@@ -1232,6 +1256,15 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                     for (int k = 0; k < kMxSources - 1; ++k) { a += sL[k] * mxL[k]; b += sR[k] * mxR[k]; }
                     mL = a; mR = b;
                 }
+            }
+            if (rsRun)
+            {
+                // the Reese engine, through its own Mixer strip, into the mix before the filters
+                float a, b; reese.tick (a, b);
+                a *= lRs.v; b *= lRs.v;
+                if (mc.meters) mxPeak[kMxReeseStrip] = std::max (mxPeak[kMxReeseStrip], std::max (std::abs (a), std::abs (b)));
+                if (mxActive) { a *= mxL[kMxReeseStrip]; b *= mxR[kMxReeseStrip]; }
+                mL += a; mR += b;
             }
             if (subSplit)
             {

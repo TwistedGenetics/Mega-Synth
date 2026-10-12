@@ -2352,6 +2352,18 @@ int main()
             auto f = dir.getChildFile ("page_Filters_moddepth.png"); f.deleteFile();
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
         }
+        {
+            // the Reese engine on (4 voices, Beats mode, notch and sub), the Reese page, the Mixer and the Overview
+            setP (*p, P_rsLevel, 0.8f); setP (*p, P_rsVoices, 2.0f); setP (*p, P_rsNotch, 0.6f); setP (*p, P_rsSub, 0.4f); setP (*p, P_rsDrive, 0.3f);
+            render (*p, 0.2, chord (0.0, 0.2, { 36 }));
+            for (auto nm : { "Reese", "Mixer", "Overview" })
+            {
+                e->showPage (nm); e->timerCallbackForTests();
+                auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+                auto f = dir.getChildFile (juce::String ("page_") + nm + "_on.png"); f.deleteFile();
+                juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+            }
+        }
         return 0;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_UICONTROLS", {}).isNotEmpty())
@@ -5353,6 +5365,370 @@ int main()
             }
         }
     };
+    // ---- the Reese engine
+    auto reeseTests = [&]
+    {
+        std::cout << "Reese engine" << std::endl;
+        auto plainOf = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+        // the beating rate of a two-voice Reese in a signal: demodulated at the note, low-passed, the power
+        // envelope's strongest component near the expected rate (a fine search of its spectrum)
+        auto beatRateOf = [&] (const std::vector<float>& x, double f, double expect, int skip)
+        {
+            const double fc = std::min (f * 0.35, std::max (3.0 * expect, 2.0));
+            const double a = 1.0 - std::exp (-2.0 * kPi * fc / sr);
+            std::complex<double> z[4] {};
+            const int D = std::max (1, (int) (sr / (16.0 * std::max (fc, expect))));
+            std::vector<double> env;
+            for (int i = 0; i < (int) x.size(); ++i)
+            {
+                const double ph = 2.0 * kPi * f * i / sr;
+                std::complex<double> c = (double) x[(size_t) i] * std::complex<double> (std::cos (ph), -std::sin (ph));
+                for (auto& s : z) { s += (c - s) * a; c = s; }
+                if (i >= skip && (i - skip) % D == 0) env.push_back (std::norm (z[3]));
+            }
+            double mean = 0; for (double e : env) mean += e; mean /= (double) std::max<size_t> (1, env.size());
+            const double fs2 = sr / D;
+            const int n = (int) env.size();
+            auto mag = [&] (double fr)
+            {
+                std::complex<double> acc {};
+                for (int i = 0; i < n; ++i)
+                {
+                    const double w = 0.5 - 0.5 * std::cos (2.0 * kPi * i / (n - 1));
+                    const double ph = 2.0 * kPi * fr * i / fs2;
+                    acc += (env[(size_t) i] - mean) * w * std::complex<double> (std::cos (ph), -std::sin (ph));
+                }
+                return std::abs (acc);
+            };
+            double best = expect, bm = -1;
+            for (int k = 0; k <= 80; ++k) { const double fr = expect * (0.8 + 0.4 * k / 80.0); const double m = mag (fr); if (m > bm) { bm = m; best = fr; } }
+            double lo = best - expect * 0.005, hi = best + expect * 0.005;
+            for (int it = 0; it < 40; ++it) { const double m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3; if (mag (m1) < mag (m2)) lo = m1; else hi = m2; }
+            return 0.5 * (lo + hi);
+        };
+        auto noteHz = [] (int n) { return 440.0 * std::pow (2.0, (n - 69) / 12.0); };
+        auto plainSettings = []
+        {
+            ReeseSettings s; s.twist = 0.0f; s.width = 0.0f; s.monoHz = 0.0f; s.rotate = 0.0f; return s;
+        };
+        auto renderOsc = [&] (ReeseOsc& o, double f, double tempo, const ReeseSettings& s, int samples, std::vector<float>& l, std::vector<float>* r = nullptr)
+        {
+            o.setFrequency (f, tempo, s);
+            l.resize ((size_t) samples); if (r) r->resize ((size_t) samples);
+            for (int i = 0; i < samples; ++i) { float a, b; o.tick (a, b); l[(size_t) i] = a + b; if (r) { l[(size_t) i] = a; (*r)[(size_t) i] = b; } }
+        };
+        // 1. Beats mode: the beating period matches the note value within 1%, at four tempos, C1 to C5
+        {
+            double worst = 0; juce::String worstAt;
+            int cases = 0;
+            const int beats[] = { 0, 2, 3, 4, 7, 9, 11 };   // 1/16, 1/4, 1/2, 1 bar, 1/4 dotted, 1/4T... (and 4 bars below)
+            for (double bpm : { 90.0, 140.0, 172.0, 174.0 })
+                for (int note : { 24, 36, 48, 60, 72 })
+                    for (int b : beats)
+                    {
+                        const double expect = bpm / 60.0 / kRsBeatBeats[b];
+                        if (expect > noteHz (note) * 0.4) continue;   // (a beating faster than the note itself is not a Reese)
+                        ReeseOsc o; o.prepare (sr); o.start (1, 1);
+                        auto s = plainSettings(); s.mode = 2; s.beat = b;
+                        std::vector<float> x;
+                        const int skip = (int) (sr * 1.5 / std::min (noteHz (note) * 0.35, std::max (3.0 * expect, 2.0)));
+                        renderOsc (o, noteHz (note), bpm, s, skip + (int) (sr * 6.0 / expect), x);
+                        const double got = beatRateOf (x, noteHz (note), expect, skip);
+                        const double err = std::abs (got / expect - 1.0);
+                        ++cases;
+                        if (err > worst) { worst = err; worstAt = juce::String (bpm) + " BPM, note " + juce::String (note) + ", " + kListRsBeat.labels[b]; }
+                    }
+            std::cout << "  Beats mode: " << cases << " cases, worst period error " << juce::String (worst * 100.0, 3) << "% (" << worstAt << ")" << std::endl;
+            CHECK (worst < 0.01, "Reese beating period within 1% of the note value");
+            // the 4-bar setting at 90 BPM (the slowest: a 10.7 s cycle)
+            {
+                ReeseOsc o; o.prepare (sr); o.start (1, 1);
+                auto s = plainSettings(); s.mode = 2; s.beat = 0;
+                const double expect = 90.0 / 60.0 / 16.0;
+                std::vector<float> x; renderOsc (o, noteHz (36), 90.0, s, (int) (sr * 4.0) + (int) (sr * 5.0 / expect), x);
+                const double got = beatRateOf (x, noteHz (36), expect, (int) (sr * 4.0));
+                std::cout << "  4 bars at 90 BPM: " << juce::String (1.0 / got, 3) << " s (expected " << juce::String (1.0 / expect, 3) << " s)" << std::endl;
+                CHECK (std::abs (got / expect - 1.0) < 0.01, "4-bar beating at 90 BPM within 1%");
+            }
+            // 3 and 4 voices: every difference between voices a whole multiple of the beat (x3 and x5),
+            // so the pattern repeats once per note value; golden: voices 3-4 beat freely
+            for (int ratio = 0; ratio < 3; ++ratio)
+            {
+                ReeseOsc o; o.prepare (sr);
+                auto s = plainSettings(); s.mode = 2; s.beat = 3; s.voices = 2; s.ratio = ratio;
+                o.setFrequency (noteHz (36), 172.0, s);
+                const double d = o.beatRate();
+                double maxFrac = 0;
+                for (int i = 0; i < 4; ++i) for (int j = i + 1; j < 4; ++j)
+                {
+                    const double q = (o.voiceFrequency (j) - o.voiceFrequency (i)) / d;
+                    maxFrac = std::max (maxFrac, std::abs (q - std::round (q)));
+                }
+                if (ratio < 2) CHECK (maxFrac < 1e-9, juce::String ("4 voices x") + (ratio == 0 ? "3" : "5") + ": locked to the beat");
+                else CHECK (maxFrac > 0.05, "4 voices golden: free (not locked)");
+            }
+            // the voice frequencies are centred on the note (the pitch does not drift with the beat)
+            {
+                ReeseOsc o; o.prepare (sr); auto s = plainSettings(); s.mode = 2; s.beat = 0; s.voices = 2;
+                o.setFrequency (noteHz (45), 172.0, s);
+                double mean = 0; for (int k = 0; k < 4; ++k) mean += o.voiceFrequency (k) / 4.0;
+                CHECK (std::abs (mean - noteHz (45)) < 1e-9, "voices centred on the note");
+            }
+        }
+        // 2. Hz and Cents modes
+        {
+            ReeseOsc o; o.prepare (sr); o.start (1, 1);
+            auto s = plainSettings(); s.mode = 1; s.hz = 2.0f;
+            for (int note : { 36, 60 })
+            {
+                std::vector<float> x; renderOsc (o, noteHz (note), 172.0, s, (int) (sr * 4.0), x);
+                CHECK (std::abs (beatRateOf (x, noteHz (note), 2.0, (int) sr) / 2.0 - 1.0) < 0.01, "Hz mode: the same beating on every note (" + juce::String (note) + ")");
+            }
+            s.mode = 0; s.cents = 20.0f;
+            o.setFrequency (noteHz (48), 120.0, s);
+            CHECK (std::abs (1200.0 * std::log2 (o.voiceFrequency (1) / o.voiceFrequency (0)) - 20.0) < 1e-6, "Cents mode: voices 1-2 are 20 cents apart");
+        }
+        // 3. the engine: Beats mode follows the host tempo (and a tempo change), Reese only
+        auto reeseOnly = [&]
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain, P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain })
+                setP (*p, i, 0.0f);
+            setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_lfoAssignAmt0, 0.0f); setP (*p, P_ampS, 1.0f);
+            setP (*p, P_rsLevel, 0.7f); setP (*p, P_rsTwist, 0.0f); setP (*p, P_rsWidth, 0.0f);
+            return p;
+        };
+        struct Head : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+        {
+            auto p = reeseOnly(); setP (*p, P_rsBeat, 4.0f);   // 1/4
+            Head head; head.info.setBpm (140.0); head.info.setIsPlaying (true); p->setPlayHead (&head);
+            const int half = (int) (sr * 4.0);
+            juce::AudioBuffer<float> all (2, half * 2), buf (2, 256);
+            for (int pos = 0; pos < half * 2; pos += 256)
+            {
+                if (pos >= half) head.info.setBpm (172.0);
+                juce::MidiBuffer m; if (pos == 0) m.addEvent (juce::MidiMessage::noteOn (1, 45, (juce::uint8) 100), 0);
+                buf.clear(); p->processBlock (buf, m);
+                for (int c = 0; c < 2; ++c) all.copyFrom (c, pos, buf, c, 0, 256);
+            }
+            p->setPlayHead (nullptr);
+            std::vector<float> a ((size_t) half), b ((size_t) half);
+            for (int i = 0; i < half; ++i) { a[(size_t) i] = all.getSample (0, i) + all.getSample (1, i); b[(size_t) i] = all.getSample (0, half + i) + all.getSample (1, half + i); }
+            const double r1 = beatRateOf (a, noteHz (45), 140.0 / 60.0, (int) (sr * 0.5)), r2 = beatRateOf (b, noteHz (45), 172.0 / 60.0, (int) (sr * 0.5));
+            std::cout << "  in the synth, 1/4 at 140 then 172 BPM: " << juce::String (r1, 4) << " Hz, " << juce::String (r2, 4) << " Hz" << std::endl;
+            CHECK (std::abs (r1 / (140.0 / 60.0) - 1.0) < 0.01 && std::abs (r2 / (172.0 / 60.0) - 1.0) < 0.01, "the beating follows the host tempo, and a tempo change");
+            float jump = 0; for (int i = half - 4; i < half + 4; ++i) jump = std::max (jump, std::abs (all.getSample (0, i + 1) - all.getSample (0, i)));
+            float typical = 0; for (int i = half / 2; i < half / 2 + 2000; ++i) typical = std::max (typical, std::abs (all.getSample (0, i + 1) - all.getSample (0, i)));
+            CHECK (jump <= typical * 1.5f, "no click at the tempo change");
+        }
+        // 4. no aliasing above -60 dB at C7 (Quality High), with and without the drive
+        {
+            const int N = 1 << 16;
+            auto aliasDb = [&] (float drive, int voices, int wave, int quality = 2)
+            {
+                auto p = reeseOnly(); setP (*p, P_quality, (float) quality); setP (*p, P_rsDrive, drive); setP (*p, P_rsVoices, (float) voices); setP (*p, P_rsWave, (float) wave);
+                setP (*p, P_rsDetMode, 0.0f); setP (*p, P_rsCents, drive > 0.0f ? 0.0f : 14.0f); setP (*p, P_outGain, -12.0f);
+                juce::AudioBuffer<float> c; render (*p, 0.4 + N / sr, chord (0.0, 5.0, { 96 }), &c);
+                std::vector<float> fft ((size_t) N * 2, 0.0f);
+                const int off = (int) (0.4 * sr);
+                for (int i = 0; i < N; ++i)
+                {
+                    const double w = 0.35875 - 0.48829 * std::cos (2 * kPi * i / N) + 0.14128 * std::cos (4 * kPi * i / N) - 0.01168 * std::cos (6 * kPi * i / N);
+                    fft[(size_t) i] = (float) (c.getSample (0, off + i) * w);
+                }
+                juce::dsp::FFT f (16); f.performFrequencyOnlyForwardTransform (fft.data());
+                // the voices' harmonics (and the notes' intermodulation, which sits next to them) are allowed;
+                // anything else is aliasing
+                ReeseOsc probe; probe.prepare (sr); ReeseSettings s = plainSettings(); s.mode = 0; s.cents = drive > 0.0f ? 0.0f : 14.0f; s.voices = voices;
+                probe.setFrequency (noteHz (96), 130.0, s);
+                double fLo = 1e9, fHi = 0; for (int k = 0; k < probe.voiceCount(); ++k) { fLo = std::min (fLo, probe.voiceFrequency (k)); fHi = std::max (fHi, probe.voiceFrequency (k)); }
+                double peak = 0, alias = 0, aliasHz = 0;
+                for (int k = 2; k < N / 2; ++k)
+                {
+                    const double hz = k * sr / N, m = fft[(size_t) k];
+                    peak = std::max (peak, m);
+                    const double h = std::round (hz / noteHz (96));
+                    // (the detuned voices' harmonics spread round each harmonic; with the drive the voices are not
+                    //  detuned, so its intermodulation does not hide anything: aliases of C7 land about 146 Hz off
+                    //  the harmonics at 48 kHz)
+                    const bool harmonic = h >= 1 && std::abs (hz - h * noteHz (96)) < h * (fHi - fLo) + 12.0;
+                    if (! harmonic && hz > 30.0 && m > alias) { alias = m; aliasHz = hz; }
+                }
+                juce::ignoreUnused (aliasHz);
+                return 20.0 * std::log10 (std::max (1e-12, alias / peak));
+            };
+            const double a0 = aliasDb (0.0f, 0, 0), a1 = aliasDb (0.0f, 2, 2), a2 = aliasDb (0.6f, 0, 0), a3 = aliasDb (1.0f, 0, 1);
+            std::cout << "  C7, High: aliasing " << juce::String (a0, 1) << " dB (2 saws), " << juce::String (a1, 1) << " dB (4 voices, blend), "
+                      << juce::String (a2, 1) << " dB (2 saws, drive 60%, no detune), " << juce::String (a3, 1) << " dB (2 squares, drive 100%, no detune)" << std::endl;
+            CHECK (a0 < -60.0 && a1 < -60.0 && a2 < -60.0 && a3 < -60.0, "no aliasing above -60 dB at C7 on High");
+            std::cout << "  (2 squares, drive 100%: Normal " << juce::String (aliasDb (1.0f, 0, 1, 1), 1) << " dB, Eco " << juce::String (aliasDb (1.0f, 0, 1, 0), 1) << " dB)" << std::endl;
+        }
+        // 5. Mono Below: the low end the same both sides, the top still wide
+        {
+            auto sideMid = [&] (float monoHz, double lo, double hi)
+            {
+                ReeseOsc o; o.prepare (sr); o.start (1, 3);
+                auto s = plainSettings(); s.width = 1.0f; s.rotate = 0.5f; s.rotRate = 0.7f; s.voices = 2; s.monoHz = monoHz; s.mode = 2; s.beat = 3;
+                std::vector<float> l, r; renderOsc (o, noteHz (24), 172.0, s, 1 << 17, l, &r);
+                const int N = 1 << 16;
+                std::vector<float> fm ((size_t) N * 2, 0.0f), fs ((size_t) N * 2, 0.0f);
+                for (int i = 0; i < N; ++i) { const float w = 0.5f - 0.5f * std::cos (2.0f * (float) kPi * i / N); fm[(size_t) i] = 0.5f * (l[(size_t) (N + i)] + r[(size_t) (N + i)]) * w; fs[(size_t) i] = 0.5f * (l[(size_t) (N + i)] - r[(size_t) (N + i)]) * w; }
+                juce::dsp::FFT f (16); f.performFrequencyOnlyForwardTransform (fm.data()); f.performFrequencyOnlyForwardTransform (fs.data());
+                double em = 0, es = 0;
+                for (int k = 1; k < N / 2; ++k) { const double hz = k * sr / N; if (hz >= lo && hz < hi) { em += (double) fm[(size_t) k] * fm[(size_t) k]; es += (double) fs[(size_t) k] * fs[(size_t) k]; } }
+                return 10.0 * std::log10 (std::max (1e-20, es) / std::max (1e-20, em));
+            };
+            const double offLow = sideMid (0.0f, 20.0, 70.0), onLow = sideMid (120.0f, 20.0, 70.0), onHigh = sideMid (120.0f, 500.0, 4000.0);
+            std::cout << "  Mono Below 120 Hz, C1 (side / mid): below 70 Hz " << juce::String (offLow, 1) << " dB -> " << juce::String (onLow, 1) << " dB; 500 Hz - 4 kHz " << juce::String (onHigh, 1) << " dB" << std::endl;
+            CHECK (onLow < -30.0 && onLow < offLow - 20.0, "Mono Below: the low end is mono");
+            CHECK (onHigh > -12.0, "Mono Below: the top stays wide");
+            // in the synth (default 120 Hz): C1, full width
+            auto p = reeseOnly(); setP (*p, P_rsWidth, 1.0f); setP (*p, P_rsRotate, 0.5f);
+            juce::AudioBuffer<float> c; render (*p, 1.5, chord (0.0, 1.5, { 24 }), &c);
+            const int N = 1 << 16, off = (int) (0.1 * sr);
+            std::vector<float> fm ((size_t) N * 2, 0.0f), fs ((size_t) N * 2, 0.0f);
+            for (int i = 0; i < N; ++i) { const float w = 0.5f - 0.5f * std::cos (2.0f * (float) kPi * i / N); fm[(size_t) i] = 0.5f * (c.getSample (0, off + i) + c.getSample (1, off + i)) * w; fs[(size_t) i] = 0.5f * (c.getSample (0, off + i) - c.getSample (1, off + i)) * w; }
+            juce::dsp::FFT f (16); f.performFrequencyOnlyForwardTransform (fm.data()); f.performFrequencyOnlyForwardTransform (fs.data());
+            double em = 0, es = 0;
+            for (int k = 1; k < N / 2; ++k) { const double hz = k * sr / N; if (hz >= 20 && hz < 70) { em += (double) fm[(size_t) k] * fm[(size_t) k]; es += (double) fs[(size_t) k] * fs[(size_t) k]; } }
+            const double db = 10.0 * std::log10 (std::max (1e-20, es) / std::max (1e-20, em));
+            std::cout << "  in the synth, C1 full width: side / mid below 70 Hz " << juce::String (db, 1) << " dB" << std::endl;
+            CHECK (db < -30.0, "in the synth: the Reese's low end is mono");
+        }
+        // 6. the sub: a sine an octave below voice 1, phase-locked to it (no drift over 20 s, any mode)
+        for (int mode : { 0, 2 })
+        {
+            auto s = plainSettings(); s.mode = mode; s.beat = 2; s.voices = 2;
+            ReeseOsc a, b; a.prepare (sr); b.prepare (sr); a.start (1, 1); b.start (1, 1);
+            s.sub = 0.0f; std::vector<float> x0; renderOsc (a, noteHz (36), 172.0, s, (int) (sr * 20.0), x0);
+            s.sub = 1.0f; std::vector<float> x1; renderOsc (b, noteHz (36), 172.0, s, (int) (sr * 20.0), x1);
+            const double f0 = b.voiceFrequency (0);
+            auto phaseAt = [&] (int from)
+            {
+                std::complex<double> acc {};
+                const int len = (int) std::round (sr / (f0 * 0.5) * 20.0);
+                for (int i = from; i < from + len; ++i) { const double ph = 2.0 * kPi * (f0 * 0.5) * i / sr; acc += (double) (x1[(size_t) i] - x0[(size_t) i]) * std::complex<double> (std::cos (ph), -std::sin (ph)); }
+                return std::arg (acc);
+            };
+            const double p0 = phaseAt (0), p1 = phaseAt ((int) (sr * 18.0));
+            double d = std::abs (p1 - p0); if (d > kPi) d = 2.0 * kPi - d;
+            std::cout << "  sub vs voice 1 (" << (mode == 0 ? "Cents" : "Beats") << "): phase drift over 18 s " << juce::String (d * 180.0 / kPi, 4) << " degrees" << std::endl;
+            CHECK (d < 0.01, "the sub is phase-locked to voice 1 (an octave down)");
+        }
+        // 7. off: bit-exact silence and no change to anything else
+        {
+            juce::AudioBuffer<float> ref, alt;
+            { auto p = make(); setP (*p, P_reverbMix, 0.0f); tg::resetVoiceRandom(); render (*p, 0.8, chord (0.0, 0.6, { 45, 52 }), &ref); }
+            { auto p = make(); setP (*p, P_reverbMix, 0.0f);
+              for (auto pr : std::initializer_list<std::pair<int, float>> { { P_rsVoices, 2 }, { P_rsSub, 1 }, { P_rsDrive, 1 }, { P_rsNotch, 1 }, { P_rsWidth, 1 }, { P_mxReesePan, 0.8f } }) setP (*p, pr.first, pr.second);
+              tg::resetVoiceRandom(); render (*p, 0.8, chord (0.0, 0.6, { 45, 52 }), &alt); }
+            double d = 0; for (int c = 0; c < 2; ++c) for (int i = 0; i < ref.getNumSamples(); ++i) d = std::max (d, (double) std::abs (ref.getSample (c, i) - alt.getSample (c, i)));
+            CHECK (d == 0.0, "Reese off (Level 0): the sound is bit-identical, whatever its other settings");
+            auto p = reeseOnly(); setP (*p, P_rsLevel, 0.0f);
+            juce::AudioBuffer<float> c; render (*p, 0.5, chord (0.0, 0.5, { 45 }), &c);
+            CHECK (c.getMagnitude (0, c.getNumSamples()) == 0.0f, "Reese off, nothing else on: exact silence");
+            // turned off while playing: it fades, then exact zeros
+            auto q = reeseOnly(); juce::AudioBuffer<float> c1, c2;
+            render (*q, 0.3, chord (0.0, 2.0, { 45 }), &c1);
+            CHECK (c1.getMagnitude (0, (int) (0.1 * sr), (int) (0.2 * sr)) > 0.05f, "Reese on: sound");
+            setP (*q, P_rsLevel, 0.0f); render (*q, 0.5, {}, &c2);
+            // (the Reese itself stops exactly; what is left is the voice filter's own tail dying away)
+            CHECK (c2.getMagnitude (0, (int) (0.25 * sr), (int) (0.25 * sr)) < 1.0e-9f, "Reese turned off while playing: silent (below -180 dB) after the fade");
+            float step = 0; for (int i = 0; i + 1 < 2000; ++i) step = std::max (step, std::abs (c2.getSample (0, i + 1) - c2.getSample (0, i)));
+            CHECK (step < 0.2f, "turning it off does not click");
+        }
+        // 8. Retrigger: Reset starts every note the same; Random different; Free carries on
+        {
+            auto first = [&] (int retrig, int note2)
+            {
+                auto p = reeseOnly(); setP (*p, P_rsRetrig, (float) retrig); setP (*p, P_ampR, 0.005f); setP (*p, P_ampA, 0.0f);
+                juce::AudioBuffer<float> c; render (*p, 0.6, { { 0.0, juce::MidiMessage::noteOn (1, 45, (juce::uint8) 100) }, { 0.25, juce::MidiMessage::noteOff (1, 45) },
+                                                           { 0.4, juce::MidiMessage::noteOn (1, note2, (juce::uint8) 100) } }, &c);
+                double d = 0; const int a = 100, b = (int) (0.4 * sr) + 100;
+                for (int i = 0; i < 600; ++i) d = std::max (d, (double) std::abs (c.getSample (0, a + i) - c.getSample (0, b + i)));
+                return d;
+            };
+            std::cout << "  Retrigger: two notes' starts differ by " << first (1, 45) << " (Reset), " << first (2, 45) << " (Random), " << first (0, 45) << " (Free)" << std::endl;
+            CHECK (first (1, 45) < 0.02 && first (2, 45) > 0.02, "Retrigger: Reset repeats the attack, Random does not");
+        }
+        // 9. the Mixer strip (pan, mute, solo), a Mod Matrix route on its Level, the Reese Phase source
+        {
+            auto p = reeseOnly(); setP (*p, P_mxReesePan, -1.0f);
+            juce::AudioBuffer<float> c; render (*p, 0.4, chord (0.0, 0.4, { 45 }), &c);
+            CHECK (c.getRMSLevel (1, 2000, 10000) < c.getRMSLevel (0, 2000, 10000) * 0.05f, "Mixer: Reese pan hard left");
+            auto q = reeseOnly(); setP (*q, P_mxReeseMute, 1.0f); render (*q, 0.4, chord (0.0, 0.4, { 45 }), &c);
+            CHECK (c.getMagnitude (0, 4000, 10000) < 1e-6f, "Mixer: Reese mute");
+            auto r = reeseOnly(); setP (*r, P_osc1Gain, 0.8f); setP (*r, P_mxReeseSolo, 1.0f); juce::AudioBuffer<float> c2; render (*r, 0.4, chord (0.0, 0.4, { 45 }), &c2);
+            auto r2 = reeseOnly(); setP (*r2, P_osc1Gain, 0.8f); setP (*r2, P_osc1Wave, 3.0f); setP (*r2, P_mxReeseSolo, 1.0f); juce::AudioBuffer<float> c3; render (*r2, 0.4, chord (0.0, 0.4, { 45 }), &c3);
+            CHECK (c2.getRMSLevel (0, 4000, 10000) > 0.01f && std::abs (c2.getRMSLevel (0, 4000, 10000) - c3.getRMSLevel (0, 4000, 10000)) < 1e-4f, "Mixer: Reese solo (Osc 1 not heard)");
+            auto m = reeseOnly(); setP (*m, P_rsLevel, 0.1f); m->addRoute (MS_Macro1, P_rsLevel, 0.8f); setP (*m, P_macro1, 1.0f);
+            juce::AudioBuffer<float> cm, cn; render (*m, 0.4, chord (0.0, 0.4, { 45 }), &cm);
+            auto n = reeseOnly(); setP (*n, P_rsLevel, 0.1f); render (*n, 0.4, chord (0.0, 0.4, { 45 }), &cn);
+            CHECK (cm.getRMSLevel (0, 4000, 10000) > cn.getRMSLevel (0, 4000, 10000) * 3.0f, "Mod Matrix: a route on Reese Level");
+            juce::StringArray notMod;
+            for (int i = P_rsLevel; i <= P_rsTone; ++i)
+            {
+                const auto& mt = tg::meta (i);
+                const bool cont = mt.scale != tg::Scale::Choice && i != P_rsOct && i != P_rsSemi && i != P_rsNotchSync;
+                if (cont && ! mt.modulatable) notMod.add (kParamIds[i]);
+            }
+            CHECK (notMod.isEmpty(), "every continuous Reese control is a Mod Matrix destination" + (notMod.isEmpty() ? juce::String() : ": " + notMod.joinIntoString (", ")));
+            // the Reese Phase source: a route from it to the Width moves the sound (and it rises with the beat)
+            auto w = reeseOnly(); setP (*w, P_rsWidth, 0.0f); w->addRoute (MS_ReesePhase, P_rsWidth, 1.0f);
+            juce::AudioBuffer<float> cw; render (*w, 1.0, chord (0.0, 1.0, { 45 }), &cw);
+            double side = 0; for (int i = (int) (0.2 * sr); i < (int) sr; ++i) side += std::abs (cw.getSample (0, i) - cw.getSample (1, i));
+            CHECK (side > 1.0, "Reese Phase as a Mod Matrix source");
+        }
+        // 10. saved: patches, projects, undo, A/B; old projects and patches load with the Reese off
+        {
+            auto p = make(); setP (*p, P_rsLevel, 0.6f); setP (*p, P_rsVoices, 2.0f); setP (*p, P_rsBeat, 7.0f); setP (*p, P_mxReesePan, 0.3f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (std::abs (plainOf (*q, P_rsLevel) - 0.6f) < 1e-4f && juce::roundToInt (plainOf (*q, P_rsVoices)) == 2 && juce::roundToInt (plainOf (*q, P_rsBeat)) == 7
+                   && std::abs (plainOf (*q, P_mxReesePan) - 0.3f) < 1e-4f, "Reese settings saved with the project");
+            auto x = juce::parseXML (getXmlFromBinaryForTest (mb));
+            if (x != nullptr)
+            {
+                x->setAttribute ("stateVersion", 23);
+                for (int i = P_rsLevel; i <= P_mxReeseSolo; ++i) if (auto* el = x->getChildByAttribute ("id", kParamIds[i])) x->removeChildElement (el, true);
+                juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*x, old);
+                auto o = make(); setP (*o, P_rsLevel, 0.9f); o->setStateInformation (old.getData(), (int) old.getSize());
+                CHECK (plainOf (*o, P_rsLevel) == 0.0f && juce::roundToInt (plainOf (*o, P_rsVoices)) == 0, "older projects load with the Reese off");
+            }
+            const auto patch = p->exportBrowserPatch();
+            // 11. CPU: 8 notes held, the Reese on top of the Init sound (best of 3 runs, 3 s each)
+            {
+                auto cost = [&] (int voices, int quality, float drive)
+                {
+                    double best = 1e9;
+                    for (int run = 0; run < 3; ++run)
+                    {
+                        auto q = make(); for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix }) setP (*q, i, 0.0f);
+                        setP (*q, P_quality, (float) quality);
+                        if (voices > 0) { setP (*q, P_rsLevel, 0.6f); setP (*q, P_rsVoices, (float) (voices - 2)); setP (*q, P_rsDrive, drive); setP (*q, P_rsNotch, 0.5f); }
+                        double cpu = 0; render (*q, 3.0, chord (0.0, 2.9, { 36, 40, 43, 47, 48, 52, 55, 59 }), nullptr, &cpu);
+                        best = std::min (best, cpu / 3.0 * 100.0);
+                    }
+                    return best;
+                };
+                for (int quality = 0; quality < 3; ++quality)
+                {
+                    const double base = cost (0, quality, 0.0f);
+                    juce::String line; line << "  CPU, 8 notes, " << kQualityLabels[quality] << ": Init " << juce::String (base, 2) << "%; Reese adds";
+                    for (int v : { 2, 3, 4 }) line << " " << v << "v " << juce::String (cost (v, quality, 0.0f) - base, 2) << "%";
+                    line << "; 4v + drive " << juce::String (cost (4, quality, 0.5f) - base, 2) << "%";
+                    std::cout << line << " (of one core)" << std::endl;
+                }
+            }
+            auto r = make(); CHECK (r->importBrowserPatch (patch).isEmpty() && std::abs (plainOf (*r, P_rsLevel) - 0.6f) < 1e-4f, "Reese settings in patch files");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_REESEONLY", {}).isNotEmpty())
+    {
+        reeseTests();
+        std::cout << (failures == 0 ? "REESE TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BREAKDEMOS", {}).isNotEmpty())
     {
         // three 8-bar demos at 172 BPM (renders/break_demo_*.wav)
@@ -5482,6 +5858,26 @@ int main()
             renderTo (*p, "perf_demo_akai_stretch_172.wav", ev);
             onBeat = nullptr;
         }
+        // 8. the Reese engine over the demo break: bars 1-4 Beats mode (the beating locked to 1/2 notes at
+        //    172 BPM, Phase Twist and the synced notch moving with it), bars 5-8 Cents mode (14 cents, free)
+        {
+            auto p = make(); p->loadFactoryPreset (32);
+            for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_supersawGain, P_complexGain }) setP (*p, i, 0.0f);
+            setP (*p, P_ampA, 0.003f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.06f); setP (*p, P_filterCutoff, 20000.0f);
+            setP (*p, P_rsLevel, 0.4f); setP (*p, P_rsVoices, 2.0f); setP (*p, P_rsDetMode, 2.0f); setP (*p, P_rsBeat, 3.0f); setP (*p, P_rsRatio, 0.0f);
+            setP (*p, P_rsTwist, 0.25f); setP (*p, P_rsNotch, 0.55f); setP (*p, P_rsNotchFreq, 700.0f); setP (*p, P_rsNotchSync, 1.0f);
+            setP (*p, P_rsOct, -1.0f); setP (*p, P_rsSub, 0.5f); setP (*p, P_rsDrive, 0.35f); setP (*p, P_rsTone, 0.7f); setP (*p, P_rsWidth, 0.7f); setP (*p, P_rsRetrig, 1.0f);
+            setP (*p, P_quality, 2.0f);
+            setP (*p, P_bcKeyBase, 96.0f);   // (the slices' keys moved up out of the way, so the bass notes play the synth)
+            std::vector<std::pair<int, juce::MidiMessage>> ev;
+            const int notes[] = { 45, 45, 41, 43, 45, 45, 48, 43 };   // (the Reese an octave down: A1 A1 F1 G1 ...)
+            for (int b = 0; b < 8; ++b) { ev.push_back ({ (int) (b * 4.0 / inc), juce::MidiMessage::noteOn (1, notes[b], (juce::uint8) 100) });
+                                          ev.push_back ({ (int) ((b * 4.0 + 3.75) / inc), juce::MidiMessage::noteOff (1, notes[b]) }); }
+            bool switched = false;
+            onBeat = [&] (double beat) { if (! switched && beat >= 16.0 - 0.02) { switched = true; setP (*p, P_rsDetMode, 0.0f); setP (*p, P_rsCents, 14.0f); } };
+            renderTo (*p, "reese_demo_beats_then_cents_172.wav", ev);
+            onBeat = nullptr;
+        }
         // 5. fills: Break Frankenstein's chain with an Auto Fill every 4 bars (one bar long, ending the
         //    phrase), each fill played from Break 3 over the groove, and the pattern back on the downbeat
         {
@@ -5559,11 +5955,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.60.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.61.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.60 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes and Akai Stretch added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.61 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch and the Reese engine added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",
@@ -6968,6 +7364,7 @@ int main()
     mixerTests();
     charTests();
     perfTests();
+    reeseTests();
     granTests();
     breakTests();
     hardTests();

@@ -18,6 +18,7 @@
 using namespace tg;
 
 static int failures = 0;
+namespace juce { namespace detail { bool dispatchNextMessageOnSystemQueue (bool returnIfNoPendingMessages); } }   // (to run posted messages in the test)
 #define CHECK(cond, msg) do { if (! (cond)) { ++failures; std::cout << "  FAIL: " << msg << std::endl; } } while (0)
 
 struct Stats { float peak = 0; double rms = 0; bool finite = true; };
@@ -2375,6 +2376,27 @@ int main()
             e->showPage ("Break React"); e->timerCallbackForTests();
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
             auto f = dir.getChildFile ("page_BreakReact_on.png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        }
+        {
+            // Core A: a 2 s operator Release cut by a 0.3 s Amp Release (the amber hint shows); Key Entry on, advancing 1
+            setP (*p, P_cA1Rel, 2.0f); setP (*p, P_ampR, 0.3f); setP (*p, P_bsKeyEntry, 1.0f); setP (*p, P_bsAdvance, 1.0f);
+            for (auto nm : { "Core A", "Break Sequencer" })
+            {
+                e->showPage (nm); e->timerCallbackForTests();
+                auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+                auto f = dir.getChildFile (juce::String ("page_") + juce::String (nm).removeCharacters (" ") + "_new.png"); f.deleteFile();
+                juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+            }
+        }
+        {
+            // Random Patch after making one (the report shows)
+            tg::randompatch::Options o; o.seed = 1172; o.category = tg::randompatch::C_Reese; o.complexity = 1;
+            p->randomOptions = o;
+            p->generateRandomPatchNow (o);
+            e->showPage ("Random Patch"); e->timerCallbackForTests(); e->timerCallbackForTests();
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto f = dir.getChildFile ("page_RandomPatch_made.png"); f.deleteFile();
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
         }
         return 0;
@@ -6741,6 +6763,150 @@ int main()
             std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
             CHECK (showPage (ed.get(), "Core A") && showPage (ed.get(), "Core B"), "Oscillators > Core A and Core B pages");
         }
+        // 13. Envelope: Amp + Operators (the default, as before) or Operators only (the operators' own envelopes,
+        //     Release included, and the note rings on until they finish)
+        {
+            auto tailOf = [&] (int mode, float opRel, float ampR, juce::AudioBuffer<float>& c, int slot = 0)
+            {
+                auto p = coreOnly (slot); setP (*p, P_ampR, ampR); setP (*p, coreOpParam (slot, 0, CO_Rel), opRel);
+                setP (*p, coreEnvModeParam (slot), (float) mode); setP (*p, P_reverbMix, 0.0f); setP (*p, P_delayMix, 0.0f); setP (*p, P_chorusMix, 0.0f);
+                render (*p, 5.0, chord (0.0, 0.5, { 57 }), &c);
+                return p;
+            };
+            // where the envelope of the output falls 60 dB below its level while held
+            auto endOf = [&] (const juce::AudioBuffer<float>& c)
+            {
+                double held = 0; for (int i = (int) (0.3 * sr); i < (int) (0.5 * sr); ++i) held = std::max (held, (double) std::abs (c.getSample (0, i)));
+                const int win = (int) (0.005 * sr);
+                double last = 0.5;
+                for (int i = (int) (0.5 * sr); i + win < c.getNumSamples(); i += win)
+                {
+                    double pk = 0; for (int j = 0; j < win; ++j) pk = std::max (pk, (double) std::abs (c.getSample (0, i + j)));
+                    if (pk > held * 0.001) last = (i + win) / sr;
+                }
+                return last - 0.5;
+            };
+            juce::AudioBuffer<float> a, b, d;
+            tailOf (1, 3.0f, 0.1f, a);
+            tailOf (0, 3.0f, 0.1f, b);
+            const double ra = endOf (a), rb = endOf (b);
+            std::cout << "  Envelope: Operators only, op Release 3 s, Amp Release 0.1 s: rings " << juce::String (ra, 3) << " s after the key (Amp + Operators: "
+                      << juce::String (rb, 3) << " s)" << std::endl;
+            CHECK (std::abs (ra - 3.0) < 0.01, "Operators only: a 3 s operator Release rings for 3 s (within 10 ms)");
+            CHECK (rb < 0.2, "Amp + Operators: the amp envelope still ends the note");
+            tailOf (1, 3.0f, 0.1f, d, 1);
+            CHECK (std::abs (endOf (d) - 3.0) < 0.01, "Core B: Operators only rings for its Release too");
+            // with Osc 1 alongside: Osc 1 still follows the amp envelope (gone well before the Core)
+            {
+                auto p = coreOnly(); setP (*p, P_ampR, 0.1f); setP (*p, P_cA1Rel, 3.0f); setP (*p, P_cAEnvMode, 1.0f); setP (*p, P_reverbMix, 0.0f); setP (*p, P_delayMix, 0.0f); setP (*p, P_chorusMix, 0.0f);
+                setP (*p, P_osc1Gain, 0.8f); setP (*p, P_osc1Wave, 0.0f); setP (*p, P_cALevel, 0.0001f);   // (the Core nearly silent: what's left after the key is Osc 1)
+                juce::AudioBuffer<float> c; render (*p, 2.0, chord (0.0, 0.5, { 57 }), &c);
+                double pk = 0; for (int i = (int) (0.75 * sr); i < (int) (1.0 * sr); ++i) pk = std::max (pk, (double) std::abs (c.getSample (0, i)));
+                CHECK (pk < 1.0e-3, "Operators only: the other oscillators still take the amp envelope");
+            }
+            // the voice is freed once the tail ends (no CPU after it)
+            {
+                auto p = coreOnly(); setP (*p, P_ampR, 0.1f); setP (*p, P_cA1Rel, 0.5f); setP (*p, P_cAEnvMode, 1.0f);
+                render (*p, 2.0, chord (0.0, 0.3, { 57 }));
+                CHECK (p->getEngine().activeVoiceCount() == 0, "Operators only: the voice ends when the operators have finished");
+            }
+            // sustain pedal: held notes keep the operators sustaining, the release starts on pedal up
+            {
+                auto p = coreOnly(); setP (*p, P_ampR, 0.1f); setP (*p, P_cA1Rel, 1.0f); setP (*p, P_cAEnvMode, 1.0f); setP (*p, P_reverbMix, 0.0f); setP (*p, P_delayMix, 0.0f); setP (*p, P_chorusMix, 0.0f);
+                auto ev = chord (0.0, 0.3, { 57 });
+                ev.push_back ({ 0.1, juce::MidiMessage::controllerEvent (1, 64, 127) });
+                ev.push_back ({ 1.0, juce::MidiMessage::controllerEvent (1, 64, 0) });
+                juce::AudioBuffer<float> c; render (*p, 3.0, ev, &c);
+                double at08 = 0, at25 = 0;
+                for (int i = (int) (0.8 * sr); i < (int) (0.85 * sr); ++i) at08 = std::max (at08, (double) std::abs (c.getSample (0, i)));
+                for (int i = (int) (2.5 * sr); i < (int) (2.55 * sr); ++i) at25 = std::max (at25, (double) std::abs (c.getSample (0, i)));
+                CHECK (at08 > 0.05 && at25 < 1.0e-3, "Operators only: the sustain pedal holds it, the release follows pedal up");
+            }
+            // many long tails: polyphony still steals the quietest when it runs out
+            {
+                auto p = coreOnly(); setP (*p, P_ampR, 0.05f); setP (*p, P_cA1Rel, 8.0f); setP (*p, P_cAEnvMode, 1.0f); setP (*p, P_polyphony, 4.0f);
+                std::vector<std::pair<double, juce::MidiMessage>> ev;
+                for (int k = 0; k < 24; ++k) { ev.push_back ({ 0.05 * k, juce::MidiMessage::noteOn (1, 40 + k, (juce::uint8) 100) }); ev.push_back ({ 0.05 * k + 0.04, juce::MidiMessage::noteOff (1, 40 + k) }); }
+                const auto st = render (*p, 2.0, ev);
+                CHECK (st.finite && st.peak < 2.0f, "Operators only: 24 long tails, voices stolen cleanly");
+            }
+        }
+        // 14. the Core goes through the Space effects like the other oscillators: each effect's share of the
+        //     output (wet minus dry, against dry) for Core A / B against Osc 1, the same sine at the same note
+        //     (unison without detune, spread across the stereo field: detuned stacks beat differently, which
+        //     changes how much reverb a sound gets without saying anything about the routing)
+        {
+            auto shareOf = [&] (int src, int fx, int uni, int q, int preset)   // src: 0 Osc 1, 1 Core A, 2 Core B
+            {
+                double out[2] {};
+                juce::AudioBuffer<float> c[2];
+                for (int wet = 0; wet < 2; ++wet)
+                {
+                    auto p = make();
+                    if (preset >= 0) p->loadFactoryPreset (preset);
+                    for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain, P_complexGain, P_supersawGain, P_rsLevel, P_gsOn, P_bcOn, P_analogDrift,
+                                   P_reverbMix, P_delayMix, P_shimmerMix, P_chorusMix, P_reverseMix, P_fxOnStereo, P_arpOn, P_chdOn, P_seqRun, P_bsOn, P_dsOn, P_mutAmount, P_ciAmount,
+                                   P_grMix, P_spOn })   // (and the bus Granular / Spectral: their grains and frames are random, not Space)
+                        setP (*p, i, 0.0f);
+                    setP (*p, P_cAEngine, 0.0f); setP (*p, P_cBEngine, 0.0f);
+                    setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_filter2On, 0.0f); setP (*p, P_ampA, 0.005f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.3f); setP (*p, P_quality, (float) q);
+                    const int uv = uni == 0 ? 1 : 8;
+                    if (src == 0) { setP (*p, P_osc1Wave, 3.0f); setP (*p, P_osc1Gain, 0.5f); setP (*p, P_osc1Oct, 0.0f); setP (*p, P_osc1Semi, 0.0f); setP (*p, P_osc1Detune, 0.0f); setP (*p, P_uni1Voices, (float) uv); setP (*p, P_uni1Detune, 0.0f); setP (*p, P_uni1Spread, 1.0f); setP (*p, P_uni1Blend, 1.0f); }
+                    else
+                    {
+                        const int s = src - 1;
+                        setP (*p, coreParam (s, CS_Engine), 1.0f); setP (*p, coreParam (s, CS_Level), 0.5f); setP (*p, coreOpParam (s, 0, CO_Rel), 5.0f);
+                        setP (*p, coreParam (s, CS_Uni), uni == 0 ? 0.0f : 5.0f); setP (*p, coreParam (s, CS_Detune), 0.0f); setP (*p, coreParam (s, CS_Spread), 1.0f);
+                    }
+                    if (wet)
+                    {
+                        switch (fx)
+                        {
+                            case 0: setP (*p, P_fxOnDelay, 1.0f); setP (*p, P_delayMix, 0.5f); break;
+                            case 1: setP (*p, P_fxOnReverb, 1.0f); setP (*p, P_reverbMix, 0.5f); break;
+                            case 2: setP (*p, P_fxOnReverb, 1.0f); setP (*p, P_shimmerMix, 0.5f); break;
+                            case 3: setP (*p, P_fxOnChorus, 1.0f); setP (*p, P_chorusMix, 0.6f); break;
+                            case 4: setP (*p, P_fxOnReverb, 1.0f); setP (*p, P_reverseMix, 0.5f); break;
+                            default: setP (*p, P_fxOnStereo, 1.0f); setP (*p, P_sttMono, 0.0f); setP (*p, P_sttHaas, 20.0f); setP (*p, P_sttWidth, 1.6f); break;
+                        }
+                    }
+                    juce::AudioBuffer<float> buf (2, 256);
+                    for (int b = 0; b < 300; ++b) { buf.clear(); juce::MidiBuffer none; p->processBlock (buf, none); if (b % 3 == 0) juce::Thread::sleep (1); }   // (the reverbs load their impulses first)
+                    tg::resetVoiceRandom();
+                    render (*p, 2.5, chord (0.0, 1.0, { 69 }), &c[wet]);
+                }
+                double dd = 0, ww = 0;
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < c[0].getNumSamples(); ++i) { const double x = c[0].getSample (ch, i), y = c[1].getSample (ch, i); dd += x * x; ww += (y - x) * (y - x); }
+                out[0] = dd;
+                return 10.0 * std::log10 (std::max (1.0e-30, ww) / std::max (1.0e-30, out[0]));
+            };
+            const char* fxName[] = { "Tape Delay", "90s Reverb", "Shimmer", "Juno Chorus", "Reverse Reverb", "Stereo Tools (Haas, Width)" };
+            double worst = 0; juce::String worstAt;
+            for (int fx = 0; fx < 6; ++fx)
+            {
+                const double o = shareOf (0, fx, 0, 1, -1), a = shareOf (1, fx, 0, 1, -1);
+                std::cout << "  " << fxName[fx] << ": effect share Osc 1 " << juce::String (o, 2) << " dB, Core A " << juce::String (a, 2) << " dB" << std::endl;
+                if (std::abs (a - o) > worst) { worst = std::abs (a - o); worstAt = fxName[fx]; }
+            }
+            // ... and Core B, 8 unison voices, every quality, and in factory presets (Delay and Reverb)
+            for (int fx : { 0, 1 })
+            {
+                for (int q = 0; q < 3; ++q)
+                    for (int uni = 0; uni < 2; ++uni)
+                    {
+                        const double o = shareOf (0, fx, uni, q, -1), a = shareOf (1, fx, uni, q, -1), b = shareOf (2, fx, uni, q, -1);
+                        for (double x : { a, b }) if (std::abs (x - o) > worst) { worst = std::abs (x - o); worstAt = juce::String (fxName[fx]) + ", " + kQualityLabels[q] + (uni ? ", 8 voices" : ""); }
+                    }
+                for (int preset : { 0, 33, tg::kFirstDnb + 4, tg::kFirstDnb + 60 })
+                {
+                    const double o = shareOf (0, fx, 0, 1, preset), a = shareOf (1, fx, 0, 1, preset);
+                    if (std::abs (a - o) > worst) { worst = std::abs (a - o); worstAt = juce::String (fxName[fx]) + " in " + tg::factoryPresets()[(size_t) preset].name; }
+                }
+            }
+            std::cout << "  Space effects: Core A / B against Osc 1, worst difference " << juce::String (worst, 3) << " dB (" << worstAt << ")" << std::endl;
+            CHECK (worst < 0.5, "the Core goes through every Space effect like Osc 1 (within 0.5 dB)");
+        }
         // 12. CPU: a 4-note chord on Init, then with Core A on top (all six operators in a stack with feedback,
         //     1 and 8 unison voices), per quality; the best of five runs
         {
@@ -6765,6 +6931,413 @@ int main()
                           << "% (+" << juce::String (eight - base, 2) << ")" << std::endl;
                 if (q == 1) CHECK (one - base < 15.0, "Core A (one voice), 4 notes, Normal: under 15% of a core on top of Init");
             }
+        }
+    };
+    // ---- Break Sequencer Key Entry: a slice key puts that slice on the selected step
+    auto keyEntryTests = [&]
+    {
+        std::cout << "Break Sequencer Key Entry" << std::endl;
+        auto setup = [&] (bool on, int adv)
+        {
+            auto p = make(); p->loadFactoryPreset (32);   // Break Chop 170 (the synthesised break, sliced)
+            setP (*p, P_bsKeyEntry, on ? 1.0f : 0.0f); setP (*p, P_bsAdvance, (float) adv); setP (*p, P_bsOn, 0.0f);
+            return p;
+        };
+        auto play = [&] (MegaSynthProcessor& p, std::vector<juce::MidiMessage> msgs)
+        {
+            juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m;
+            int pos = 0; for (auto& x : msgs) m.addEvent (x, pos++);
+            p.processBlock (buf, m);
+            buf.clear(); juce::MidiBuffer none; p.processBlock (buf, none);
+        };
+        const auto kb = [] (MegaSynthProcessor& p) { return juce::roundToInt (p.param (P_bcKeyBase)->convertFrom0to1 (p.param (P_bcKeyBase)->getValue())); };
+        const auto pat = [] (MegaSynthProcessor& p) { return juce::roundToInt (p.param (P_bsPattern)->convertFrom0to1 (p.param (P_bsPattern)->getValue())); };
+        // on, Advance 1: step 5 gets slice 3 (on, the key's velocity, pinned to the Active Break) and the selection moves to step 6
+        {
+            auto p = setup (true, 1);
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+            showPage (ed.get(), "Break Sequencer");
+            p->breakStore.edit ([&] (tg::BreakData& d) { d.step[pat (*p)][4] = tg::BreakStep(); });
+            p->pushHistory ("Test setup");
+            e->setBreakSelectedStepForTests (4);
+            play (*p, { juce::MidiMessage::noteOn (1, kb (*p) + 2, 0.5f) });
+            e->breakKeyEntryForTests();
+            const auto s = p->breakStore.get().step[pat (*p)][4];
+            std::cout << "  step 5: on " << (int) s.on << ", slice " << s.slice + 1 << ", velocity " << juce::String (s.vel, 2) << ", break " << s.brk << "; selected step " << e->breakSelectedStepForTests() + 1 << std::endl;
+            CHECK (s.on && s.slice == 2 && std::abs (s.vel - 0.5f) < 0.01f && s.brk == 1 && e->breakSelectedStepForTests() == 5, "Key Entry: slice 3 on step 5, the selection moves to step 6");
+            CHECK (p->canUndo(), "Key Entry is an undo step");
+            p->undo();
+            CHECK (! p->breakStore.get().step[pat (*p)][4].on, "Undo takes the key entry back");
+            // the on-screen keys work the same way (they reach the plug-in as MIDI)
+            e->setBreakSelectedStepForTests (9);
+            p->keyboardState.noteOn (1, kb (*p) + 5, 0.9f);
+            play (*p, {});
+            p->keyboardState.noteOff (1, kb (*p) + 5, 0.0f);
+            e->breakKeyEntryForTests();
+            const auto s2 = p->breakStore.get().step[pat (*p)][9];
+            CHECK (s2.on && s2.slice == 5 && e->breakSelectedStepForTests() == 10, "Key Entry from the on-screen keys");
+            // Advance 4 wraps round the pattern
+            setP (*p, P_bsAdvance, 3.0f);
+            const int steps = p->param (P_bsSteps)->getValue() > 0.5f ? 32 : 16;
+            e->setBreakSelectedStepForTests (steps - 2);
+            play (*p, { juce::MidiMessage::noteOn (1, kb (*p), 0.8f) });
+            e->breakKeyEntryForTests();
+            CHECK (e->breakSelectedStepForTests() == 2, "Advance 4 wraps round the pattern");
+            // the sustain pedal (or Shift) adds a Layer hit to a step that's already on
+            setP (*p, P_bsAdvance, 0.0f);
+            e->setBreakSelectedStepForTests (4);
+            p->breakStore.edit ([&] (tg::BreakData& d) { auto& x = d.step[pat (*p)][4]; x = tg::BreakStep(); x.on = true; x.slice = 0; });
+            play (*p, { juce::MidiMessage::controllerEvent (1, 64, 127), juce::MidiMessage::noteOn (1, kb (*p) + 7, 0.6f) });
+            e->breakKeyEntryForTests();
+            const auto s3 = p->breakStore.get().step[pat (*p)][4];
+            CHECK (s3.on && s3.slice == 0 && s3.layer && s3.layerSlice == 7 && e->breakSelectedStepForTests() == 4, "With the pedal down: a Layer hit, the main slice kept; Advance off stays put");
+            play (*p, { juce::MidiMessage::controllerEvent (1, 64, 0) });
+            // the slice still plays
+            juce::AudioBuffer<float> c; render (*p, 0.3, { { 0.0, juce::MidiMessage::noteOn (1, kb (*p) + 1, 0.9f) } }, &c);
+            CHECK (c.getMagnitude (0, 0, c.getNumSamples()) > 0.01f, "Key Entry: the slice is still heard");
+            // Pattern Keys and Break Select keys keep doing their own jobs
+            setP (*p, P_bsKeys, 1.0f); setP (*p, P_bcSelKeys, 1.0f);
+            e->breakKeyEntryForTests();   // (the slice played just above goes in first)
+            const auto before = p->breakStore.get();
+            play (*p, { juce::MidiMessage::noteOn (1, 24 + 1, 0.8f), juce::MidiMessage::noteOn (1, kb (*p) - 2, 0.8f) });
+            e->breakKeyEntryForTests();
+            const auto after = p->breakStore.get();
+            bool same = true; for (int q = 0; q < 8; ++q) for (int i = 0; i < 32; ++i) same &= after.step[q][i].on == before.step[q][i].on && after.step[q][i].slice == before.step[q][i].slice;
+            CHECK (same, "Pattern Keys and Break Select keys: not entered as slices");
+        }
+        // off: nothing changes
+        {
+            auto p = setup (false, 1);
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+            showPage (ed.get(), "Break Sequencer");
+            e->setBreakSelectedStepForTests (4);
+            const auto before = p->breakStore.get().step[pat (*p)][4];
+            play (*p, { juce::MidiMessage::noteOn (1, kb (*p) + 2, 0.5f) });
+            e->breakKeyEntryForTests();
+            const auto s = p->breakStore.get().step[pat (*p)][4];
+            CHECK (s.on == before.on && s.slice == before.slice && e->breakSelectedStepForTests() == 4, "Key Entry off: the pattern is left alone");
+        }
+        // a key played long before the page looked is dropped (no surprise entries later)
+        {
+            auto p = setup (true, 1);
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+            showPage (ed.get(), "Break Sequencer");
+            e->setBreakSelectedStepForTests (4);
+            p->breakStore.edit ([&] (tg::BreakData& d) { d.step[pat (*p)][4] = tg::BreakStep(); });
+            play (*p, { juce::MidiMessage::noteOn (1, kb (*p) + 2, 0.5f) });
+            juce::Thread::sleep (700);
+            e->breakKeyEntryForTests();
+            CHECK (! p->breakStore.get().step[pat (*p)][4].on, "Key Entry: a stale key (over half a second old) isn't entered");
+        }
+    };
+    // ---- the random patch generator
+    auto plainOf = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+    // renders a patch's audition phrase (2 bars at 172 BPM, the transport running) and returns its peak (dBFS) and CPU (% of a core)
+    auto phraseOf = [&] (MegaSynthProcessor& p, const juce::String& cat, juce::AudioBuffer<float>* keep = nullptr, double* cpuPct = nullptr)
+    {
+        struct Head : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+        Head head;
+        p.prepareToPlay (sr, 512);   // (a clean start, as the generator measures it)
+        p.setPlayHead (&head);
+        const double bpm = 172.0, inc = bpm / 60.0 / sr;
+        juce::AudioBuffer<float> buf (2, 256);
+        if (plainOf (p, P_reverbMix) + plainOf (p, P_shimmerMix) + plainOf (p, P_reverseMix) > 0.0f)
+            for (int k = 0; k < 160; ++k) { head.info.setIsPlaying (false); head.info.setBpm (bpm); head.info.setPpqPosition (0.0); buf.clear(); juce::MidiBuffer none; p.processBlock (buf, none); if (k == 0) juce::Thread::sleep (150); }
+        const bool chopKeys = plainOf (p, P_bcOn) > 0.5f && plainOf (p, P_bsOn) < 0.5f;
+        const auto notes = MegaSynthProcessor::auditionPhrase (cat, chopKeys);
+        std::vector<std::pair<int, juce::MidiMessage>> ev;
+        for (auto& n : notes) { ev.push_back ({ (int) (n[0] / inc), juce::MidiMessage::noteOn (1, (int) n[2], (juce::uint8) 100) }); ev.push_back ({ (int) ((n[0] + n[1]) / inc), juce::MidiMessage::noteOff (1, (int) n[2]) }); }
+        const int total = (int) (8.0 / inc) + (int) (0.6 * sr);
+        if (keep) keep->setSize (2, total);
+        double ppq = 0.0; float peak = 0.0f; bool fin = true;
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int pos = 0; pos < total; pos += 256)
+        {
+            const int n = std::min (256, total - pos);
+            buf.setSize (2, n, false, false, true);
+            head.info.setIsPlaying (pos < (int) (8.0 / inc)); head.info.setBpm (bpm); head.info.setPpqPosition (ppq); head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+            juce::MidiBuffer m; for (auto& e : ev) if (e.first >= pos && e.first < pos + n) m.addEvent (e.second, e.first - pos);
+            buf.clear(); p.processBlock (buf, m); ppq += n * inc;
+            for (int ch = 0; ch < 2; ++ch) { peak = std::max (peak, buf.getMagnitude (ch, 0, n)); for (int i = 0; i < n; ++i) fin &= std::isfinite (buf.getSample (ch, i)); if (keep) keep->copyFrom (ch, pos, buf, ch, 0, n); }
+        }
+        if (cpuPct) *cpuPct = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0 / ((double) total / sr) * 100.0;
+        p.setPlayHead (nullptr);
+        return fin ? (double) juce::Decibels::gainToDecibels (peak, -200.0f) : 999.0;
+    };
+    // a folder of test files: three synthesised breaks (plus a too-short file and a text file), and three tones
+    auto makeRandomFolders = [&]
+    {
+        auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("megasynth_random_test");
+        root.deleteRecursively();
+        auto br = root.getChildFile ("Breaks"), sm = root.getChildFile ("Samples");
+        br.getChildFile ("sub").createDirectory(); sm.createDirectory();
+        const double bpms[3] = { 170.0, 174.0, 165.0 };
+        for (int k = 0; k < 3; ++k)
+        {
+            const auto mb = tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, bpms[k], k), 44100.0);
+            (k == 2 ? br.getChildFile ("sub") : br).getChildFile ("Test Break " + juce::String (k + 1) + ".wav").replaceWithData (mb.getData(), mb.getSize());
+        }
+        {
+            juce::AudioBuffer<float> s (1, 22050 / 2); for (int i = 0; i < s.getNumSamples(); ++i) s.setSample (0, i, 0.5f * (float) std::sin (i * 0.05));
+            const auto mb = tg::breaks::toWav16 (s, 44100.0); br.getChildFile ("Too Short.wav").replaceWithData (mb.getData(), mb.getSize());
+            br.getChildFile ("readme.txt").replaceWithText ("not audio");
+        }
+        for (int k = 0; k < 3; ++k)
+        {
+            juce::AudioBuffer<float> s (1, 44100 * (k + 1));
+            const double f = 110.0 * (k + 1);
+            for (int i = 0; i < s.getNumSamples(); ++i) { const double ph = 2.0 * kPi * f * i / 44100.0; s.setSample (0, i, (float) (0.4 * std::sin (ph) + 0.2 * std::sin (2 * ph + i * 1.0e-5) + 0.1 * std::sin (3 * ph))); }
+            const auto mb = tg::breaks::toWav16 (s, 44100.0); sm.getChildFile ("Test Tone " + juce::String (k + 1) + ".wav").replaceWithData (mb.getData(), mb.getSize());
+        }
+        return std::make_pair (br, sm);
+    };
+    auto randomTests = [&] (int seeds)
+    {
+        using namespace tg::randompatch;
+        std::cout << "Random patch generator" << std::endl;
+        const auto folders = makeRandomFolders();
+        MegaSynthProcessor::setRandomFolder (0, folders.first); MegaSynthProcessor::rescanRandomFolder (0, true);
+        MegaSynthProcessor::setRandomFolder (1, folders.second); MegaSynthProcessor::rescanRandomFolder (1, true);
+        {
+            const auto bl = MegaSynthProcessor::randomFolderList (0), sl = MegaSynthProcessor::randomFolderList (1);
+            std::cout << "  folders: " << bl.files.size() << " breaks, " << sl.files.size() << " samples" << std::endl;
+            CHECK (bl.files.size() == 3 && sl.files.size() == 3, "the folder scan finds the 3 breaks (in subfolders too, not the short file or the text file) and the 3 samples");
+        }
+        // (debug: MEGASYNTH_RANDOMDET=1 renders one patch on fresh instances, with parts switched off, to find a difference)
+        if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMDET", {}).isNotEmpty())
+        {
+            Options o; o.seed = 31337; o.category = C_Pads; o.complexity = 2; o.use[U_Breaks] = true;
+            auto g = make(); std::cout << "  " << g->generateRandomPatchNow (o).upToFirstOccurrenceOf ("\n", false, false) << std::endl;
+            const auto ta = g->exportBrowserPatch();
+            auto test = [&] (const char* what, std::vector<std::pair<int, float>> sets)
+            {
+                float worst = 0;
+                juce::AudioBuffer<float> first;
+                const bool quick = juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMDET", {}) == "quick";
+                for (int k = 0; k < (quick ? 2 : 4); ++k)
+                {
+                    auto c = make(); c->importBrowserPatch (ta);
+                    for (auto& [i, v] : sets) setP (*c, i, v);
+                    juce::AudioBuffer<float> cc; tg::resetVoiceRandom(); phraseOf (*c, "Pads & Atmos", &cc);
+                    if (k == 0) { first = cc; continue; }
+                    for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < cc.getNumSamples(); ++i) worst = std::max (worst, std::abs (cc.getSample (ch, i) - first.getSample (ch, i)));
+                }
+                std::cout << "    " << what << ": " << worst << std::endl;
+            };
+            test ("as made", {});
+            if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMDET", {}) == "quick") return;
+            test ("no reverb/shimmer", { { P_reverbMix, 0.0f }, { P_shimmerMix, 0.0f }, { P_reverseMix, 0.0f } });
+            test ("no delay/chorus", { { P_delayMix, 0.0f }, { P_chorusMix, 0.0f } });
+            test ("no breaks", { { P_bcOn, 0.0f } });
+            test ("no bus granular", { { P_grMix, 0.0f } });
+            test ("no granular synth", { { P_gsOn, 0.0f } });
+            test ("no core", { { P_cAEngine, 0.0f }, { P_cBEngine, 0.0f } });
+            test ("no mutation", { { P_wmMix, 0.0f }, { P_resMix, 0.0f }, { P_dnaMix, 0.0f }, { P_arFm, 0.0f }, { P_arRing, 0.0f } });
+            return;
+        }
+        // (debug: MEGASYNTH_RANDOMPROF=seed,seed... profiles where each patch spends its CPU)
+        if (auto prof = juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMPROF", {}); prof.isNotEmpty())
+        {
+            for (auto sd : juce::StringArray::fromTokens (prof, ",", {}))
+            {
+                const int s = sd.getIntValue() - 1000;
+                Options o; o.seed = (uint32_t) (1000 + s); o.category = (s - 1) % kNumCategories; o.complexity = ((s - 1) / kNumCategories) % 3;
+                o.use[U_Breaks] = (s % 3) == 0 || o.category == C_Breaks; o.use[U_Sequencers] = (s % 4) == 0;
+                auto p = make();
+                std::cout << "  " << p->generateRandomPatchNow (o).upToFirstOccurrenceOf ("\n", false, false) << std::endl;
+                setP (*p, P_quality, 1.0f);
+                const auto saved = p->exportBrowserPatch();
+                auto run = [&] (const char* what, std::vector<std::pair<int, float>> sets)
+                {
+                    p->importBrowserPatch (saved); setP (*p, P_quality, 1.0f);
+                    for (auto& [i, v] : sets) setP (*p, i, v);
+                    tg::resetVoiceRandom(); double cpu = 0; phraseOf (*p, categoryName (o.category), nullptr, &cpu);
+                    std::cout << "    " << what << ": " << juce::String (cpu, 1) << "%" << std::endl;
+                };
+                std::cout << "    poly " << plainOf (*p, P_polyphony) << " coreUni " << plainOf (*p, P_cAUni) << " envMode " << plainOf (*p, P_cAEnvMode) << " gs " << plainOf (*p, P_gsOn)
+                          << " ssaw " << plainOf (*p, P_supersawGain) << " arp " << plainOf (*p, P_arpOn) << std::endl;
+                run ("as made", {});
+                run ("no Core", { { P_cAEngine, 0.0f }, { P_cBEngine, 0.0f } });
+                run ("Core amp+ops", { { P_cAEnvMode, 0.0f } });
+                run ("no granular", { { P_gsOn, 0.0f } });
+                run ("no supersaw", { { P_supersawGain, 0.0f } });
+                run ("no osc", { { P_osc1Gain, 0.0f }, { P_osc2Gain, 0.0f }, { P_osc3Gain, 0.0f }, { P_osc4Gain, 0.0f }, { P_wt2Gain, 0.0f } });
+                run ("poly 6", { { P_polyphony, 6.0f } });
+                run ("no reverb", { { P_reverbMix, 0.0f } });
+                run ("no arp", { { P_arpOn, 0.0f } });
+                run ("no resonator", { { P_resMix, 0.0f } });
+                run ("no audio-rate", { { P_arFm, 0.0f }, { P_arRing, 0.0f } });
+                run ("no bus granular", { { P_grMix, 0.0f } });
+                run ("no unison", { { P_uni1Voices, 1.0f } });
+            }
+            return;
+        }
+        // 1. many seeds, every category and complexity: finite, matched, not silent, under the CPU budget
+        {
+            auto p = make();
+            double lo = 1e9, hi = -1e9, worstCpu = 0; juce::String heaviest; int silent = 0, bad = 0, errors = 0;
+            for (int s = 1; s <= seeds; ++s)
+            {
+                Options o; o.seed = (uint32_t) (1000 + s); o.category = (s - 1) % kNumCategories; o.complexity = ((s - 1) / kNumCategories) % 3;
+                o.use[U_Breaks] = (s % 3) == 0 || o.category == C_Breaks; o.use[U_Sequencers] = (s % 4) == 0;
+                const auto rep = p->generateRandomPatchNow (o);
+                if (rep.startsWith ("Error")) { ++errors; std::cout << "  " << rep << std::endl; continue; }
+                setP (*p, P_quality, 1.0f);
+                tg::resetVoiceRandom();
+                double cpu = 0;
+                const double pk = phraseOf (*p, categoryName (o.category), nullptr, &cpu);
+                if (pk > 900) { ++bad; continue; }
+                if (pk < -60) ++silent;
+                if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMDBG", {}).isNotEmpty())
+                    std::cout << "    seed " << (int) o.seed << " " << categoryName (o.category) << " " << kComplexityNames[o.complexity] << ": " << juce::String (pk, 2) << " dBFS, " << juce::String (cpu, 1) << "%  "
+                              << rep.upToFirstOccurrenceOf ("\n", false, false) << " rev " << plainOf (*p, P_reverbMix) << " out " << plainOf (*p, P_outGain) << std::endl;
+                lo = std::min (lo, pk); hi = std::max (hi, pk);
+                if (cpu > worstCpu) { worstCpu = cpu; heaviest = p->getPatchName() + " (" + categoryName (o.category) + ", " + kComplexityNames[o.complexity] + ", seed " + juce::String ((int) o.seed) + ")"; }
+            }
+            std::cout << "  " << seeds << " seeds: peaks " << juce::String (lo, 1) << " to " << juce::String (hi, 1) << " dBFS, " << silent << " silent, "
+                      << bad << " not finite, " << errors << " errors; heaviest " << juce::String (worstCpu, 1) << "% of a core (Normal): " << heaviest << std::endl;
+            CHECK (errors == 0 && bad == 0 && silent == 0, "every random patch renders finite and isn't silent");
+            CHECK (lo >= -18.0 && hi <= -6.0, "every random patch peaks between -18 and -6 dBFS on its phrase");
+            CHECK (worstCpu < 60.0, "every random patch under 60% of a core on Normal (its phrase)");
+        }
+        // 2. No oscillators, and each untick removes its engine
+        {
+            auto p = make();
+            bool ok = true;
+            for (int s = 0; s < 20; ++s)
+            {
+                Options o; o.seed = (uint32_t) (500 + s); o.category = s % kNumCategories; o.complexity = 2; o.noOsc = true; o.use[U_Breaks] = true;
+                p->generateRandomPatchNow (o);
+                for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain }) ok &= plainOf (*p, i) == 0.0f;
+            }
+            CHECK (ok, "No oscillators: Osc 1-3 and the Sub are at 0 in every patch");
+            struct Off { int use; std::vector<int> zero; };
+            const Off offs[] = { { U_Wavetables, { P_osc4Gain, P_wt2Gain } }, { U_Complex, { P_complexGain } }, { U_SuperSaw, { P_supersawGain } },
+                                 { U_Granular, { P_gsOn } }, { U_Reese, { P_rsLevel } }, { U_Core, { P_cAEngine, P_cBEngine } }, { U_Breaks, { P_bcOn } },
+                                 { U_NoteMut, { P_wmMix, P_dnaMix, P_resMix, P_arFm, P_arRing } }, { U_BusMut, { P_grMix, P_spOn } },
+                                 { U_Sequencers, { P_dsOn, P_seqRun } }, { U_ArpChord, { P_arpOn, P_chdOn } } };
+            juce::StringArray failed;
+            for (auto& f : offs)
+            {
+                bool allOff = true;
+                for (int s = 0; s < 20; ++s)
+                {
+                    Options o; o.seed = (uint32_t) (700 + s); o.category = s % kNumCategories; o.complexity = 2;
+                    o.use[U_Breaks] = f.use != U_Breaks; o.use[U_Sequencers] = f.use != U_Sequencers; o.use[f.use] = false;
+                    p->generateRandomPatchNow (o);
+                    for (int i : f.zero) allOff &= plainOf (*p, i) == 0.0f;
+                }
+                if (! allOff) failed.add (kUseNames[f.use]);
+            }
+            CHECK (failed.isEmpty(), "each untick keeps its engine out" + (failed.isEmpty() ? juce::String() : ": " + failed.joinIntoString (", ")));
+            Options none; for (auto& u : none.use) u = false; none.noOsc = true;
+            CHECK (p->generateRandomPatchNow (none).startsWith ("Error"), "every source unticked: it says so and doesn't generate");
+        }
+        // 3. Keep leaves its groups bit for bit
+        {
+            auto p = make(); p->loadFactoryPreset (tg::kFirstDnb + 20);
+            std::vector<float> before ((size_t) P_COUNT); for (int i = 0; i < P_COUNT; ++i) before[(size_t) i] = p->param (i)->getValue();
+            const auto rackBefore = juce::JSON::toString (p->fxRack.toVar());
+            Options o; o.seed = 4242; o.category = C_Neuro; o.complexity = 2; o.keepMask = (1u << tg::ML_Filter) | (1u << tg::ML_Fx) | (1u << tg::ML_Env);
+            p->generateRandomPatchNow (o);
+            int changed = 0, other = 0;
+            for (int i = 0; i < P_COUNT; ++i)
+            {
+                const int g = tg::geneGroupOf (i);
+                const bool same = p->param (i)->getValue() == before[(size_t) i];
+                if (g == tg::ML_Filter || g == tg::ML_Fx || g == tg::ML_Env) changed += same ? 0 : 1;
+                else other += same ? 0 : 1;
+            }
+            std::cout << "  Keep Filter, Effects, Envelopes: " << changed << " of their parameters changed; " << other << " others changed" << std::endl;
+            CHECK (changed == 0 && other > 20 && juce::JSON::toString (p->fxRack.toVar()) == rackBefore, "Keep: the kept groups (and the rack order) stay bit for bit, the rest is new");
+        }
+        // 4. the same seed, settings and folders: the same patch, bit for bit, and the same sound
+        {
+            Options o; o.seed = 31337; o.category = C_Pads; o.complexity = 2; o.use[U_Breaks] = true;
+            auto a = make(); auto b = make();
+            a->generateRandomPatchNow (o); b->generateRandomPatchNow (o);
+            const auto ta = a->exportBrowserPatch(), tb = b->exportBrowserPatch();
+            CHECK (ta == tb, "the same seed and settings: the same patch, bit for bit");
+            juce::AudioBuffer<float> ca, cb;
+            tg::resetVoiceRandom(); phraseOf (*a, "Pads & Atmos", &ca);
+            tg::resetVoiceRandom(); phraseOf (*b, "Pads & Atmos", &cb);
+            float d = 0; for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < ca.getNumSamples(); ++i) d = std::max (d, std::abs (ca.getSample (ch, i) - cb.getSample (ch, i)));
+            CHECK (d == 0.0f, "... and the same sound, bit for bit (" + juce::String (d) + ")");
+            // saved and reloaded: identical
+            auto c = make(); c->importBrowserPatch (ta);
+            juce::AudioBuffer<float> cc; tg::resetVoiceRandom(); phraseOf (*c, "Pads & Atmos", &cc);
+            float d2 = 0; for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < ca.getNumSamples(); ++i) d2 = std::max (d2, std::abs (ca.getSample (ch, i) - cc.getSample (ch, i)));
+            auto e = make(); e->importBrowserPatch (ta);
+            juce::AudioBuffer<float> ce; tg::resetVoiceRandom(); phraseOf (*e, "Pads & Atmos", &ce);
+            float d3 = 0; for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < cc.getNumSamples(); ++i) d3 = std::max (d3, std::abs (cc.getSample (ch, i) - ce.getSample (ch, i)));
+            std::cout << "  saved and loaded again: " << juce::String (juce::Decibels::gainToDecibels (d2, -300.0f), 1) << " dB from the patch as made (the rounding of a saved value), "
+                      << (d3 == 0.0f ? "and the same every time it loads" : "different between loads") << std::endl;
+            CHECK (d2 < 1.0e-6f && d3 == 0.0f, "a random patch saved and loaded again sounds the same (to the rounding every saved patch has), bit for bit on every load");
+        }
+        // 5. samples only from the chosen folders; an empty or missing folder falls back cleanly
+        {
+            auto p = make();
+            juce::StringArray brNames, smNames; for (auto& f : MegaSynthProcessor::randomFolderList (0).files) brNames.add (f.getFileName());
+            for (auto& f : MegaSynthProcessor::randomFolderList (1).files) smNames.add (f.getFileName());
+            bool fromFolder = true; int usedBreaks = 0, usedSamples = 0;
+            for (int s = 0; s < 24; ++s)
+            {
+                Options o; o.seed = (uint32_t) (900 + s); o.category = s % 2 == 0 ? C_Breaks : C_Pads; o.complexity = 2; o.use[U_Breaks] = true;
+                p->generateRandomPatchNow (o);
+                for (int k = 0; k < 3; ++k) { const auto n = p->getSampleName (MegaSynthProcessor::breakSlot (k)); if (n.isNotEmpty()) { ++usedBreaks; fromFolder &= brNames.contains (n); } }
+                for (int k = 0; k < 3; ++k) { const auto n = p->getSampleName (k); if (n.isNotEmpty()) { ++usedSamples; fromFolder &= smNames.contains (n); } }
+            }
+            std::cout << "  24 patches: " << usedBreaks << " breaks and " << usedSamples << " samples, all from the folders: " << (fromFolder ? "yes" : "no") << std::endl;
+            CHECK (fromFolder && usedBreaks > 0 && usedSamples > 0, "the samples and breaks come from the chosen folders only");
+            auto empty = folders.first.getSiblingFile ("Empty"); empty.createDirectory();
+            MegaSynthProcessor::setRandomFolder (0, empty); MegaSynthProcessor::rescanRandomFolder (0, true);
+            MegaSynthProcessor::setRandomFolder (1, juce::File()); MegaSynthProcessor::rescanRandomFolder (1, true);
+            Options o; o.seed = 77; o.category = C_Breaks; o.complexity = 1; o.use[U_Breaks] = true;
+            const auto rep = p->generateRandomPatchNow (o);
+            CHECK (! rep.startsWith ("Error") && p->getSampleName (MegaSynthProcessor::breakSlot (0)).contains ("synthesised") && rep.contains ("nothing usable"), "an empty breaks folder: the built-in break, and the page says so");
+            Options o2; o2.seed = 78; o2.category = C_Pads; o2.complexity = 2; o2.noOsc = true; for (auto& u : o2.use) u = false; o2.use[U_Wavetables] = true; o2.use[U_Effects] = true;
+            const auto rep2 = p->generateRandomPatchNow (o2);
+            CHECK (! rep2.startsWith ("Error") && p->getSampleName (0) == "Random tone.wav" && rep2.contains ("no samples folder"), "no samples folder: a tone made by the generator, and the page says so");
+            MegaSynthProcessor::setRandomFolder (0, folders.first); MegaSynthProcessor::rescanRandomFolder (0, true);
+            MegaSynthProcessor::setRandomFolder (1, folders.second); MegaSynthProcessor::rescanRandomFolder (1, true);
+        }
+        // 6. Undo goes back to the patch before; Keep current puts it in A, the new one in B
+        {
+            auto p = make(); p->loadFactoryPreset (5);
+            const auto before = p->exportBrowserPatch(); const auto nameBefore = p->getPatchName();
+            Options o; o.seed = 99; o.category = C_Leads;
+            p->generateRandomPatchNow (o);
+            CHECK (p->getPatchName() != nameBefore && p->getPatchMeta().author == "Random" && p->getPatchMeta().tags.contains ("random"), "a random patch has its name, author Random and the tag");
+            p->undo();
+            CHECK (p->exportBrowserPatch() == before, "Undo goes back to the patch before");
+            o.keepCurrent = true; o.seed = 100;
+            p->generateRandomPatchNow (o);
+            const auto made = p->exportBrowserPatch();
+            CHECK (p->abSlot() == 1, "Keep current: the new patch is in B");
+            p->abSelect (0);
+            CHECK (p->exportBrowserPatch() == before, "... and the sound you had is in A");
+            p->abSelect (1);
+            CHECK (p->exportBrowserPatch() == made, "... and back to B");
+        }
+        // 7. the page's settings are saved with the project, not in patches
+        {
+            auto p = make(); p->randomOptions.category = C_Keys; p->randomOptions.noOsc = true; p->randomOptions.keepMask = 5; p->randomOptions.use[U_Reese] = false;
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (q->randomOptions.category == C_Keys && q->randomOptions.noOsc && q->randomOptions.keepMask == 5 && ! q->randomOptions.use[U_Reese], "the Random Patch settings come back with the project");
+            CHECK (! p->exportBrowserPatch().contains ("randomGen"), "... and aren't in patches");
+        }
+        // 8. in the background (as the page does it): the report arrives and the patch is loaded
+        {
+            auto p = make();
+            Options o; o.seed = 5150; o.category = C_Reese;
+            p->startRandomPatch (o);
+            const auto t0 = juce::Time::getMillisecondCounter();
+            while (p->randomBusy() && juce::Time::getMillisecondCounter() - t0 < 30000) { while (juce::detail::dispatchNextMessageOnSystemQueue (true)) {} juce::Thread::sleep (5); }
+            CHECK (! p->randomBusy() && p->randomReport().startsWith ("Made") && p->getPatchMeta().author == "Random", "in the background: the patch is made and loaded (" + p->randomReport().upToFirstOccurrenceOf ("\n", false, false) + ")");
         }
     };
     // ---- the bank's checks: finite, peak below -1 dBFS, level within 3 dB of -12 dBFS, its information, mono low end
@@ -6854,6 +7427,64 @@ int main()
         // (the full run's order up to the bank, to check it in that state)
         reeseTests(); reactTests(); coreTests(); categoryTests(); tg::resetVoiceRandom(); presetBankTests();
         std::cout << (failures == 0 ? "BANKSEQ PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_COREREF", {}).isNotEmpty())
+    {
+        // (a Core-on render with no reverb, written raw, to compare two builds bit for bit)
+        juce::MemoryBlock all;
+        for (int variant = 0; variant < 4; ++variant)
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_osc1Gain }) setP (*p, i, 0.0f);
+            setP (*p, P_cAEngine, 1.0f); p->applyCoreAlgorithm (0, variant * 3); setP (*p, P_cA2M2, 1.3f);
+            if (variant & 1) { setP (*p, P_cAUni, 3.0f); setP (*p, P_osc1Gain, 0.5f); }
+            if (variant >= 2) { setP (*p, P_cBEngine, 1.0f); setP (*p, P_cB1Rel, 2.0f); setP (*p, P_quality, (float) (variant - 1)); }
+            tg::resetVoiceRandom();
+            juce::AudioBuffer<float> c; render (*p, 2.0, chord (0.0, 1.2, { 45, 57, 64 }), &c);
+            for (int ch = 0; ch < 2; ++ch) all.append (c.getReadPointer (ch), sizeof (float) * (size_t) c.getNumSamples());
+        }
+        juce::File (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_COREREF", {})).replaceWithData (all.getData(), all.getSize());
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMDEMO", {}).isNotEmpty())
+    {
+        // eight random patches (two each of Reese, Neuro, Pads and Breaks & Drums) as one audition reel at 172 BPM,
+        // the breaks from a test folder of the synth's own demo breaks
+        using namespace tg::randompatch;
+        const auto folders = makeRandomFolders();
+        MegaSynthProcessor::setRandomFolder (0, folders.first); MegaSynthProcessor::rescanRandomFolder (0, true);
+        MegaSynthProcessor::setRandomFolder (1, folders.second); MegaSynthProcessor::rescanRandomFolder (1, true);
+        const int cats[8] = { C_Reese, C_Reese, C_Neuro, C_Neuro, C_Pads, C_Pads, C_Breaks, C_Breaks };
+        const uint32_t seeds[8] = { 11, 23, 37, 41, 53, 67, 71, 89 };
+        std::vector<float> L, R;
+        auto p = make();
+        for (int k = 0; k < 8; ++k)
+        {
+            Options o; o.seed = seeds[k]; o.category = cats[k]; o.complexity = k % 2 == 0 ? 1 : 2; o.use[U_Breaks] = cats[k] == C_Breaks;
+            const auto rep = p->generateRandomPatchNow (o);
+            juce::AudioBuffer<float> c; tg::resetVoiceRandom();
+            const double pk = phraseOf (*p, categoryName (cats[k]), &c);
+            std::cout << "REEL " << (k + 1) << ": " << rep.upToFirstOccurrenceOf ("\n", false, false) << " peak " << juce::String (pk, 1) << " dBFS" << std::endl;
+            for (int i = 0; i < c.getNumSamples(); ++i) { L.push_back (c.getSample (0, i)); R.push_back (c.getSample (1, i)); }
+            for (int i = 0; i < (int) (0.3 * sr); ++i) { L.push_back (0.0f); R.push_back (0.0f); }
+        }
+        juce::AudioBuffer<float> all (2, (int) L.size());
+        for (int i = 0; i < (int) L.size(); ++i) { all.setSample (0, i, L[(size_t) i]); all.setSample (1, i, R[(size_t) i]); }
+        writeWav (all, sr, "random_patch_reel_172.wav");
+        std::cout << "REEL written: renders/random_patch_reel_172.wav" << std::endl;
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMONLY", {}).isNotEmpty())
+    {
+        randomTests (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMONLY", {}).getIntValue() > 1 ? juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RANDOMONLY", {}).getIntValue() : 300);
+        std::cout << (failures == 0 ? "RANDOM TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_KEYENTRYONLY", {}).isNotEmpty())
+    {
+        keyEntryTests();
+        std::cout << (failures == 0 ? "KEY ENTRY TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_COREONLY", {}).isNotEmpty())
@@ -7146,11 +7777,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.66.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.67.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.66 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React and the Core A / B slots added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.67 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React, the Core A / B slots, Core Envelope and Key Entry added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",
@@ -8558,6 +9189,8 @@ int main()
     reeseTests();
     reactTests();
     coreTests();
+    keyEntryTests();
+    randomTests (40);
     categoryTests();
     tg::resetVoiceRandom();   // (the bank's levels are measured from the random sequence's start, as when run on its own)
     presetBankTests();

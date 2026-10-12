@@ -162,6 +162,8 @@ MegaSynthProcessor::MegaSynthProcessor()
 
 MegaSynthProcessor::~MegaSynthProcessor()
 {
+    rpAlive->store (false);
+    if (rpThread != nullptr) rpThread->stopThread (6000);
     stopTimer();
     removeListener (this);
 }
@@ -760,6 +762,41 @@ void MegaSynthProcessor::tapChop()
     addChopMarker (previewBreakShown.load(), frame);
 }
 
+std::vector<MegaSynthProcessor::KeyEntry> MegaSynthProcessor::takeKeyEntries()
+{
+    std::vector<KeyEntry> out;
+    int s1, n1, s2, n2;
+    keyEntryFifo.prepareToRead (keyEntryFifo.getNumReady(), s1, n1, s2, n2);
+    const uint32_t now = juce::Time::getMillisecondCounter();
+    auto take = [&] (const KeyEntryRaw& r) { if (now - r.ms < 500u) out.push_back ({ r.brk, r.slice, r.vel, r.sustain }); };
+    for (int i = 0; i < n1; ++i) take (keyEntryBuf[s1 + i]);
+    for (int i = 0; i < n2; ++i) take (keyEntryBuf[s2 + i]);
+    keyEntryFifo.finishedRead (n1 + n2);
+    return out;
+}
+
+void MegaSynthProcessor::applyKeyEntry (int pattern, int step, const KeyEntry& k, bool layer)
+{
+    const int p = juce::jlimit (0, tg::BreakData::kPatterns - 1, pattern), st = juce::jlimit (0, tg::BreakData::kSteps - 1, step);
+    breakStore.edit ([&] (tg::BreakData& d)
+    {
+        auto& s = d.step[p][st];
+        if (layer && s.on)
+        {
+            s.layer = true; s.layerBrk = juce::jlimit (1, 3, k.brk + 1); s.layerSlice = juce::jlimit (0, tg::BreakData::kSlices - 1, k.slice);
+            s.layerLevel = juce::jlimit (0.0f, 1.5f, k.vel);
+        }
+        else
+        {
+            s.on = true; s.tie = false;
+            s.slice = juce::jlimit (0, tg::BreakData::kSlices - 1, k.slice);
+            s.vel = juce::jlimit (0.0f, 1.0f, k.vel);
+            s.brk = juce::jlimit (1, 3, k.brk + 1);
+        }
+    });
+    pushHistory ("Key Entry");
+}
+
 void MegaSynthProcessor::applyChopTaps()
 {
     int s1, n1, s2, n2;
@@ -934,6 +971,17 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
             {
                 tg::BreakChopper::Trigger t; t.slice = nn - kb; t.vel = m.getFloatVelocity(); t.fromKey = true; t.brk = active; t.key = nn;
                 engine.breaks().trigger (t, engine.breakSettings (snap));
+                if (snap.v[P_bsKeyEntry] > 0.5f)
+                {
+                    // Key Entry: the page puts this slice on its selected step
+                    int s1, n1, s2, n2;
+                    keyEntryFifo.prepareToWrite (1, s1, n1, s2, n2);
+                    if (n1 > 0)
+                    {
+                        keyEntryBuf[s1] = { active, nn - kb, m.getFloatVelocity(), sustainDown, juce::Time::getMillisecondCounter() };
+                        keyEntryFifo.finishedWrite (1);
+                    }
+                }
                 modInputs.bsSlice = ns > 1 ? (float) t.slice / (float) (ns - 1) : 0.0f;
                 modInputs.bsBreak = (float) active * 0.5f;
             }
@@ -1600,6 +1648,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("lab", juce::JSON::toString (lab.toVar(), true), nullptr);
     state.setProperty ("labVariation", labVariation, nullptr);
     state.setProperty ("patchName", getPatchName(), nullptr);
+    state.setProperty ("randomGen", juce::JSON::toString (randomOptions.toVar(), true), nullptr);   // (the Random Patch page's settings)
     state.setProperty ("patchMeta", juce::JSON::toString (getPatchMeta().toVar(), true), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
@@ -1649,6 +1698,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 24) setReeseDefaultsForOldPatch();
     if (version < 25) setReactDefaultsForOldPatch();
     if (version < 26) setCoreDefaultsForOldPatch();
+    if (version < 27) setV27DefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1657,6 +1707,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     midiMapFromString (tree.getProperty ("midiMap").toString());
     if (tree.hasProperty ("uiWidth")) uiWidth.store ((int) tree.getProperty ("uiWidth"));
     setUiTabs (tree.getProperty ("uiTabs").toString());
+    if (tree.hasProperty ("randomGen")) randomOptions.fromVar (juce::JSON::parse (tree.getProperty ("randomGen").toString()));
     pendingProgram.store (-1);   // a program change still waiting must not replace the restored state
     curProgram.store (juce::jlimit (0, (int) tg::factoryPresets().size() - 1, (int) tree.getProperty ("program", 0)));
 
@@ -1888,6 +1939,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("rsLevel")) setReeseDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("rxOn")) setReactDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("cAEngine")) setCoreDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("cAEnvMode")) setV27DefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2206,6 +2258,15 @@ void MegaSynthProcessor::resetCoreSlot (int slot)
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
     }
     pushHistory ("Reset Core slot");
+}
+
+void MegaSynthProcessor::setV27DefaultsForOldPatch()
+{
+    for (int i = P_cAEnvMode; i <= P_bsAdvance; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
 }
 
 void MegaSynthProcessor::setCoreDefaultsForOldPatch()
@@ -3183,4 +3244,541 @@ juce::AudioProcessorEditor* MegaSynthProcessor::createEditor()
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new MegaSynthProcessor();
+}
+
+//==============================================================================
+// The random patch generator (Lab > Random Patch): the folders it draws samples from, the phrase it measures
+// a patch with, and making a patch (generate, apply to a second synth, measure and match the level, then load
+// it here). The decisions are in Lab/RandomPatch.h.
+namespace
+{
+    struct FolderScanThread : public juce::Thread
+    {
+        FolderScanThread (int w, juce::File f) : juce::Thread ("Mega Synth folder scan"), which (w), folder (std::move (f)) {}
+        void run() override;
+        const int which;
+        const juce::File folder;
+    };
+
+    struct RandomFolderRegistry
+    {
+        juce::CriticalSection lock;
+        MegaSynthProcessor::FolderList list[2];
+        std::unique_ptr<FolderScanThread> scanner[2];
+        bool loaded = false;
+        static RandomFolderRegistry& get() { static RandomFolderRegistry r; return r; }
+        ~RandomFolderRegistry() { for (auto& s : scanner) if (s != nullptr) s->stopThread (4000); }
+    };
+
+    juce::File randomFoldersFile() { return MegaSynthProcessor::getPatchFolder().getChildFile ("random_folders.json"); }
+
+    void FolderScanThread::run()
+    {
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        juce::Array<juce::File> found;
+        bool capped = false;
+        int seen = 0;
+        if (folder.isDirectory())
+            for (const auto& e : juce::RangedDirectoryIterator (folder, true, "*.wav;*.aif;*.aiff;*.flac;*.mp3", juce::File::findFiles))
+            {
+                if (threadShouldExit()) return;
+                if (++seen > MegaSynthProcessor::kRandomScanCap) { capped = true; break; }
+                const auto f = e.getFile();
+                std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (f));
+                if (rd == nullptr || rd->sampleRate <= 0.0 || rd->lengthInSamples <= 0) continue;
+                const double secs = (double) rd->lengthInSamples / rd->sampleRate;
+                if (which == 0 ? (secs >= 1.0 && secs <= 30.0) : secs >= 0.05) found.add (f);
+            }
+        std::sort (found.begin(), found.end(), [] (const juce::File& a, const juce::File& b) { return a.getFullPathName() < b.getFullPathName(); });
+        auto& reg = RandomFolderRegistry::get();
+        const juce::ScopedLock sl (reg.lock);
+        auto& l = reg.list[which];
+        if (l.folder != folder) return;   // (the folder changed while it was scanning)
+        l.files = found; l.scanning = false; l.scanned = true; l.capped = capped;
+    }
+
+    void loadRandomFolders()
+    {
+        auto& reg = RandomFolderRegistry::get();
+        if (reg.loaded) return;
+        reg.loaded = true;
+        const auto v = juce::JSON::parse (randomFoldersFile().loadFileAsString());
+        const juce::String keys[2] = { "breaks", "samples" };
+        for (int w = 0; w < 2; ++w)
+        {
+            const auto path = v.getProperty (keys[w], {}).toString();
+            reg.list[w] = {};
+            if (path.isNotEmpty() && juce::File::isAbsolutePath (path)) reg.list[w].folder = juce::File (path);
+        }
+    }
+
+    // a tone made by the generator, for a wavetable or the Granular Synth when there's no samples folder:
+    // a few seconds at A3 whose harmonics drift, so scanning through it changes the sound
+    juce::MemoryBlock madeUpTone (uint32_t seed)
+    {
+        tg::randompatch::Rng r (seed);
+        const double sr = 44100.0, f0 = 220.0;
+        const int n = (int) (sr * 2.0);
+        juce::AudioBuffer<float> b (1, n);
+        float amp[24], rate[24], ph[24];
+        for (int h = 0; h < 24; ++h) { amp[h] = r.range (0.0f, 1.0f) / (float) (1 + h / 3); rate[h] = r.range (0.1f, 1.5f); ph[h] = r.range (0.0f, 6.28f); }
+        float peak = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            const double t = i / sr;
+            double s = 0.0;
+            for (int h = 0; h < 24; ++h)
+                s += amp[h] * (0.55 + 0.45 * std::sin (2.0 * juce::MathConstants<double>::pi * rate[h] * t + ph[h])) * std::sin (2.0 * juce::MathConstants<double>::pi * f0 * (h + 1) * t);
+            b.setSample (0, i, (float) s);
+            peak = std::max (peak, std::abs ((float) s));
+        }
+        if (peak > 0.0f) b.applyGain (0.8f / peak);
+        return tg::breaks::toWav16 (b, sr);
+    }
+
+    void setPlainOn (MegaSynthProcessor& p, int idx, float plain)
+    {
+        auto* prm = p.param (idx);
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (plain)); prm->endChangeGesture();
+    }
+    float plainOn (const MegaSynthProcessor& p, int idx) { auto* prm = p.param (idx); return prm->convertFrom0to1 (prm->getValue()); }
+
+    struct LambdaThread : public juce::Thread
+    {
+        LambdaThread (std::function<void (juce::Thread&)> f) : juce::Thread ("Mega Synth random patch"), fn (std::move (f)) {}
+        void run() override { fn (*this); }
+        std::function<void (juce::Thread&)> fn;
+    };
+}
+
+juce::File MegaSynthProcessor::getRandomFolder (int which)
+{
+    auto& reg = RandomFolderRegistry::get();
+    const juce::ScopedLock sl (reg.lock);
+    loadRandomFolders();
+    return reg.list[juce::jlimit (0, 1, which)].folder;
+}
+
+void MegaSynthProcessor::setRandomFolder (int which, const juce::File& f)
+{
+    which = juce::jlimit (0, 1, which);
+    {
+        auto& reg = RandomFolderRegistry::get();
+        const juce::ScopedLock sl (reg.lock);
+        loadRandomFolders();
+        reg.list[which] = {};
+        reg.list[which].folder = f;
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("breaks", reg.list[0].folder.getFullPathName());
+        o->setProperty ("samples", reg.list[1].folder.getFullPathName());
+        randomFoldersFile().replaceWithText (juce::JSON::toString (juce::var (o)));
+    }
+    rescanRandomFolder (which);
+}
+
+MegaSynthProcessor::FolderList MegaSynthProcessor::randomFolderList (int which)
+{
+    which = juce::jlimit (0, 1, which);
+    bool start = false;
+    {
+        auto& reg = RandomFolderRegistry::get();
+        const juce::ScopedLock sl (reg.lock);
+        loadRandomFolders();
+        const auto& l = reg.list[which];
+        start = ! l.scanned && ! l.scanning && l.folder != juce::File();
+    }
+    if (start) rescanRandomFolder (which);   // (the first look: scan it in the background)
+    auto& reg = RandomFolderRegistry::get();
+    const juce::ScopedLock sl (reg.lock);
+    return reg.list[which];
+}
+
+void MegaSynthProcessor::rescanRandomFolder (int which, bool wait)
+{
+    which = juce::jlimit (0, 1, which);
+    auto& reg = RandomFolderRegistry::get();
+    std::unique_ptr<FolderScanThread> old;
+    FolderScanThread* t = nullptr;
+    {
+        const juce::ScopedLock sl (reg.lock);
+        loadRandomFolders();
+        old = std::move (reg.scanner[which]);
+        auto& l = reg.list[which];
+        l.files.clear(); l.capped = false;
+        if (l.folder == juce::File() || ! l.folder.isDirectory()) { l.scanning = false; l.scanned = true; }
+        else
+        {
+            l.scanning = true; l.scanned = false;
+            reg.scanner[which] = std::make_unique<FolderScanThread> (which, l.folder);
+            t = reg.scanner[which].get();
+        }
+    }
+    if (old != nullptr) old->stopThread (4000);
+    if (t != nullptr)
+    {
+        t->startThread (juce::Thread::Priority::low);
+        if (wait) t->waitForThreadToExit (-1);
+    }
+}
+
+std::vector<std::array<double, 3>> MegaSynthProcessor::auditionPhrase (const juce::String& cat, bool breakKeys)
+{
+    std::vector<std::array<double, 3>> notes;
+    if (cat == "Reese" || cat == "Sub & Bass" || cat == "Neuro")
+        notes = { { 0, 1.5, 45 }, { 2, 0.5, 45 }, { 2.75, 1, 48 }, { 4, 2, 41 }, { 6.5, 1.25, 43 } };
+    else if (cat == "Hoover & Rave") notes = { { 0, 1.5, 57 }, { 2, 1, 60 }, { 3.5, 1.5, 55 }, { 5.5, 2, 57 } };
+    else if (cat == "Stabs & Chords") for (int k = 0; k < 8; ++k) notes.push_back ({ k + 0.5, 0.25, (double) (k == 2 ? 60 : (k == 3 || k == 7 ? 55 : (k == 6 ? 53 : 57))) });
+    else if (cat == "Pads & Atmos") notes = { { 0, 4, 57 }, { 0, 4, 60 }, { 0, 4, 64 }, { 0, 4, 67 }, { 4, 4, 53 }, { 4, 4, 57 }, { 4, 4, 60 }, { 4, 4, 64 } };
+    else if (cat == "Leads") notes = { { 0, 0.75, 69 }, { 1, 0.5, 72 }, { 1.75, 0.75, 74 }, { 2.75, 0.5, 72 }, { 3.5, 1.5, 69 }, { 5.5, 0.5, 67 }, { 6, 2, 69 } };
+    else if (cat == "FX & Risers") notes = { { 0, 6, 57 } };
+    else if (cat == "Keys & Plucks") { const int arp[] = { 57, 60, 64, 67, 69, 67, 64, 60 }; for (int k = 0; k < 16; ++k) notes.push_back ({ k * 0.5, 0.4, (double) arp[k % 8] }); }
+    else notes = { { 0, 1.5, 69 }, { 4, 1.5, 69 } };   // (Breaks & Drums: the sub, above the slices; the breaks play from the sequencer)
+    if (breakKeys) for (int k = 0; k < 16; ++k) notes.push_back ({ k * 0.5, 0.4, (double) (36 + (k * 5) % 16) });
+    return notes;
+}
+
+bool MegaSynthProcessor::rpPrepare (const tg::randompatch::Options& o, int attempt, tg::randompatch::Result& res, juce::String& error)
+{
+    using namespace tg::randompatch;
+    const auto br = randomFolderList (0), sm = randomFolderList (1);
+    const int nb = br.scanning ? 0 : br.files.size(), ns = sm.scanning ? 0 : sm.files.size();
+    res = generate (o, nb, ns, attempt);
+    if (! res.ok) { error = res.error; return false; }
+
+    if (calibrator == nullptr)
+    {
+        const bool init = applyInitOnCreate;
+        applyInitOnCreate = false;   // (a plain start; the patch is copied in anyway)
+        calibrator = std::make_unique<MegaSynthProcessor>();
+        applyInitOnCreate = init;
+        calibrator->stopTimer();     // (nothing else touches it: it's measured off the message thread)
+        calibrator->setPlayConfigDetails (0, 2, 48000.0, 256);
+        calibrator->prepareToPlay (48000.0, 256);
+    }
+    auto& c = *calibrator;
+    c.importBrowserPatch (exportBrowserPatch());   // the current patch, for whatever is kept
+    auto& b = res.b;
+    const uint32_t keep = o.keepMask;
+    auto keepG = [keep] (int g) { return ((keep >> g) & 1u) != 0; };
+    auto kept = [&] (int i) -> bool
+    {
+        if (i >= P_mod1Amt && i < P_mod1Amt + tg::kNumRoutes) return keepG (tg::ML_Mod);
+        if (i >= P_macro1 && i < P_macro1 + 8) return keepG (tg::ML_Mod);
+        const int g = tg::geneGroupOf (i);
+        if (g >= 0 && g < tg::ML_COUNT) return keepG (g);
+        const juce::String id (tg::kParamIds[i]);
+        if (id.startsWith ("rs") || id.startsWith ("cA") || id.startsWith ("cB") || id.startsWith ("gs") || id.startsWith ("mxCore") || id.startsWith ("mxReese") || id.startsWith ("mxGran"))
+            return keepG (tg::ML_Osc);
+        if (id.startsWith ("bc") || id.startsWith ("bs") || id.startsWith ("rx") || id.startsWith ("mxBreak")) return keepG (kKeepBreaks);
+        return false;
+    };
+
+    // the modulation (routes, macros, shapes) unless it's kept
+    if (! keepG (tg::ML_Mod))
+    {
+        c.routes.clearAll();
+        for (int i = 0; i < (int) b.routes.size() && i < tg::kNumRoutes; ++i)
+        {
+            const auto& rr = b.routes[(size_t) i];
+            tg::RouteConfig rc;
+            rc.on = true; rc.src = rr.src; rc.dst = rr.dst; rc.curve = rr.curve; rc.unipolar = rr.unipolar; rc.via = rr.via; rc.viaDepth = rr.viaDepth; rc.smoothMs = rr.smoothMs;
+            c.routes.set (i, rc);
+            b.v[(size_t) (P_mod1Amt + i)] = rr.depth;
+        }
+        c.lfoShapes.fromVar ({});
+        for (int k = 0; k < 4; ++k) if (b.lfoShape[k] >= 0) c.lfoShapes.setPreset (k, b.lfoShape[k]);
+        c.msegs.fromVar ({});
+        for (int k = 0; k < 8; ++k) c.setMacroName (k, b.macroNames[k]);
+    }
+    if (! keepG (tg::ML_Fx))
+    {
+        c.fxRack.fromVar ({});
+        if (b.rackSet) c.fxRack.setOrder (b.rack);
+        if (b.shaperCurve != 0) c.fxRack.setCurvePreset (b.shaperCurve);
+    }
+    c.dnaSteps.fromString (b.dnaString());
+    for (auto& d : b.dnaSteps2) c.dnaSteps.set (d.pat, d.lane, d.i, d.s);
+    c.arpStore.fromVar ({});
+    for (auto& st : b.arpPattern) c.arpStore.setStep (st.i, st.state, st.prob);
+    c.scenes.clear();
+    { tg::StepStore fresh; for (int i = 0; i < 32; ++i) c.steps.set (i, fresh.get (i)); }
+
+    // the parameters (the player's settings and whatever is kept stay as they are)
+    for (int i = 0; i < P_COUNT; ++i)
+    {
+        if (i == P_quality || i == P_keyboardOctave || kept (i)) continue;
+        auto* prm = c.params[(size_t) i];
+        const float nv = prm->convertTo0to1 (b.v[(size_t) i]);
+        if (std::abs (nv - prm->getValue()) < 1.0e-7f) continue;
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (nv); prm->endChangeGesture();
+    }
+
+    // samples: from the samples folder, or a made-up tone
+    auto loadFile = [&c] (const juce::File& f, int slot)
+    {
+        juce::MemoryBlock mb;
+        return f.existsAsFile() && f.loadFileAsData (mb) && c.loadSampleData (mb, f.getFileName(), slot);
+    };
+    auto rootFromPitch = [&c] (int slot, int rootParam)
+    {
+        const auto* w = c.getSample (slot);
+        if (w == nullptr || w->length < 2048) return;
+        const int n = std::min (w->length, (int) (2.0 * w->sampleRate));
+        juce::AudioBuffer<float> buf (1, n);
+        buf.copyFrom (0, 0, w->ch[0].data(), n);
+        const double hz = tg::capture::detectPitch (buf, w->sampleRate);
+        if (hz > 30.0 && hz < 2000.0) setPlainOn (c, rootParam, (float) juce::jlimit (24, 84, juce::roundToInt (69.0 + 12.0 * std::log2 (hz / 440.0))));
+    };
+    if (! keepG (kKeepSamples))
+    {
+        for (int s : { 0, 1, 2 }) c.clearSample (s);
+        const int rootP[3] = { P_osc4Root, P_wt2Root, P_gsRoot };
+        const int loopP[2][3] = { { P_osc4LoopMode, P_osc4Window, P_osc4Position }, { P_wt2LoopMode, P_wt2Window, P_wt2Position } };
+        for (int s = 0; s < 3; ++s)
+        {
+            const bool used = s < 2 ? res.wtUsed[s] : res.granUsed;
+            if (! used) continue;
+            const int fi = s < 2 ? res.wtFile[s] : res.granFile;
+            if (fi >= 0 && fi < sm.files.size() && loadFile (sm.files[fi], s))
+            {
+                rootFromPitch (s, rootP[s]);
+                res.notes.add ((s == 2 ? juce::String ("Granular: ") : "Wavetable " + juce::String (s + 1) + ": ") + sm.files[fi].getFileName());
+            }
+            else
+            {
+                c.loadSampleData (madeUpTone (o.seed * 7u + (uint32_t) s + 1u), "Random tone.wav", s);
+                setPlainOn (c, rootP[s], 57.0f);
+                res.notes.add ((s == 2 ? juce::String ("Granular") : "Wavetable " + juce::String (s + 1)) + ": a tone made by the generator"
+                               + (sm.folder == juce::File() ? " (no samples folder set)" : (sm.scanning ? " (the samples folder is still being scanned)" : " (nothing usable in the samples folder)")));
+            }
+            if (s < 2)
+            {
+                // scan and loop settings that suit the file's length
+                const auto* w = c.getSample (s);
+                const double secs = w != nullptr ? w->duration() : 1.0;
+                tg::randompatch::Rng rr (o.seed * 13u + (uint32_t) s);
+                if (secs > 2.0) { setPlainOn (c, loopP[s][0], 1.0f); setPlainOn (c, loopP[s][1], rr.range (0.02f, 0.15f)); }
+                else if (secs < 0.5) { setPlainOn (c, loopP[s][0], 0.0f); setPlainOn (c, loopP[s][1], 1.0f); }
+                else { setPlainOn (c, loopP[s][0], 1.0f); setPlainOn (c, loopP[s][1], rr.range (0.1f, 0.4f)); }
+            }
+        }
+    }
+    if (! keepG (kKeepBreaks))
+    {
+        for (int k = 0; k < 3; ++k) c.clearSample (breakSlot (k));
+        c.breakStore.reset();
+        static const double demoBpm[3] = { 170.0, 174.0, 165.0 };
+        static const char* demoName[3] = { "Mega Break 170 (synthesised).wav", "Mega Break 2-Step 174 (synthesised).wav", "Mega Break Rollers 165 (synthesised).wav" };
+        for (int k = 0; k < res.nBreaks; ++k)
+        {
+            const int fi = res.breakFile[k];
+            if (fi >= 0 && fi < br.files.size() && loadFile (br.files[fi], breakSlot (k))) res.notes.add ("Break " + juce::String (k + 1) + ": " + br.files[fi].getFileName());
+            else
+            {
+                const int v = res.breakDemoVar[k];
+                c.loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, demoBpm[v], v), 44100.0), demoName[v], breakSlot (k));
+                res.notes.add ("Break " + juce::String (k + 1) + ": the built-in synthesised break"
+                               + (br.folder == juce::File() ? " (no breaks folder set)" : (br.scanning ? " (the breaks folder is still being scanned)" : " (nothing usable in the breaks folder)")));
+            }
+        }
+        // the parameters again (loading switched things on and set the defaults), then the patterns
+        for (int k = 0; k < res.nBreaks; ++k)
+        {
+            const auto bp = tg::breakParams (k);
+            for (int i : { bp.sliceMode, bp.bars, bp.stretch, bp.colour, bp.level }) setPlainOn (c, i, b.v[(size_t) i]);
+        }
+        if (res.nBreaks > 0)
+        {
+            setPlainOn (c, P_bcOn, 1.0f); setPlainOn (c, P_bcActive, 1.0f);
+            c.refreshBreakAnalysis (true);
+            const int steps = b.v[(size_t) P_bsSteps] > 0.5f ? 32 : 16;
+            const bool all = res.nBreaks > 1;
+            c.breakStore.edit ([&] (tg::BreakData& d)
+            {
+                uint32_t seed = res.toolSeed;
+                for (int p = 0; p < 4; ++p)
+                {
+                    const int t = res.patTool[p];
+                    if (t == -1) continue;
+                    tg::breaktools::original (d, p, steps, 0);
+                    if (t == -3) tg::breaktools::jungle (d, p, steps, (int) (seed++ & 0x7fffffff), 0);
+                    else if (t >= 0) tg::breaktools::applyTool (t, d, p, steps, (int) (seed++ & 0x7fffffff), 0.6f, 0, all);
+                }
+                if (res.chain.isNotEmpty()) tg::BreakStore::setChain (d, res.chain);
+            });
+            c.refreshAutoFills (true);
+        }
+    }
+    return true;
+}
+
+double MegaSynthProcessor::rpMeasure (int category, double& seconds)
+{
+    auto& c = *calibrator;
+    struct Head : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+    Head head;
+    c.prepareToPlay (48000.0, 256);   // (a clean start: no tails from the last try)
+    c.setPlayHead (&head);
+    tg::resetVoiceRandom();
+    const double sr = 48000.0, bpm = 172.0, inc = bpm / 60.0 / sr;
+    juce::AudioBuffer<float> buf (2, 256);
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    // the reverbs load their impulses in the background: let them
+    if (plainOn (c, P_reverbMix) + plainOn (c, P_shimmerMix) + plainOn (c, P_reverseMix) > 0.0f)
+        for (int k = 0; k < 160; ++k)
+        {
+            head.info.setIsPlaying (false); head.info.setBpm (bpm); head.info.setPpqPosition (0.0);
+            buf.clear(); juce::MidiBuffer none; c.processBlock (buf, none);
+            if (k == 0) juce::Thread::sleep (150);   // (the impulse arrives before the second block, so the measurement is the same every time)
+        }
+    const bool chopKeys = plainOn (c, P_bcOn) > 0.5f && plainOn (c, P_bsOn) < 0.5f;
+    const auto notes = auditionPhrase (tg::randompatch::categoryName (category), chopKeys);
+    struct Ev { int at; juce::MidiMessage m; };
+    std::vector<Ev> ev;
+    for (auto& n : notes)
+    {
+        ev.push_back ({ (int) (n[0] / inc), juce::MidiMessage::noteOn (1, (int) n[2], (juce::uint8) 100) });
+        ev.push_back ({ (int) ((n[0] + n[1]) / inc), juce::MidiMessage::noteOff (1, (int) n[2]) });
+    }
+    const int total = (int) (8.0 / inc) + (int) (0.6 * sr);
+    double ppq = 0.0;
+    float peak = 0.0f;
+    for (int pos = 0; pos < total; pos += 256)
+    {
+        const int n = std::min (256, total - pos);
+        buf.setSize (2, n, false, false, true);
+        head.info.setIsPlaying (pos < (int) (8.0 / inc)); head.info.setBpm (bpm); head.info.setPpqPosition (ppq);
+        head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+        juce::MidiBuffer m;
+        for (auto& e : ev) if (e.at >= pos && e.at < pos + n) m.addEvent (e.m, e.at - pos);
+        buf.clear(); c.processBlock (buf, m);
+        ppq += n * inc;
+        for (int ch = 0; ch < 2; ++ch) peak = std::max (peak, buf.getMagnitude (ch, 0, n));
+    }
+    c.setPlayHead (nullptr);
+    seconds = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
+    return juce::Decibels::gainToDecibels (peak, -200.0f);
+}
+
+juce::String MegaSynthProcessor::rpFinish (const tg::randompatch::Options& o, const tg::randompatch::Result& res)
+{
+    using namespace tg::randompatch;
+    Snapshot before;
+    {
+        const juce::ScopedLock sl (historyLock);
+        before = captureSnapshot ("Before the random patch");
+    }
+    importBrowserPatch (calibrator->exportBrowserPatch());
+    tg::PatchMeta m;
+    m.category = categoryName (res.category);
+    m.tags.add ("random");
+    for (auto& e : res.engines)
+    {
+        juce::String t = e.toLowerCase().replace ("the ", "").replace ("a ", "").replace (" (kernel fm)", "");
+        if (t.isNotEmpty()) m.tags.addIfNotAlreadyThere (t);
+    }
+    m.author = "Random";
+    m.note = "Random patch, seed " + juce::String ((juce::int64) o.seed) + " (" + kComplexityNames[juce::jlimit (0, 2, o.complexity)] + ")";
+    setPatchName (res.name);
+    setPatchMeta (m);
+    pushHistory ("Random patch");
+    markOriginal();
+    if (o.keepCurrent)
+    {
+        const juce::ScopedLock sl (historyLock);
+        abOther = before;   // A: the sound you had; B: the new one (playing now)
+        abSel = 1;
+    }
+    juce::String r;
+    r << "Made \"" << res.name << "\" (" << m.category << ", " << kComplexityNames[juce::jlimit (0, 2, o.complexity)] << ", seed " << (juce::int64) o.seed << "): "
+      << res.engines.joinIntoString (", ") << ".";
+    if (! res.notes.isEmpty()) r << "\n" << res.notes.joinIntoString ("\n");
+    return r;
+}
+
+juce::String MegaSynthProcessor::generateRandomPatchNow (const tg::randompatch::Options& o)
+{
+    if (rpBusy.exchange (true)) return "Error: a random patch is already being made.";
+    juce::String report;
+    tg::randompatch::Result res;
+    juce::String err;
+    double peakDb = -200.0, secs = 0.0;
+    bool ok = false;
+    for (int attempt = 0; attempt < 4 && ! ok; ++attempt)
+    {
+        if (! rpPrepare (o, attempt, res, err)) { rpBusy = false; setRandomReport ("Error: " + err); return "Error: " + err; }
+        peakDb = rpMeasure (res.category, secs);
+        ok = peakDb > -70.0;
+    }
+    if (! ok) { rpBusy = false; setRandomReport ("Error: no sound came out of four tries; try another seed."); return randomReport(); }
+    // match the level: Output first; Master Volume (before the effects) for what Output can't reach
+    auto& c = *calibrator;
+    double need = -12.0 - peakDb;
+    if (need > 12.0 || need < -24.0)
+    {
+        const float mv = plainOn (c, P_masterVolume);
+        const float target = (float) juce::jlimit (0.02, 1.0, (double) mv * std::pow (10.0, (need > 12.0 ? need - 6.0 : need + 6.0) / 20.0));
+        setPlainOn (c, P_masterVolume, target);
+        peakDb = rpMeasure (res.category, secs);
+        need = -12.0 - peakDb;
+    }
+    setPlainOn (c, P_outGain, (float) (std::round (juce::jlimit (-24.0, 12.0, need) * 4.0) / 4.0));
+    report = rpFinish (o, res);
+    rpBusy = false;
+    setRandomReport (report);
+    return report;
+}
+
+void MegaSynthProcessor::startRandomPatch (const tg::randompatch::Options& o)
+{
+    if (rpBusy.exchange (true)) return;
+    setRandomReport ("Making a patch...");
+    if (rpThread != nullptr) rpThread->stopThread (4000);
+    auto alive = rpAlive;
+    rpThread = std::make_unique<LambdaThread> ([this, o, alive] (juce::Thread& th)
+    {
+        // a step on the message thread, waited for (false: the plug-in went away, or the thread was told to stop)
+        auto onMessage = [&th, alive] (std::function<void()> fn) -> bool
+        {
+            auto done = std::make_shared<juce::WaitableEvent>();
+            juce::MessageManager::callAsync ([fn, alive, done] { if (alive->load()) fn(); done->signal(); });
+            while (! done->wait (50)) if (th.threadShouldExit() || ! alive->load()) return false;
+            return alive->load();
+        };
+        tg::randompatch::Result res;
+        juce::String err;
+        bool prepared = false, ok = false;
+        double peakDb = -200.0, secs = 0.0;
+        for (int attempt = 0; attempt < 4 && ! ok; ++attempt)
+        {
+            if (! onMessage ([&] { prepared = rpPrepare (o, attempt, res, err); })) return;
+            if (! prepared) break;
+            peakDb = rpMeasure (res.category, secs);
+            ok = peakDb > -70.0;
+        }
+        if (! prepared || ! ok)
+        {
+            const juce::String msg = ! prepared ? "Error: " + err : juce::String ("Error: no sound came out of four tries; try another seed.");
+            onMessage ([this, msg] { rpBusy = false; setRandomReport (msg); });
+            return;
+        }
+        double need = -12.0 - peakDb;
+        if (need > 12.0 || need < -24.0)
+        {
+            float mv = 0.25f;
+            if (! onMessage ([&] { mv = plainOn (*calibrator, P_masterVolume);
+                                   setPlainOn (*calibrator, P_masterVolume, (float) juce::jlimit (0.02, 1.0, (double) mv * std::pow (10.0, (need > 12.0 ? need - 6.0 : need + 6.0) / 20.0))); })) return;
+            peakDb = rpMeasure (res.category, secs);
+            need = -12.0 - peakDb;
+        }
+        onMessage ([this, o, res, need]
+        {
+            setPlainOn (*calibrator, P_outGain, (float) (std::round (juce::jlimit (-24.0, 12.0, need) * 4.0) / 4.0));
+            const auto report = rpFinish (o, res);
+            rpBusy = false;
+            setRandomReport (report);
+        });
+    });
+    rpThread->startThread();
 }

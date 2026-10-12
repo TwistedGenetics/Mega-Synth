@@ -98,7 +98,7 @@ public:
     float filterAccent = 0.0f;
     float velGain = 1.0f;
 
-    float currentLevel() const { return (float) ampEnv.eval (t); }
+    float currentLevel() const { return std::max ((float) ampEnv.eval (t), opsOnlyAny ? coreTail : 0.0f); }
     float lfoPhaseShown (int k) const { return (float) lfoPhNow[k & 3]; }
     float msegShown (int k) const { return mseg[k & 1].position(); }
     float msegLevel (int k) const { return mseg[k & 1].level; }
@@ -180,6 +180,9 @@ private:
     S lCore[2];              // their levels (smoothed)
     bool coreRun[2] {};      // on, or still fading out
     double coreHz[2] {};
+    bool coreOpsOnly[2] {};  // the slot's Envelope: Operators only (it skips the amp envelope)
+    bool opsOnlyAny = false; // ... either slot, this block (the other sources then take the amp envelope before the filter)
+    float coreTail = 0.0f;   // the loudest heard Core operator envelope in an Operators-only slot (keeps the voice alive)
     // Break-Reactive mode: Osc 1-3 and the sub's old phases, faded out just after a phase reset
     double rxOldPh[4] {};
     int rxXf[4] {};

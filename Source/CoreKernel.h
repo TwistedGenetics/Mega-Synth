@@ -260,6 +260,14 @@ public:
     }
 
     float envelope (int k) const { return env[k]; }
+    // the loudest envelope among the operators that are heard (0 once they have all finished)
+    float heardLevel() const
+    {
+        if (! started) return 0.0f;
+        float m = 0.0f;
+        for (int q = 0; q < nAct; ++q) { const int k = act[q]; if (outTarget[k] > 0.0f || outG[k] > 0.0f) m = std::max (m, env[k] * std::max (gain[k], gainTarget[k])); }
+        return m;
+    }
     bool stereo() const { return isStereo; }
     int oversampling() const { return os; }
     int activeOperators() const { return nAct; }

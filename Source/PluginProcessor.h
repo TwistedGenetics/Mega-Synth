@@ -11,6 +11,7 @@
 #include "Presets/Factory.h"
 #include "Seq/DnaGenerator.h"
 #include "Seq/Arp.h"
+#include "Lab/RandomPatch.h"
 
 class MegaSynthProcessor : public juce::AudioProcessor,
                            private juce::Timer,
@@ -71,6 +72,12 @@ public:
     bool addChopMarker (int brk, double frame, bool snap = true);   // message thread
     bool undoLastChop();
     void applyChopTaps();                            // taps from MIDI (audio thread) into markers (message thread)
+    // Break Sequencer Key Entry: the slice keys played since the last call (oldest first; ones older than
+    // half a second are dropped). Message thread.
+    struct KeyEntry { int brk = 0, slice = 0; float vel = 0.8f; bool sustain = false; };
+    std::vector<KeyEntry> takeKeyEntries();
+    // put a played slice on a step of a pattern (layer: as the step's Layer hit); one undo step
+    void applyKeyEntry (int pattern, int step, const KeyEntry& k, bool layer);
     double snapChopFrame (int brk, double frame);
     double snapMarkerFrame (int brk, double frame);  // dragging a marker: Marker Snap
     static constexpr double kMarkerGap = 64.0;       // samples a marker keeps from its neighbours
@@ -141,6 +148,26 @@ public:
     juce::StringArray getMutationHistory() const { const juce::ScopedLock sl (nameLock); return mutHistory; }
     // ---- Genetic Lab (message thread)
     tg::GeneticLab lab;
+
+    // ---- the random patch generator (Lab > Random Patch, and Random in the header)
+    tg::randompatch::Options randomOptions;                // the page's settings (saved with the project, not in patches)
+    // the sample folders it draws from: 0 = breaks, 1 = samples (wavetables and the Granular Synth). An app setting,
+    // kept in the patch folder (random_folders.json); each folder is scanned in the background and its list cached.
+    static juce::File getRandomFolder (int which);
+    static void setRandomFolder (int which, const juce::File&);
+    struct FolderList { juce::File folder; juce::Array<juce::File> files; bool scanning = false, scanned = false, capped = false; };
+    static FolderList randomFolderList (int which);
+    static void rescanRandomFolder (int which, bool wait = false);
+    static constexpr int kRandomScanCap = 10000;
+    // make a patch: synchronously (tests), or in the background (the page and the header); the report says what
+    // was made (or starts "Error:")
+    juce::String generateRandomPatchNow (const tg::randompatch::Options&);
+    void startRandomPatch (const tg::randompatch::Options&);
+    bool randomBusy() const { return rpBusy.load(); }
+    juce::String randomReport() const { const juce::ScopedLock sl (rpLock); return rpReport; }
+    std::atomic<int> randomReportVersion { 0 };
+    // the phrase a patch of a category is measured on (and auditioned with): { beat, length in beats, note } at 172 BPM
+    static std::vector<std::array<double, 3>> auditionPhrase (const juce::String& category, bool breakKeys);
     float labVariation = 0.1f;
     void labSetParent (int which);                 // 0 = A, 1 = B: the current sound becomes that parent
     void labSetParentFromId (int which, const juce::String& id);
@@ -234,7 +261,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 26;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots
+    static constexpr int kStateVersion = 27;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -276,6 +303,18 @@ private:
     void setGranDefaultsForOldPatch();      // ... and from before the Granular Synth
     void setBreakDefaultsForOldPatch();     // ... and from before the Break Chopper
     void setBreak3DefaultsForOldPatch();    // ... and from before three breaks
+    // the random patch generator's working parts (see generateRandomPatchNow)
+    std::unique_ptr<MegaSynthProcessor> calibrator;   // a second synth, off the audio path, to measure a new patch's level
+    std::unique_ptr<juce::Thread> rpThread;
+    std::atomic<bool> rpBusy { false };
+    std::shared_ptr<std::atomic<bool>> rpAlive = std::make_shared<std::atomic<bool>> (true);
+    juce::CriticalSection rpLock;
+    juce::String rpReport;
+    bool rpPrepare (const tg::randompatch::Options&, int attempt, tg::randompatch::Result&, juce::String& error);   // message thread
+    double rpMeasure (int category, double& seconds);                                                            // the calibrator only (any thread)
+    juce::String rpFinish (const tg::randompatch::Options&, const tg::randompatch::Result&);                     // message thread
+    void setRandomReport (const juce::String& r) { { const juce::ScopedLock sl (rpLock); rpReport = r; } randomReportVersion.fetch_add (1); }
+    void setV27DefaultsForOldPatch();       // ... and from before the Core envelope mode / key entry
     void setCoreDefaultsForOldPatch();      // ... and from before the Core oscillator slots
     void setReeseDefaultsForOldPatch();     // ... and from before the Reese engine
     void setReactDefaultsForOldPatch();     // ... and from before Break-Reactive mode
@@ -343,6 +382,8 @@ private:
     uint32_t lastRackVersion = 0, lastLfoShapeVersion = 0, lastArpVersion = 0, lastMsegVersion = 0, lastBreakVersion = 0;
     juce::String lastBreakKey[3];
     juce::AbstractFifo chopFifo { 64 };
+    juce::AbstractFifo keyEntryFifo { 64 };
+    struct KeyEntryRaw { int brk = 0, slice = 0; float vel = 0.8f; bool sustain = false; uint32_t ms = 0; } keyEntryBuf[64];
     double chopFrames[64] {}; int chopBrks[64] {};
     std::vector<std::pair<int, float>> chopHistory;   // the markers chop mode added, newest last
     const tg::WaveSample* onsetsFor[3] {};

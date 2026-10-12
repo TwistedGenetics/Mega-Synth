@@ -59,7 +59,7 @@ void Voice::prepare (double sampleRate)
     active = false;
 }
 
-static uint32_t voiceRandState = 0x9E3779B9u;
+static thread_local uint32_t voiceRandState = 0x9E3779B9u;   // (per thread: the random patch generator measures on its own thread)
 void resetVoiceRandom() { voiceRandState = 0x9E3779B9u; }   // tests: compare renders from the same random start
 static float voiceRand01()
 {
@@ -680,6 +680,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
         if (first) lCore[c].v = lCore[c].target; else lCore[c].step (c10);
         if (lCore[c].target <= 0.0f && lCore[c].v < 1.0e-5f) lCore[c].v = 0.0f;
         coreRun[c] = lCore[c].target > 0.0f || (lCore[c].v > 0.0f && core[c].isStarted());
+        coreOpsOnly[c] = coreRun[c] && s.i (coreEnvModeParam (c)) == 1;
         if (! coreRun[c]) continue;
         CoreSettings& cs = coreSet[c];
         static const int uniN[6] = { 1, 2, 3, 4, 6, 8 };
@@ -710,6 +711,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
             if (released) core[c].release();
         }
     }
+    opsOnlyAny = coreOpsOnly[0] || coreOpsOnly[1];
 
     // --- mixer levels
     l1.target   = hardMuted (s.f (P_osc1Gain), mod[MT_osc1Gain], 2);
@@ -1095,6 +1097,11 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         // with feedback the bank can sustain itself: after the note ends it gets 3x its decay, then fades out
         const double resLimit = ampEnv.releaseTime >= 0.0 ? ampEnv.releaseTime + ampEnv.r + 3.0 * rsp.decay + 0.5 : 1.0e9;
 
+        // Core slots set to "Operators only" skip the amp envelope: the other sources take it here, before
+        // the filter, and the Core's own operator envelopes shape it (the amp stage below is then left out)
+        float coreBL[kCtrl], coreBR[kCtrl], ampPre[kCtrl];
+        if (opsOnlyAny)
+            for (int i = 0; i < n; ++i) { coreBL[i] = coreBR[i] = 0.0f; ampPre[i] = (float) ampEnv.eval (t + i * isr); }
         auto sampleLoop = [&] (auto arTag)
         {
         using ARType = decltype (arTag);   // a type, not a constexpr local, so nested lambdas see it on every compiler
@@ -1401,7 +1408,8 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 aPrev[4 + c] = 0.5f * (a + b);
                 if (mc.meters) mxPeak[kMxCoreStrip + c] = std::max (mxPeak[kMxCoreStrip + c], std::max (std::abs (a), std::abs (b)));
                 if (mxActive) { a *= mxL[kMxCoreStrip + c]; b *= mxR[kMxCoreStrip + c]; }
-                mL += a; mR += b;
+                if (coreOpsOnly[c]) { coreBL[i] += a; coreBR[i] += b; }
+                else { mL += a; mR += b; }
             }
             if (subSplit)
             {
@@ -1488,8 +1496,16 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             const float rmix = ! ARType::value ? ringMix.v : clampv (ringMix.v + ad[AD_Ring], 0.0f, 1.0f);
             if (mxActive) { rL *= mxL[kMxSources - 1]; rR *= mxR[kMxSources - 1]; }
             if (mc.meters) mxPeak[kMxSources - 1] = std::max (mxPeak[kMxSources - 1], std::max (std::abs (rL), std::abs (rR)) * rmix);
-            xb[0][i] = mL * dry.v + rL * rmix;
-            xb[1][i] = mR * dry.v + rR * rmix;
+            if (opsOnlyAny)
+            {
+                xb[0][i] = (mL * dry.v + rL * rmix) * ampPre[i] + coreBL[i] * dry.v;
+                xb[1][i] = (mR * dry.v + rR * rmix) * ampPre[i] + coreBR[i] * dry.v;
+            }
+            else
+            {
+                xb[0][i] = mL * dry.v + rL * rmix;
+                xb[1][i] = mR * dry.v + rR * rmix;
+            }
         }
         };
         if (nar > 0 || arFmOn) sampleLoop (std::true_type {}); else sampleLoop (std::false_type {});
@@ -1523,10 +1539,14 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 yL = nL; yR = nR;
             }
 
-            const float g = srcMute.v * (float) ampEnv.eval (t) * vGain.v;
+            const float ae = (float) ampEnv.eval (t);
+            const float g = srcMute.v * (opsOnlyAny ? 1.0f : ae) * vGain.v;
             float oL = yL * g, oR = yR * g;
             if (subSplit)
-                for (int r = 0; r < 2; ++r) { subOut[r][0][done + i] += sdb[r][0][i] * g; subOut[r][1][done + i] += sdb[r][1][i] * g; }
+            {
+                const float gs = srcMute.v * ae * vGain.v;
+                for (int r = 0; r < 2; ++r) { subOut[r][0][done + i] += sdb[r][0][i] * gs; subOut[r][1][done + i] += sdb[r][1][i] * gs; }
+            }
             if (resOn)
             {
                 float rl, rr;
@@ -1553,7 +1573,10 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         advanceLfos (ps, n);
 
         resoRinging = resOn && resPeak > 1.0e-5f;
-        if (ampEnv.finished (t) && (! resoRinging || t > resLimit)) active = false;
+        coreTail = 0.0f;
+        if (opsOnlyAny)
+            for (int c = 0; c < 2; ++c) if (coreOpsOnly[c]) coreTail = std::max (coreTail, core[c].heardLevel() * lCore[c].v);
+        if (ampEnv.finished (t) && (! resoRinging || t > resLimit) && ! (opsOnlyAny && coreTail > 1.0e-4f)) active = false;
     }
 }
 

@@ -344,7 +344,7 @@ public:
 
 // A top-level tab with sub-tabs: a strip of segments at the top, one sub-page shown below it
 class Segmented;
-class ChannelStrip; class EngineChip; class LevelMeter;   // the Mixer console (UI/MixerConsole.h)
+class ChannelStrip; class EngineChip; class LevelMeter; class BreakStepGrid;   // the Mixer console (UI/MixerConsole.h)
 class GroupPage : public juce::Component
 {
 public:
@@ -399,6 +399,7 @@ private:
     void updateMixerView();
     tgui::Page* pageFor (const juce::String& name) const { auto it = pageIndex.find (name); return it != pageIndex.end() ? it->second.page : nullptr; }
     void setStatus (const juce::String&);
+    void breakKeyEntry (tgui::BreakStepGrid& grid);   // Break Sequencer Key Entry (from the page's ticker)
     void shiftOctave (int delta);
     void refreshPatchList();
     void loadPatch (const juce::File&);
@@ -415,7 +416,8 @@ private:
     juce::TextButton undoBtn { "Undo" }, redoBtn { "Redo" }, originalBtn { "Original" };
     std::unique_ptr<juce::TooltipWindow> tooltips;
     juce::TextButton copyBtn { "Copy Patch" },
-                     pasteBtn { "Paste Patch" }, initBtn { "Init" }, octDown { "Oct -" }, octUp { "Oct +" };
+                     pasteBtn { "Paste Patch" }, initBtn { "Init" }, octDown { "Oct -" }, octUp { "Oct +" }, randomBtn { "Random" };
+    int lastRandomReport = 0;
     juce::OwnedArray<tgui::Knob> headerKnobs;
     std::unique_ptr<tgui::Choice> qualityChoice;
     juce::ComboBox patchBox;
@@ -430,6 +432,9 @@ public:
     SaveInfo defaultSaveInfo() const;            // what the dialog offers
     void saveWithInfo (const SaveInfo&, bool saveAs);
     static juce::StringArray authorsInPatches();   // (for the Save dialog's author list)
+    void breakKeyEntryForTests();   // (tests) run the Break Sequencer page's Key Entry now
+    int breakSelectedStepForTests() const;
+    void setBreakSelectedStepForTests (int step);
     tgui::PatchBrowser* browserForTests() { return browser.get(); }
     void showBrowserForTests (bool b) { showBrowser (b); }
 private:

@@ -165,6 +165,10 @@ inline const char* const kCoreRetrigKeys[]   = { "reset","free","random" };
 inline const char* const kCoreRetrigLabels[] = { "Reset","Free","Random" };
 inline const char* const kCoreWaveKeys[]     = { "sine","halfsine","abssine","quartersine","altsine","camelsine","softsquare","softsaw" };
 inline const char* const kCoreWaveLabels[]   = { "Sine","Half Sine","Abs Sine","Quarter Sine","Alt Sine","Camel Sine","Soft Square","Soft Saw" };
+inline const char* const kCoreEnvModeKeys[]   = { "amp","ops" };
+inline const char* const kCoreEnvModeLabels[] = { "Amp + Operators","Operators only" };
+inline const char* const kBsAdvanceKeys[]   = { "0","1","2","4" };
+inline const char* const kBsAdvanceLabels[] = { "No advance","Advance 1","Advance 2","Advance 4" };
 inline const char* const kMfModelKeys[]   = { "clean","lp","sallenkey","ladder","steiner","svf","ota","polivoks","swcap","acid","ms20","oberheim","sem","tb303","moogfat","arpodyssey","cs15","sh2" };
 inline const char* const kMfModelLabels[] = { "Clean (SVF)","Standard LP","Sallen-Key LP","Ladder","Steiner-Parker","State Variable","Discrete OTA","Polivoks","Switched Capacitor","Acid Filter Approx","MS-20","Oberheim","SEM","TB-303","Minimoog - Fat Cat","Arp Odyssey","CS-15","SH-2" };
 inline const char* const kMfSlopeKeys[]   = { "12","24" };
@@ -403,6 +407,8 @@ inline const ChoiceList kListCoreEngine = TG_LIST(kCoreEngine);
 inline const ChoiceList kListCoreUni    = TG_LIST(kCoreUni);
 inline const ChoiceList kListCoreRetrig = TG_LIST(kCoreRetrig);
 inline const ChoiceList kListCoreWave   = TG_LIST(kCoreWave);
+inline const ChoiceList kListCoreEnvMode = TG_LIST(kCoreEnvMode);
+inline const ChoiceList kListBsAdvance  = TG_LIST(kBsAdvance);
 inline const ChoiceList kListRxListen   = TG_LIST(kRxListen);
 inline const ChoiceList kListRxBreak    = TG_LIST(kRxBreak);
 inline const ChoiceList kListPfAkaiMode = TG_LIST(kPfAkaiMode);
@@ -1509,7 +1515,11 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(mxCoreASolo, "Core A Solo", false) \
     F(mxCoreBPan, "Core B Pan", -1, 1, 0, 0.01, 0) \
     B(mxCoreBMute, "Core B Mute", false) \
-    B(mxCoreBSolo, "Core B Solo", false)
+    B(mxCoreBSolo, "Core B Solo", false) \
+    C(cAEnvMode, "Core A Envelope", kListCoreEnvMode, 0) \
+    C(cBEnvMode, "Core B Envelope", kListCoreEnvMode, 0) \
+    B(bsKeyEntry, "Break Seq Key Entry", false) \
+    C(bsAdvance, "Break Seq Advance", kListBsAdvance, 0)
 
 enum ParamIndex
 {
@@ -1548,6 +1558,7 @@ constexpr int kMxCoreStrip = kMxSources + 3;   // Core A; Core B is the next
 constexpr int kCoreSlotHead = 11, kCoreOpStride = 21, kCoreOps = 6, kCoreSlotStride = kCoreSlotHead + kCoreOps * kCoreOpStride;
 enum CoreSlotParam { CS_Engine, CS_Level, CS_Oct, CS_Semi, CS_Fine, CS_Uni, CS_Detune, CS_Spread, CS_Retrig, CS_Bright, CS_EnvSpd };
 enum CoreOpParam { CO_Wave, CO_Ratio, CO_Fixed, CO_Hz, CO_Fine, CO_Level, CO_Vel, CO_Key, CO_Dly, CO_Att, CO_Hold, CO_Dec, CO_Sus, CO_Rel, CO_M1, CO_Out = CO_M1 + 6 };
+inline constexpr int coreEnvModeParam (int slot) { return slot == 0 ? P_cAEnvMode : P_cBEnvMode; }
 inline constexpr int coreParam (int slot, int which) { return P_cAEngine + slot * kCoreSlotStride + which; }
 inline constexpr int coreOpParam (int slot, int op, int which) { return P_cAEngine + slot * kCoreSlotStride + kCoreSlotHead + op * kCoreOpStride + which; }
 static_assert (coreParam (1, 0) == P_cBEngine && coreOpParam (0, 5, CO_Out) == P_cA6Out && coreOpParam (1, 5, CO_Out) == P_cB6Out && P_mxCoreAPan == P_cB6Out + 1, "Core parameter layout");

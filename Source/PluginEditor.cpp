@@ -1303,7 +1303,7 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
                                    "Spectral FFT up to 1024. Normal: as designed. High: 4x oversampled Wave Mutation.");
     content.addAndMakeVisible (*qualityChoice);
 
-    for (auto* b : { &copyBtn, &pasteBtn, &initBtn, &octDown, &octUp, &undoBtn, &redoBtn, &originalBtn }) content.addAndMakeVisible (*b);
+    for (auto* b : { &copyBtn, &pasteBtn, &initBtn, &randomBtn, &octDown, &octUp, &undoBtn, &redoBtn, &originalBtn }) content.addAndMakeVisible (*b);
     undoBtn.onClick = [this] { proc.undo(); setStatus ("Undo"); };
     redoBtn.onClick = [this] { proc.redo(); setStatus ("Redo"); };
     originalBtn.onClick = [this] { proc.returnToOriginal(); setStatus ("Returned to the original patch (Undo to go back)"); };
@@ -1365,6 +1365,14 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
         setStatus (err.isEmpty() ? "Patch loaded from clipboard" : err);
     };
     initBtn.onClick = [this] { showInitMenu(); };
+    randomBtn.setTooltip ("Random: a new patch from a new seed, with the settings on Lab > Random Patch (Undo goes back)");
+    randomBtn.onClick = [this]
+    {
+        if (proc.randomBusy()) return;
+        proc.randomOptions.seed = (uint32_t) juce::Random::getSystemRandom().nextInt (1000000000) + 1u;
+        proc.startRandomPatch (proc.randomOptions);
+        setStatus ("Making a random patch (seed " + juce::String ((juce::int64) proc.randomOptions.seed) + ")...");
+    };
     initBtn.setTooltip ("Init: load a clean starting patch, save the current patch as your own Init, or reset it");
     octDown.onClick = [this] { shiftOctave (-1); };
     octUp.onClick = [this] { shiftOctave (1); };
@@ -1558,6 +1566,23 @@ juce::String MegaSynthEditor::currentPageName() const
     return tabs.getTabNames()[t];
 }
 
+namespace
+{
+    // a drop-down for a choice parameter with no caption (for a section's title row)
+    struct BareChoice : juce::Component
+    {
+        BareChoice (MegaSynthProcessor& p, int idx)
+        {
+            if (auto* c = dynamic_cast<juce::AudioParameterChoice*> (p.param (idx))) box.addItemList (c->choices, 1);
+            addAndMakeVisible (box);
+            att = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, kParamIds[idx], tagParam (box, idx));
+        }
+        void resized() override { box.setBounds (getLocalBounds()); }
+        juce::ComboBox box;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> att;
+    };
+}
+
 void MegaSynthEditor::buildPages()
 {
     // The tabs, in signal-flow order. A tab with sub-tabs is a GroupPage; every page is found by its name.
@@ -1570,7 +1595,7 @@ void MegaSynthEditor::buildPages()
         { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Space", "Dirt", "Motion", "Rack" }, col::fx },
         { "Modulation", { "LFOs", "Mod Matrix", "Assignments", "Macros & Scenes", "Cell Instability" }, col::mod },
         { "Sequencers", { "Step Sequencer", "Arp / Chord", "DNA Sequencer", "Break Sequencer" }, col::seq },
-        { "Lab", { "Mutate / Lab", "Capture" }, col::wavetable } };
+        { "Lab", { "Mutate / Lab", "Capture", "Random Patch" }, col::wavetable } };
     for (auto& t : layout)
     {
         const int tabIndex = tabs.getNumTabs();
@@ -2551,6 +2576,15 @@ void MegaSynthEditor::buildPages()
         resetBtn->onClick = [this, slot] { proc.resetCoreSlot (slot); setStatus (juce::String ("Core ") + (slot ? "B" : "A") + " reset"); };
 
         auto* ops = sec (page, "Operators", c);
+        auto* envMode = new BareChoice (proc, tg::coreEnvModeParam (slot));
+        envMode->box.setTooltip ("Envelope. Amp + Operators: the Core goes through the amp envelope like the other oscillators, so a Release "
+                                 "longer than the Amp Release is cut there. Operators only: the operators' own envelopes shape it, Release "
+                                 "included, and the note rings on until they finish.");
+        ops->addTitleChip (envMode, 170);
+        auto* relHint = new juce::Label();
+        relHint->setFont (juce::Font (juce::FontOptions (11.5f)));
+        relHint->setColour (juce::Label::textColourId, juce::Colour (0xffffb347));
+        ops->addTitleChip (relHint, 560);
         ops->addInfo ("One row per operator. Ratio: times the note (Fixed: a frequency of its own, for clangs and noise). Level: how loud it "
                       "is heard, and how hard it modulates. Vel: how much velocity changes the level. Key: louder up the keyboard (+) "
                       "or quieter (-). Out: how much of it you hear (0: it only modulates). The envelope is Delay, Attack, Hold, "
@@ -2584,10 +2618,22 @@ void MegaSynthEditor::buildPages()
                 knob (tg::CO_M1 + j, j == k ? juce::String ("FB") : juce::String (juce::CharPointer_UTF8 ("\xe2\x86\x92")) + juce::String (j + 1), 40);
         }
         auto* ticker = page->own (new StoreTicker());
-        ticker->tick = [this, slot, ratioKnobs, hzKnobs, ops, top]
+        ticker->tick = [this, slot, ratioKnobs, hzKnobs, ops, top, relHint]
         {
             auto plain = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
             const bool on = plain (tg::coreParam (slot, tg::CS_Engine)) > 0.5f;
+            {
+                // a heard operator's Release longer than the Amp Release is cut there (in Amp + Operators)
+                const float ampR = plain (tg::P_ampR), spd = std::max (0.05f, plain (tg::coreParam (slot, tg::CS_EnvSpd)));
+                float longest = 0.0f;
+                for (int k = 0; k < 6; ++k)
+                    if (plain (tg::coreOpParam (slot, k, tg::CO_Level)) > 0.0f && plain (tg::coreOpParam (slot, k, tg::CO_Out)) > 0.0f)
+                        longest = std::max (longest, plain (tg::coreOpParam (slot, k, tg::CO_Rel)) / spd);
+                const bool cut = on && plain (tg::coreEnvModeParam (slot)) < 0.5f && longest > ampR + 0.01f;
+                const juce::String txt = cut ? "Release " + juce::String (longest, 2) + " s is cut at the Amp Release (" + juce::String (ampR, 2)
+                                               + " s): choose Operators only to hear it" : juce::String();
+                if (relHint->getText() != txt) relHint->setText (txt, juce::dontSendNotification);
+            }
             ops->setAlpha (on ? 1.0f : 0.55f);
             for (int k = 0; k < 6; ++k)
             {
@@ -2788,6 +2834,16 @@ void MegaSynthEditor::buildPages()
         tools[3]->setTooltip ("A jungle edit of the original: snare ghosts and swaps, a kick double, a reversed hit, a cut-up and a snare roll (each press a new one)");
 
         auto* stepSec = sec (page, "Step", col::seq);
+        {
+            auto* ke = new ParamToggle (proc, P_bsKeyEntry, "Key Entry", col::seq);
+            ke->setTooltip ("Key Entry: a slice key (keyboard, pads or the on-screen keys) puts that slice on the selected step, switched on, "
+                            "with the key's velocity and pinned to its break, and you still hear it. Hold Shift (or the sustain pedal) to add it "
+                            "as the step's Layer hit instead. Advance moves the selection on after each key.");
+            stepSec->addTitleChip (ke, 100);
+            auto* adv = new BareChoice (proc, P_bsAdvance);
+            adv->box.setTooltip ("Advance: after each Key Entry, move the selection on by this many steps (wrapping round the pattern)");
+            stepSec->addTitleChip (adv, 112);
+        }
         auto& store = proc.breakStore;
         auto stepGet = [&store, grid] (auto fn) { return [&store, grid, fn] { const auto d = store.get(); return fn (d.step[grid->editedPattern()][juce::jlimit (0, 31, grid->selected)]); }; };
         auto stepSet = [&store, grid] (auto fn) { return [&store, grid, fn] (auto v) { store.edit ([&] (tg::BreakData& d) { fn (d.step[grid->editedPattern()][juce::jlimit (0, 31, grid->selected)], v); }); }; };
@@ -2879,6 +2935,7 @@ void MegaSynthEditor::buildPages()
         knobs.add (fSrc); knobs.add (fBrk);
         ticker->tick = [this, grid, knobs, toggles, chainEd, stepName]
         {
+            breakKeyEntry (*grid);
             grid->refresh();
             for (auto* k : knobs) k->refresh();
             for (auto* t : toggles) t->refresh();
@@ -2895,7 +2952,7 @@ void MegaSynthEditor::buildPages()
             top->setBounds (g, g, W - 2 * g, 210);
             grid->setBounds (g + 4, g + 216, W - 2 * g - 8, 140);
             stepSec->setBounds (g, g + 362, 772, 226);
-            stepName->setBounds (g + 70, g + 368, 300, 20);
+            stepName->setBounds (g + 290, g + 368, 300, 20);
             fillSec->setBounds (g + 780, g + 362, W - 2 * g - 780, 226);
         };
     }
@@ -3167,6 +3224,149 @@ void MegaSynthEditor::buildPages()
     }
 
     // ---------------------------------------------------------------- Capture / Resample
+    // ---------------------------------------------------------------- Lab > Random Patch
+    {
+        using namespace tg::randompatch;
+        auto* page = addPage ("Random Patch");
+        const auto c = col::wavetable;
+        auto* gen = sec (page, "Random Patch", c);
+        gen->addInfo ("A whole new patch from a seed: a category steers what it uses and how it sounds, Complexity how much it switches on. "
+                      "Every patch is in tune, levelled to about -12 dBFS on a short phrase, and the basses keep everything under 120 Hz in the "
+                      "middle. Generate picks a new seed; < and > step through seeds; type a seed to make that one again (the same seed, settings "
+                      "and folders always give the same patch). It gets a name, its category, the tag \"random\", author Random and its seed in "
+                      "the note, and named macros. Undo goes back; Keep current puts it in B with your sound in A. Random in the header does the same "
+                      "with these settings.");
+        auto* catBox = new juce::ComboBox();
+        catBox->addItem ("Any category", 1);
+        for (int k = 0; k < kNumCategories; ++k) catBox->addItem (categoryName (k), k + 2);
+        auto* cxBox = new juce::ComboBox();
+        for (int k = 0; k < 3; ++k) cxBox->addItem (kComplexityNames[k], k + 1);
+        auto* seedEd = new juce::TextEditor();
+        seedEd->setInputRestrictions (10, "0123456789");
+        seedEd->setTooltip ("The seed: type one and press Enter to make that patch");
+        auto* prevB = new juce::TextButton ("<"), *nextB = new juce::TextButton (">");
+        auto* genB = new juce::TextButton ("Generate");
+        genB->setColour (juce::TextButton::buttonColourId, c.withAlpha (0.35f));
+        auto* keepCur = new juce::ToggleButton ("Keep current (A / B)");
+        keepCur->setTooltip ("Put the new patch in B and keep the sound you have now in A, to compare");
+        auto* lblCat = new juce::Label ({}, "Category"), *lblCx = new juce::Label ({}, "Complexity"), *lblSeed = new juce::Label ({}, "Seed");
+        for (auto* l : { lblCat, lblCx, lblSeed }) { l->setColour (juce::Label::textColourId, col::muted); l->setFont (juce::Font (juce::FontOptions (11.5f))); }
+        gen->add (lblCat, 64, 24); gen->add (catBox, 170, 26); gen->add (lblCx, 76, 24); gen->add (cxBox, 110, 26);
+        gen->newRow();
+        gen->add (lblSeed, 64, 24); gen->add (seedEd, 110, 26); gen->add (prevB, 30, 26); gen->add (nextB, 30, 26); gen->add (genB, 120, 30); gen->add (keepCur, 170, 26);
+        auto* report = page->own (new juce::Label());
+        report->setColour (juce::Label::textColourId, col::text);
+        report->setFont (juce::Font (juce::FontOptions (12.0f)));
+        report->setJustificationType (juce::Justification::topLeft);
+        report->setMinimumHorizontalScale (1.0f);
+
+        auto* useS = sec (page, "Use", c);
+        useS->addInfo ("What the generator may use. No oscillators keeps Osc 1-3 and the Sub off, so the sound has to come from the other engines. "
+                       "Break Chopper and Sequencers are off to start with.");
+        juce::Array<juce::ToggleButton*> useT;
+        auto* noOscT = new juce::ToggleButton ("No oscillators");
+        useS->add (noOscT, 132, 24);
+        for (int u = 0; u < U_COUNT; ++u) { auto* tb = new juce::ToggleButton (kUseNames[u]); useT.add (tb); useS->add (tb, 132, 24); }
+
+        auto* keepS = sec (page, "Keep from the current patch", c);
+        keepS->addInfo ("Ticked groups stay exactly as they are in the patch you have now (the same groups as Mutate's locks, plus your samples and "
+                        "breaks); the rest is new. For example, keep your filter and effects and randomise only the sources.");
+        juce::Array<juce::ToggleButton*> keepT;
+        for (int k = 0; k < kKeepCount; ++k) { auto* tb = new juce::ToggleButton (keepName (k)); keepT.add (tb); keepS->add (tb, 132, 24); }
+
+        auto* folS = sec (page, "Sample folders", c);
+        folS->addInfo ("Breaks: a folder of drum breaks (WAV, AIFF, FLAC or MP3, 1-30 s; subfolders too). Samples: a folder for the wavetables and "
+                       "the Granular Synth. A patch picks from them at random (by its seed) and the files it uses are saved inside it. With no "
+                       "folder, the breaks are the built-in synthesised ones and the wavetables play a tone the generator makes. Each folder is "
+                       "scanned in the background (up to 10,000 files). The folders are a setting of the app, not of a patch.");
+        juce::Label* folLabel[2]; juce::Label* folCount[2];
+        for (int w = 0; w < 2; ++w)
+        {
+            auto* name = new juce::Label ({}, w == 0 ? "Breaks" : "Samples");
+            name->setFont (juce::Font (juce::FontOptions (12.5f, juce::Font::bold)));
+            name->setColour (juce::Label::textColourId, col::text);
+            folLabel[w] = new juce::Label(); folLabel[w]->setColour (juce::Label::textColourId, col::muted); folLabel[w]->setFont (juce::Font (juce::FontOptions (11.5f)));
+            folLabel[w]->setMinimumHorizontalScale (0.6f);
+            folCount[w] = new juce::Label(); folCount[w]->setColour (juce::Label::textColourId, col::text); folCount[w]->setFont (juce::Font (juce::FontOptions (11.5f)));
+            auto* choose = new juce::TextButton ("Choose...");
+            auto* clear = new juce::TextButton ("Clear");
+            auto* rescan = new juce::TextButton ("Rescan");
+            choose->onClick = [this, w]
+            {
+                chooser = std::make_unique<juce::FileChooser> (w == 0 ? "Choose a folder of breaks" : "Choose a folder of samples", MegaSynthProcessor::getRandomFolder (w));
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                                      [w] (const juce::FileChooser& fc) { const auto f = fc.getResult(); if (f.isDirectory()) MegaSynthProcessor::setRandomFolder (w, f); });
+            };
+            clear->onClick = [w] { MegaSynthProcessor::setRandomFolder (w, juce::File()); };
+            rescan->onClick = [w] { MegaSynthProcessor::rescanRandomFolder (w); };
+            folS->add (name, 70, 24); folS->add (choose, 84, 26); folS->add (clear, 60, 26); folS->add (rescan, 70, 26); folS->add (folCount[w], 200, 24);
+            folS->newRow();
+            folS->add (folLabel[w], 500, 20);
+            folS->newRow();
+        }
+
+        // the settings live in the processor (saved with the project)
+        auto pull = [this, catBox, cxBox, seedEd, keepCur, noOscT, useT, keepT]
+        {
+            const auto& o = proc.randomOptions;
+            catBox->setSelectedId (o.category + 2, juce::dontSendNotification);
+            cxBox->setSelectedId (o.complexity + 1, juce::dontSendNotification);
+            if (! seedEd->hasKeyboardFocus (true)) seedEd->setText (juce::String ((juce::int64) o.seed), false);
+            keepCur->setToggleState (o.keepCurrent, juce::dontSendNotification);
+            noOscT->setToggleState (o.noOsc, juce::dontSendNotification);
+            for (int u = 0; u < U_COUNT; ++u) useT[u]->setToggleState (o.use[u], juce::dontSendNotification);
+            for (int k = 0; k < kKeepCount; ++k) keepT[k]->setToggleState (((o.keepMask >> k) & 1u) != 0, juce::dontSendNotification);
+        };
+        catBox->onChange = [this, catBox] { proc.randomOptions.category = catBox->getSelectedId() - 2; };
+        cxBox->onChange = [this, cxBox] { proc.randomOptions.complexity = cxBox->getSelectedId() - 1; };
+        keepCur->onClick = [this, keepCur] { proc.randomOptions.keepCurrent = keepCur->getToggleState(); };
+        noOscT->onClick = [this, noOscT] { proc.randomOptions.noOsc = noOscT->getToggleState(); };
+        for (int u = 0; u < U_COUNT; ++u) useT[u]->onClick = [this, u, useT] { proc.randomOptions.use[u] = useT[u]->getToggleState(); };
+        for (int k = 0; k < kKeepCount; ++k)
+            keepT[k]->onClick = [this, k, keepT] { auto& m = proc.randomOptions.keepMask; m = keepT[k]->getToggleState() ? (m | (1u << k)) : (m & ~(1u << k)); };
+        auto go = [this] (uint32_t seed)
+        {
+            if (proc.randomBusy()) return;
+            proc.randomOptions.seed = seed;
+            proc.startRandomPatch (proc.randomOptions);
+            setStatus ("Making a random patch (seed " + juce::String ((juce::int64) seed) + ")...");
+        };
+        genB->onClick = [go] { go ((uint32_t) juce::Random::getSystemRandom().nextInt (1000000000) + 1u); };
+        prevB->onClick = [this, go] { go (std::max (1u, proc.randomOptions.seed) - 1u); };
+        nextB->onClick = [this, go] { go (proc.randomOptions.seed + 1u); };
+        seedEd->onReturnKey = [go, seedEd] { go ((uint32_t) seedEd->getText().getLargeIntValue()); };
+        pull();
+        auto* ticker = page->own (new StoreTicker());
+        ticker->tick = [this, pull, report, genB, prevB, nextB, folLabel0 = folLabel[0], folLabel1 = folLabel[1], folCount0 = folCount[0], folCount1 = folCount[1]]
+        {
+            pull();
+            const bool busy = proc.randomBusy();
+            for (auto* bt : { genB, prevB, nextB }) bt->setEnabled (! busy);
+            const auto rep = proc.randomReport();
+            report->setText (rep.isEmpty() ? juce::String ("Press Generate for a new patch.") : rep, juce::dontSendNotification);
+            juce::Label* fl[2] = { folLabel0, folLabel1 }; juce::Label* fc[2] = { folCount0, folCount1 };
+            for (int w = 0; w < 2; ++w)
+            {
+                const auto l = MegaSynthProcessor::randomFolderList (w);
+                fl[w]->setText (l.folder == juce::File() ? juce::String ("No folder: ") + (w == 0 ? "the built-in breaks are used" : "a tone made by the generator is used")
+                                                         : l.folder.getFullPathName(), juce::dontSendNotification);
+                const juce::String what = w == 0 ? "breaks" : "samples";
+                fc[w]->setText (l.folder == juce::File() ? juce::String() : l.scanning ? "scanning..." : juce::String (l.files.size()) + " " + what + (l.capped ? " (the first 10,000 files)" : ""),
+                                juce::dontSendNotification);
+            }
+        };
+        ticker->tick();
+        page->onResize = [page, gen, report, useS, keepS, folS]
+        {
+            const int g = 10, W = page->getWidth();
+            gen->setBounds (g, g, 600, 110);
+            report->setBounds (g + 8, g + 118, 590, 160);
+            useS->setBounds (g + 610, g, W - 3 * g - 600, 160);
+            keepS->setBounds (g, g + 290, 600, 160);
+            folS->setBounds (g + 610, g + 170, W - 3 * g - 600, 170);
+        };
+    }
+
     {
         auto* page = addPage ("Capture");
         auto* cs = sec (page, "Capture / Resample  (record what the synth plays, edit it, send it back in)", col::accent);
@@ -4086,16 +4286,17 @@ void MegaSynthEditor::resized()
     qualityChoice->setBounds (330, 0, 100, 40);
     int x = 440;
     for (auto* k : headerKnobs) { k->setBounds (x, 4, 72, 80); x += 74; }
-    copyBtn.setBounds (820, 10, 120, 28);
-    pasteBtn.setBounds (820, 44, 120, 28);
-    initBtn.setBounds (948, 10, 58, 28);
-    sizeBtn.setBounds (1010, 10, 58, 28);
+    copyBtn.setBounds (818, 10, 88, 28);
+    pasteBtn.setBounds (818, 44, 88, 28);
+    initBtn.setBounds (910, 10, 48, 28);
+    randomBtn.setBounds (962, 10, 62, 28);
+    sizeBtn.setBounds (1028, 10, 44, 28);
     abA.setBounds (1076, 10, 30, 28);
     abB.setBounds (1108, 10, 30, 28);
     abCopy.setBounds (1140, 10, 46, 28);
     if (browser != nullptr) browser->setBounds (0, 88, kDesignW, 640);
-    undoBtn.setBounds (948, 44, 58, 28);
-    redoBtn.setBounds (1010, 44, 58, 28);
+    undoBtn.setBounds (910, 44, 78, 28);
+    redoBtn.setBounds (992, 44, 80, 28);
     originalBtn.setBounds (1076, 44, 110, 28);
     status.setBounds (812, 74, 374, 14);
     tabs.setBounds (0, 88, kDesignW, 670);
@@ -4447,6 +4648,14 @@ void MegaSynthEditor::updateMixerView()
 void MegaSynthEditor::timerCallback()
 {
     updateMixerView();
+    // a random patch arrived: say what it is
+    if (proc.randomReportVersion.load() != lastRandomReport)
+    {
+        lastRandomReport = proc.randomReportVersion.load();
+        const auto r = proc.randomReport();
+        if (r.isNotEmpty() && ! proc.randomBusy()) { setStatus (r.upToFirstOccurrenceOf ("\n", false, false)); refreshPatchList(); }
+        randomBtn.setEnabled (! proc.randomBusy());
+    }
     // remember the open tab and sub-tabs in the project
     {
         juce::StringArray subsNow;
@@ -4605,3 +4814,27 @@ void MegaSynthEditor::timerCallbackForTests()
     };
     walk (this);
 }
+
+// Break Sequencer Key Entry: the slice keys played since the last tick go onto the selected step (and the
+// selection moves on by Advance). Shift on the page, or the sustain pedal, adds them as the step's Layer hit.
+void MegaSynthEditor::breakKeyEntry (BreakStepGrid& grid)
+{
+    const auto entries = proc.takeKeyEntries();
+    if (entries.empty() || proc.param (P_bsKeyEntry)->getValue() < 0.5f) return;
+    static const int advSteps[] = { 0, 1, 2, 4 };
+    const int adv = advSteps[juce::jlimit (0, 3, juce::roundToInt (proc.param (P_bsAdvance)->convertFrom0to1 (proc.param (P_bsAdvance)->getValue())))];
+    const bool shift = juce::ModifierKeys::currentModifiers.isShiftDown();
+    for (auto& k : entries)
+    {
+        proc.applyKeyEntry (grid.editedPattern(), grid.selected, k, shift || k.sustain);
+        if (adv > 0) grid.selected = (grid.selected + adv) % grid.numSteps();
+    }
+    if (grid.onSelect) grid.onSelect (grid.selected);
+    setStatus ("Key Entry: slice " + juce::String (entries.back().slice + 1) + " of Break " + juce::String (entries.back().brk + 1)
+               + (adv > 0 ? ", now on step " + juce::String (grid.selected + 1) : juce::String()));
+}
+
+void MegaSynthEditor::breakKeyEntryForTests() { if (auto* g = dynamic_cast<BreakStepGrid*> (breakGridForTests)) breakKeyEntry (*g); }
+int MegaSynthEditor::breakSelectedStepForTests() const { if (auto* g = dynamic_cast<BreakStepGrid*> (breakGridForTests)) return g->selected; return -1; }
+void MegaSynthEditor::setBreakSelectedStepForTests (int step) { if (auto* g = dynamic_cast<BreakStepGrid*> (breakGridForTests)) g->selected = step; }
+

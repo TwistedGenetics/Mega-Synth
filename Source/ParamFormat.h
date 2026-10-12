@@ -189,7 +189,7 @@ inline juce::String formatParam (int idx, float v)
     if (id.endsWith ("Semi")) { const int n = juce::roundToInt (v); return (n > 0 ? "+" : "") + juce::String (n) + " st"; }
     if (id.containsIgnoreCase ("Detune") || id == "supersawSpread") return juce::String (juce::roundToInt (v)) + " cents";
     if (id == "supersawDrift") return fixed (v, 1) + " cents";
-    if (id == "polyphony") return juce::String (juce::roundToInt (v)) + " voices";
+    if (id == "polyphony") { const int n = juce::roundToInt (v); return n == 1 ? juce::String ("1 voice (mono)") : juce::String (n) + " voices"; }
     if (id == "supersawVoices") return juce::String (juce::roundToInt (v)) + " voices";
     if (id == "bendRange") return juce::String (juce::roundToInt (v)) + " st";
     if (id == "filterCutoff" || id == "filter2Cutoff") return formatHz (v);

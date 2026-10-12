@@ -3175,7 +3175,7 @@ int main()
                                 for (size_t i = 0; i < l.size(); ++i) { finite = finite && std::isfinite (l[i]) && std::isfinite (r[i]); pk = std::max (pk, std::max (std::abs (l[i]), std::abs (r[i]))); }
                                 const juce::String name = cm > 0 ? juce::String (tg::charModelInfo (cm).name) : juce::String (kMfModelLabels[model]) + " " + kMfTypeLabels[type] + (steep ? " 24" : " 12");
                                 if (! finite || pk > 12.0f) bad.add (name + " res " + juce::String (res) + " (peak " + juce::String (pk, 1) + ")");
-                                if (ms > worstMs) { worstMs = ms; worstName = name; }
+                                if (ms > worstMs && ! (model == 0 && cm == 0 && type == 0 && steep == 0 && res == 0.0f)) { worstMs = ms; worstName = name; }   // (the first run warms the caches)
                             }
                         }
             CHECK (bad.isEmpty(), "every Master Filter model, type and slope is stable when swept, at every resonance" + (bad.isEmpty() ? juce::String() : ": " + bad.joinIntoString (", ")));
@@ -3248,6 +3248,145 @@ int main()
                 juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*x, old);
                 auto o = make(); setP (*o, P_mfModel, 7.0f); o->setStateInformation (old.getData(), (int) old.getSize());
                 CHECK (juce::roundToInt (plain (*o, P_mfModel)) == 0, "older projects: the Master Filter stays Clean");
+            }
+        }
+        // ---- routing: the sub and the breaks past the effects
+        {
+            auto plain = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+            auto rmsOf = [&] (const juce::AudioBuffer<float>& b, double t0, double t1)
+            {
+                double a = 0; int n = 0;
+                for (int i = (int) (t0 * sr); i < std::min (b.getNumSamples(), (int) (t1 * sr)); ++i, ++n) a += (double) b.getSample (0, i) * b.getSample (0, i);
+                return std::sqrt (a / std::max (1, n));
+            };
+            auto subOnly = [&] (int route)
+            {
+                auto p = make();
+                for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_complexGain, P_supersawGain, P_osc4Gain, P_wt2Gain, P_ringGain }) setP (*p, i, 0.0f);
+                setP (*p, P_subGain, 0.6f); setP (*p, P_subWave, 1.0f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.005f); setP (*p, P_ampA, 0.001f);
+                setP (*p, P_delayMix, 1.0f); setP (*p, P_delayFeedback, 0.6f); setP (*p, P_reverbMix, 1.0f);
+                setP (*p, P_subRoute, (float) route);
+                return p;
+            };
+            {
+                juce::AudioBuffer<float> a, b;
+                auto n = subOnly (0); render (*n, 1.6, chord (0.0, 0.3, { 48 }), &a);
+                auto d = subOnly (1); render (*d, 1.6, chord (0.0, 0.3, { 48 }), &b);
+                const double tailN = rmsOf (a, 0.6, 1.6), tailD = rmsOf (b, 0.6, 1.6), onD = rmsOf (b, 0.05, 0.25);
+                CHECK (tailN > 1.0e-4 && tailD < 1.0e-6 && onD > 0.02, "Sub dry: a 100% delay and reverb hear none of it (tail " + juce::String (tailD, 8) + " vs " + juce::String (tailN, 5) + ")");
+            }
+            {
+                // the voice filter (a high pass at 20 kHz): the normal sub is gone; the dry sub isn't
+                juce::AudioBuffer<float> a, b;
+                auto n = subOnly (0); setP (*n, P_filterType, 1.0f); setP (*n, P_filterCutoff, 20000.0f); setP (*n, P_fEnvAmt, 0.0f); setP (*n, P_delayMix, 0.0f); setP (*n, P_reverbMix, 0.0f); render (*n, 0.3, chord (0.0, 0.3, { 60 }), &a);
+                auto d = subOnly (1); setP (*d, P_filterType, 1.0f); setP (*d, P_filterCutoff, 20000.0f); setP (*d, P_fEnvAmt, 0.0f); render (*d, 0.3, chord (0.0, 0.3, { 60 }), &b);
+                CHECK (rmsOf (b, 0.05, 0.25) > 10.0 * rmsOf (a, 0.05, 0.25), "the dry sub skips the voice filter (" + juce::String (rmsOf (b, 0.05, 0.25), 5) + " / " + juce::String (rmsOf (a, 0.05, 0.25), 5) + ")");
+                // the Master Filter: closed, it silences "before", not "after"
+                juce::AudioBuffer<float> c, e;
+                auto pre = subOnly (1); auto post = subOnly (2);
+                for (auto* q : { pre.get(), post.get() }) { setP (*q, P_mfOn, 1.0f); setP (*q, P_mfCutoff, 20.0f); setP (*q, P_mfType, 0.0f); setP (*q, P_mfSlope, 1.0f); }
+                render (*pre, 0.3, chord (0.0, 0.3, { 60 }), &c); render (*post, 0.3, chord (0.0, 0.3, { 60 }), &e);
+                CHECK (rmsOf (e, 0.05, 0.25) > 0.02 && rmsOf (c, 0.05, 0.25) < 0.1 * rmsOf (e, 0.05, 0.25), "Sub dry after the Master Filter: a closed Master Filter doesn't touch it");
+                // Master Volume still applies
+                juce::AudioBuffer<float> f;
+                setP (*post, P_masterVolume, 0.0f); render (*post, 0.3, chord (0.0, 0.3, { 60 }), &f);
+                CHECK (rmsOf (f, 0.2, 0.3) < 1.0e-5, "the dry sub follows Master Volume (" + juce::String (rmsOf (f, 0.2, 0.3), 7) + ", was " + juce::String (rmsOf (e, 0.05, 0.25), 4) + ")");
+            }
+            {
+                // Sub Mono: a dry sub panned hard left, below 120 Hz, comes out of both sides equally
+                auto chan = [&] (bool mono)
+                {
+                    auto p = subOnly (1); setP (*p, P_mxSubPan, -1.0f); setP (*p, P_subMono, mono ? 1.0f : 0.0f);
+                    juce::AudioBuffer<float> b; render (*p, 0.4, chord (0.0, 0.4, { 36 }), &b);   // (a sine sub at 33 Hz)
+                    double l = 0, r = 0;
+                    for (int i = (int) (0.1 * sr); i < (int) (0.35 * sr); ++i) { l += (double) b.getSample (0, i) * b.getSample (0, i); r += (double) b.getSample (1, i) * b.getSample (1, i); }
+                    return std::make_pair (std::sqrt (l), std::sqrt (r));
+                };
+                const auto off = chan (false), on = chan (true);
+                CHECK (off.second < 0.01 * off.first && std::abs (on.first - on.second) < 0.1 * on.first, "Sub Mono: a hard-panned 33 Hz dry sub comes out of both sides (L/R "
+                       + juce::String (on.first, 2) + " / " + juce::String (on.second, 2) + ")");
+            }
+            {
+                // switching the route while it plays: no click (a 10 ms crossfade)
+                auto p = subOnly (0);
+                setP (*p, P_delayMix, 0.0f); setP (*p, P_reverbMix, 0.0f); setP (*p, P_chorusMix, 0.0f); setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_fEnvAmt, 0.0f);
+                juce::AudioBuffer<float> a, b;
+                render (*p, 0.25, { { 0.0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) } }, &a);
+                setP (*p, P_subRoute, 2.0f);
+                render (*p, 0.25, {}, &b);
+                float stepIn = 0, stepAt = 0;
+                for (int i = 1; i < a.getNumSamples(); ++i) if (i > (int) (0.05 * sr)) stepIn = std::max (stepIn, std::abs (a.getSample (0, i) - a.getSample (0, i - 1)));
+                for (int i = 1; i < (int) (0.03 * sr); ++i) stepAt = std::max (stepAt, std::abs (b.getSample (0, i) - b.getSample (0, i - 1)));
+                stepAt = std::max (stepAt, std::abs (b.getSample (0, 0) - a.getSample (0, a.getNumSamples() - 1)));
+                CHECK (stepIn > 0.0f && stepAt < 1.6f * stepIn, "switching the Sub Route while it plays doesn't click (" + juce::String (stepAt / std::max (1e-9f, stepIn), 2) + "x the largest step)");
+            }
+            {
+                // with the Spectral stage on (one frame of latency), the dry sub stays in time with the rest
+                auto onset = [&] (bool sub)
+                {
+                    auto p = subOnly (sub ? 1 : 0);
+                    setP (*p, P_delayMix, 0.0f); setP (*p, P_reverbMix, 0.0f); setP (*p, P_chorusMix, 0.0f); setP (*p, P_spOn, 1.0f); setP (*p, P_spMix, 0.0f);
+                    if (! sub) { setP (*p, P_subGain, 0.0f); setP (*p, P_osc1Gain, 0.6f); setP (*p, P_osc1Wave, 3.0f); setP (*p, P_filterCutoff, 20000.0f); }
+                    juce::AudioBuffer<float> b; render (*p, 0.5, chord (0.05, 0.4, { 60 }), &b);
+                    for (int i = 0; i < b.getNumSamples(); ++i) if (std::abs (b.getSample (0, i)) > 1.0e-3f) return i;
+                    return -1;
+                };
+                const int a = onset (false), b = onset (true);
+                CHECK (a > (int) (0.05 * sr) + 500 && std::abs (a - b) <= 24, "with Spectral on, the dry sub is delayed to match (" + juce::String (a) + " / " + juce::String (b) + ")");
+            }
+            {
+                // the breaks: past the effects, and past the Master Filter
+                auto brk = [&] (int route, bool mfClosed)
+                {
+                    auto p = make();
+                    for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain }) setP (*p, i, 0.0f);
+                    setP (*p, P_bcOn, 1.0f); setP (*p, P_bcSliceMode, 3.0f);
+                    p->loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, 0), 44100.0), "demo.wav", MegaSynthProcessor::kSlotBreak);
+                    setP (*p, P_delayMix, 1.0f); setP (*p, P_delayFeedback, 0.6f); setP (*p, P_reverbMix, 1.0f);
+                    setP (*p, P_bcFxRoute, (float) route);
+                    if (mfClosed) { setP (*p, P_mfOn, 1.0f); setP (*p, P_mfCutoff, 20.0f); }
+                    juce::AudioBuffer<float> b; render (*p, 1.6, chord (0.0, 0.05, { 36 }), &b);
+                    if (std::getenv ("BRKDBG")) { std::cout << "   route " << route << ":"; for (int w = 0; w < 16; ++w) std::cout << " " << juce::String (rmsOf (b, w * 0.1, w * 0.1 + 0.1), 6); std::cout << std::endl; }
+                    return std::make_pair (rmsOf (b, 0.02, 0.08), rmsOf (b, 0.7, 1.6));
+                };
+                const auto r0 = brk (0, false), r1 = brk (1, false), r2 = brk (2, false), r3 = brk (3, false);
+                CHECK (r0.second > 1.0e-4 && r1.second < 1.0e-6 && r2.second < 1.0e-6 && r3.second < 1.0e-6 && r1.first > 0.01 && r2.first > 0.01 && r3.first > 0.01,
+                       "Break Effects: past the effects, the delay and reverb hear nothing of the break (tails " + juce::String (r1.second, 7) + ", " + juce::String (r0.second, 4) + " through)");
+                const auto c2 = brk (2, true), c3 = brk (3, true);
+                CHECK (c3.first > 0.01 && c2.first < 0.25 * c3.first, "Break Effects: 'after everything' skips the Master Filter, 'into the Master Filter' doesn't (" + juce::String (c2.first, 5) + " / " + juce::String (c3.first, 5) + ")");
+                std::cout << "  break routes, level / tail: " << r0.first << " " << r0.second << " | " << r1.first << " " << r1.second << " | " << r2.first << " " << r2.second << " | " << r3.first << " " << r3.second << std::endl;
+            }
+            {
+                // CPU: 8 notes with the sub dry vs normal, and the break dry vs through (each at Eco / Normal / High)
+                juce::String line;
+                for (int q = 0; q < 3; ++q)
+                {
+                    double t[2] {};
+                    for (int route = 0; route < 2; ++route)
+                    {
+                        auto p = subOnly (route); setP (*p, P_quality, (float) q); setP (*p, P_osc1Gain, 0.5f);
+                        render (*p, 3.0, chord (0.0, 3.0, { 48, 52, 55, 59, 62, 64, 67, 71 }), nullptr, &t[route]);
+                    }
+                    line << (q == 0 ? "Eco " : q == 1 ? "Normal " : "High ") << juce::String (100.0 * t[0] / 3.0, 2) << "% -> " << juce::String (100.0 * t[1] / 3.0, 2) << "%  ";
+                }
+                std::cout << "  CPU, 8 notes, sub normal -> dry (% of a core): " << line << std::endl;
+            }
+            {
+                // older projects: both routes as they always were
+                auto p = make(); setP (*p, P_subRoute, 2.0f); setP (*p, P_bcFxRoute, 3.0f);
+                juce::MemoryBlock mb; p->getStateInformation (mb);
+                auto x = juce::parseXML (getXmlFromBinaryForTest (mb));
+                if (x != nullptr)
+                {
+                    x->setAttribute ("stateVersion", 21);
+                    for (auto* id : { "subRoute", "bcFxRoute", "subMono" }) if (auto* el = x->getChildByAttribute ("id", id)) x->removeChildElement (el, true);
+                    juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*x, old);
+                    auto o = make(); setP (*o, P_subRoute, 1.0f); setP (*o, P_bcFxRoute, 2.0f); o->setStateInformation (old.getData(), (int) old.getSize());
+                    CHECK (plain (*o, P_subRoute) < 0.5f && plain (*o, P_bcFxRoute) < 0.5f, "older projects: the sub and the breaks go through the effects, as before");
+                }
+                juce::MemoryBlock mb2; p->getStateInformation (mb2);
+                auto q = make(); q->setStateInformation (mb2.getData(), (int) mb2.getSize());
+                CHECK (juce::roundToInt (plain (*q, P_subRoute)) == 2 && juce::roundToInt (plain (*q, P_bcFxRoute)) == 3, "the routes are saved");
             }
         }
     };
@@ -3845,11 +3984,13 @@ int main()
         // 1. off (the default) or with no sample: nothing changes
         {
             auto a = make(), b = make();
+            // (the reverb's impulse loads on JUCE's background thread, so its first moments vary from run to run: leave it out)
+            for (auto* q : { a.get(), b.get() }) setP (*q, P_reverbMix, 0.0f);
             b->loadSampleData (sineWav (440.0), "sine.wav", slot);   // loaded, but the Granular Synth is off
             tg::resetVoiceRandom(); juce::AudioBuffer<float> x; render (*a, 0.5, chord (0.0, 0.4, { 60, 64 }), &x);
             tg::resetVoiceRandom(); juce::AudioBuffer<float> y; render (*b, 0.5, chord (0.0, 0.4, { 60, 64 }), &y);
             float d = 0; for (int c = 0; c < 2; ++c) for (int i = 0; i < x.getNumSamples(); ++i) d = std::max (d, std::abs (x.getSample (c, i) - y.getSample (c, i)));
-            CHECK (d == 0.0f, "loaded but off: bit-identical");
+            CHECK (d == 0.0f, "loaded but off: bit-identical (" + juce::String (d) + ")");
             // switched on with no sample: nothing plays from it (the default-off case is covered bit for bit by the golden renders)
             auto o = make(); setP (*o, P_gsOn, 1.0f);
             const auto st = render (*o, 0.3, chord (0.0, 0.25, { 60 }));
@@ -5102,6 +5243,22 @@ int main()
                                           ev.push_back ({ (int) ((b * 4.0 + 3.5) / inc), juce::MidiMessage::noteOff (1, b % 4 == 3 ? 43 : 45) }); }
             renderTo (*p, "break_demo_4_three_breaks_172.wav", ev);
         }
+        // 6. routing: a jungle loop and a sine sub under a big delay and reverb; (a) everything through the
+        //    effects, (b) the sub dry (mono below 120 Hz) and the break skipping the effects
+        for (int dryVersion = 0; dryVersion < 2; ++dryVersion)
+        {
+            auto p = make(); p->loadFactoryPreset (32);
+            for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain }) setP (*p, i, 0.0f);
+            setP (*p, P_subGain, 0.8f); setP (*p, P_subWave, 1.0f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.08f);
+            setP (*p, P_delayMix, 0.55f); setP (*p, P_delayFeedback, 0.6f); setP (*p, P_reverbMix, 0.7f);
+            setP (*p, P_subRoute, dryVersion == 1 ? 1.0f : 0.0f); setP (*p, P_subMono, dryVersion == 1 ? 1.0f : 0.0f);
+            setP (*p, P_bcFxRoute, dryVersion == 1 ? 1.0f : 0.0f);
+            std::vector<std::pair<int, juce::MidiMessage>> ev;
+            const int notes[] = { 45, 45, 43, 41, 45, 45, 48, 43 };   // (the sub sounds an octave lower)
+            for (int b = 0; b < 8; ++b) { ev.push_back ({ (int) (b * 4.0 / inc), juce::MidiMessage::noteOn (1, notes[b], (juce::uint8) 100) });
+                                          ev.push_back ({ (int) ((b * 4.0 + 2.5) / inc), juce::MidiMessage::noteOff (1, notes[b]) }); }
+            renderTo (*p, dryVersion == 1 ? "break_demo_6b_sub_and_break_dry_172.wav" : "break_demo_6a_all_through_effects_172.wav", ev);
+        }
         // 5. fills: Break Frankenstein's chain with an Auto Fill every 4 bars (one bar long, ending the
         //    phrase), each fill played from Break 3 over the groove, and the pattern back on the downbeat
         {
@@ -5179,11 +5336,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.57.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.58.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.57 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills and the one Filter list added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.58 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list and the routes added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",

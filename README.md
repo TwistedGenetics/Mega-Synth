@@ -413,6 +413,28 @@ Thirteen pads to play live on the whole mix. They sit after the effects rack and
   - The reverb is a small Freeverb-style network (4 combs and 2 all-passes per side).
   - Echo and reverb tails are cut once they fall below -100 dB.
 
+## Routing: the sub and the breaks past the effects (Mixer > Routing)
+
+- **Sub Route** (also on the Sub Oscillator panel):
+  - **Normal** (the default): the sub goes through the filters and every effect, as always.
+  - **Dry, before the Master Filter** and **Dry, after the Master Filter**: the sub skips the filters, Note Mutation, the bus stages, the effects and Performance FX. The dry sub keeps:
+    - its amp envelope and level;
+    - its Mixer strip (pan, mute, solo and meter);
+    - Master Volume and Output.
+  - "After" also skips the Master Filter.
+  - **Mono < 120 Hz:** below 120 Hz the dry sub comes out of both sides equally, whatever its pan (a 4-pole Butterworth on the side signal).
+- **Break Effects** (also in each break's Sound panel):
+  - **Through the effects** (the default).
+  - **Skip effects (Perf FX on):** past the bus stages and the effects rack, so the delay and reverb don't touch the breaks, but still into Performance FX and the Master Filter.
+  - **Skip effects and Perf FX:** into the Master Filter only.
+  - **Skip all:** after the Master Filter.
+- **How the dry paths behave:**
+  - Changing a route crossfades over 10 ms, and delay and reverb tails already ringing fade out naturally.
+  - The dry paths are delayed by the Spectral stage's latency while Spectral is on, so they stay in time with the rest.
+  - The Granular bus stage and the feedback matrix don't hear dry signals, and Capture's "before the effects" point doesn't include them.
+- **Saved and old projects:** all three settings are saved in patches, projects, undo and A/B. Older projects load with everything through the effects, as before.
+- **CPU:** the dry routes add almost nothing. 8 notes measure the same within the test machine's noise (about ±3% of a core).
+
 ## Master Filter and Output (Filters tab, and the Mixer's Output section)
 
 - A stereo filter at the very end of the chain: everything the synth makes, every effect included, passes through it, then the **Output** level.

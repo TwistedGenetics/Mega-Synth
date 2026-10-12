@@ -194,7 +194,8 @@ namespace
             if (id.startsWith ("pf")) { m.category = Category::Fx; m.group = MutGroup::None; }   // Performance FX: played, not mutated
             if (id.startsWith ("gs")) { m.category = Category::Osc; m.group = MutGroup::None; }
             if (id.startsWith ("bc")) { m.category = Category::Fx; m.group = MutGroup::None; }    // Break Chopper: on the bus, before the effects
-            if (id.startsWith ("bs")) { m.category = Category::Seq; m.group = MutGroup::None; }  // Granular Synth: per voice; not mutated (old patches mutate as before)
+            if (id.startsWith ("bs")) { m.category = Category::Seq; m.group = MutGroup::None; }
+            if (id == "subRoute" || id == "subMono") { m.category = Category::Mixer; m.group = MutGroup::None; }   // routing: chosen, not mutated  // Granular Synth: per voice; not mutated (old patches mutate as before)
             m.unit = unitFor (id);
             if (id.startsWith ("gs")) m.unit = (id == "gsSize" || id == "gsSpray") ? "ms" : id == "gsDensity" ? "/s" : (id == "gsSemi" || id == "gsPitchRand") ? "st"
                                              : id == "gsCents" ? "cents" : id == "gsRoot" ? "note" : juce::String();

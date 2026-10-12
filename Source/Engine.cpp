@@ -83,6 +83,7 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     active = true;
     released = false;
     t = 0.0;
+    { const int r = clampv (s.i (P_subRoute), 0, 2); for (int j = 0; j < 3; ++j) subRG[j] = j == r ? 1.0f : 0.0f; }   // (a new note starts on its route)
     startedAt = voiceRand01() * 1000.0;
     for (int i = 0; i < 9; ++i) ssDriftSin[i] = std::sin ((startedAt + i * 0.37) * 7.123);   // fixed per note
     gran.start (ord * 131u + (uint64_t) k);   // its own random sequence (the shared voice one is left alone)
@@ -983,6 +984,12 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         const bool shifting = arFxOn && arp.shiftMix > 0.0f;
         const double rotCos = shifting ? std::cos (rotInc) : 1.0, rotSin = shifting ? std::sin (rotInc) : 0.0;
         float xb[2][kCtrl], mb[kCtrl], cutB[kCtrl], resB[kCtrl], cutB2[kCtrl], resB2[kCtrl];
+        // Sub Route: the sub split off before the filter (dry), ramped between the routes
+        const int subRoute = clampv (ps.i (P_subRoute), 0, 2);
+        const bool subSplit = subOut[0][0] != nullptr && (subRoute != 0 || subRG[1] > 0.0f || subRG[2] > 0.0f);
+        const float subRc = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
+        float sdb[2][2][kCtrl];
+        if (subSplit) subDryUsed = true;
 
         // ---- Resonator (after the filter and amp envelope; it rings on after the note)
         ResonatorParams rsp;
@@ -1179,7 +1186,20 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
             }
 
             // mixer
-            const float g1 = lvl (l1.v, AD_L1), g2 = lvl (l2.v, AD_L2), g3 = lvl (l3.v, AD_L3), gs = lvl (lSub.v, AD_LSub);
+            const float g1 = lvl (l1.v, AD_L1), g2 = lvl (l2.v, AD_L2), g3 = lvl (l3.v, AD_L3);
+            float gs = lvl (lSub.v, AD_LSub);
+            float subD = 0.0f;
+            if (subSplit)
+            {
+                for (int k = 0; k < 3; ++k)
+                {
+                    const float tg = k == subRoute ? 1.0f : 0.0f;
+                    subRG[k] += (tg - subRG[k]) * subRc;
+                    if (std::abs (tg - subRG[k]) < 1.0e-5f) subRG[k] = tg;
+                }
+                subD = osub * gs;     // the dry sub
+                gs *= subRG[0];       // what stays in the mix
+            }
             const float o4g = lvl (wt[0].level.v, AD_LWt1) * wt[0].comp;
             const float w2g = lvl (wt[1].level.v, AD_LWt2) * wt[1].comp;
             const float mono = o1 * g1 * uniGc[0] + o2 * g2 * uniGc[1] + o3 * g3 * uniGc[2] + osub * gs + cOut * uniGc[5];
@@ -1212,6 +1232,15 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                     for (int k = 0; k < kMxSources - 1; ++k) { a += sL[k] * mxL[k]; b += sR[k] * mxR[k]; }
                     mL = a; mR = b;
                 }
+            }
+            if (subSplit)
+            {
+                // the dry sub: its Mixer strip's pan and mute / solo, then out to the dry buses
+                const float pl = mxActive ? mxL[3] : 1.0f, pr = mxActive ? mxR[3] : 1.0f;
+                const float a1 = subD * subRG[1], a2 = subD * subRG[2];
+                sdb[0][0][i] = a1 * pl; sdb[0][1][i] = a1 * pr;
+                sdb[1][0][i] = a2 * pl; sdb[1][1][i] = a2 * pr;
+                if (mc.meters) mxPeak[3] = std::max (mxPeak[3], std::abs (a1 + a2));
             }
             if (gsRun)
             {
@@ -1326,6 +1355,8 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
 
             const float g = srcMute.v * (float) ampEnv.eval (t) * vGain.v;
             float oL = yL * g, oR = yR * g;
+            if (subSplit)
+                for (int r = 0; r < 2; ++r) { subOut[r][0][done + i] += sdb[r][0][i] * g; subOut[r][1][done + i] += sdb[r][1][i] * g; }
             if (resOn)
             {
                 float rl, rr;
@@ -1384,6 +1415,12 @@ void Engine::prepare (double sampleRate, int maxBlock)
     spec.prepare (sr);
     fbm.prepare (sr, maxBlock);
     for (int c = 0; c < 2; ++c) { fbIn[c].assign ((size_t) maxBlock + 16, 0.0f); fbOut[c].assign ((size_t) maxBlock + 16, 0.0f); preFxBuf[c].assign ((size_t) maxBlock + 16, 0.0f); }
+    for (int c = 0; c < 2; ++c)
+    {
+        brkTmp[c].assign ((size_t) maxBlock + 16, 0.0f);
+        for (int b = 0; b < 3; ++b) { dryBus[b][c].assign ((size_t) maxBlock + 16, 0.0f); dryDelay[b][c].assign ((size_t) kDryDelayLen, 0.0f); }
+    }
+    dryDelayPos = 0; dryTail = 0; dryMasterS = -1.0f;
     globalMod.clear();
     normTable();   // build the conversion tables off the audio thread
     globalRouteState.reset();
@@ -1401,6 +1438,9 @@ void Engine::reset()
     spec.reset();
     fbm.clear();
     globalMod.clear();
+    for (int b = 0; b < 3; ++b) for (int c = 0; c < 2; ++c) std::fill (dryDelay[b][c].begin(), dryDelay[b][c].end(), 0.0f);
+    dryTail = 0; dryMasterS = -1.0f;
+    for (auto& m : monoIc) for (auto& st : m) st[0] = st[1] = 0.0f;
 }
 
 Voice* Engine::findActive (int key)
@@ -1559,9 +1599,42 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     std::fill (std::begin (liveScratch), std::end (liveScratch), 0.0f);
 
     ModState scratch;
+    const bool dryReady = (int) dryBus[0][0].size() >= numSamples;
+    if (dryReady) for (int b = 0; b < 3; ++b) for (int c = 0; c < 2; ++c) std::fill (dryBus[b][c].begin(), dryBus[b][c].begin() + numSamples, 0.0f);
+    for (auto& v : voices)
+    {
+        for (int c = 0; c < 2; ++c) { v.subOut[0][c] = dryReady ? dryBus[1][c].data() : nullptr; v.subOut[1][c] = dryReady ? dryBus[2][c].data() : nullptr; }
+        v.subDryUsed = false;
+    }
     for (auto& v : voices)
         if (v.active)
             v.render (L, R, numSamples, s, wavs, &v == newest ? globalMod : scratch, mc, &v == newest ? liveScratch : nullptr);
+    bool anyDry = false;
+    for (auto& v : voices) anyDry = anyDry || v.subDryUsed;
+    if (anyDry && s.v[P_subMono] > 0.5f)
+    {
+        // Sub Mono: below 120 Hz the dry sub is mono (its pan only moves what's above)
+        const float g = (float) std::tan (kPi * 120.0 / sr);
+        const float ks[2] = { 1.8477591f, 0.7653669f };   // 4th-order Butterworth
+        for (int b = 0; b < 2; ++b)
+        {
+            float* l = dryBus[1 + b][0].data(); float* r = dryBus[1 + b][1].data();
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float mid = 0.5f * (l[i] + r[i]);
+                float hp = 0.5f * (l[i] - r[i]);
+                for (int st = 0; st < 2; ++st)
+                {
+                    const float k = ks[st], a1 = 1.0f / (1.0f + g * (g + k)), a2 = g * a1, a3 = g * a2;
+                    float& ic1 = monoIc[b][st][0]; float& ic2 = monoIc[b][st][1];
+                    const float v3 = hp - ic2, v1 = a1 * ic1 + a2 * v3, v2 = ic2 + a2 * ic1 + a3 * v3;
+                    ic1 = 2.0f * v1 - ic1; ic2 = 2.0f * v2 - ic2;
+                    hp = hp - k * v1 - v2;   // the side, above 120 Hz only
+                }
+                l[i] = mid + hp; r[i] = mid - hp;
+            }
+        }
+    }
     if (mc.meters)
     {
         // the Mixer's strip meters: the loudest voice's level per source, held until the editor reads it
@@ -1649,7 +1722,28 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         if (std::abs (breakGateL - tl) < 1.0e-4f) breakGateL = tl;
         if (std::abs (breakGateR - tr) < 1.0e-4f) breakGateR = tr;
         st.stripL = breakGateL; st.stripR = breakGateR;
-        chopper.process (L, R, numSamples, st, fs->v);
+        // Break FX Route: through the effects (as always), or past them into a dry bus, ramped over 10 ms
+        const int route = dryReady ? clampv (fs->i (P_bcFxRoute), 0, 3) : 0;
+        if (! breakWasRunning) for (int k = 0; k < 4; ++k) brkRG[k] = k == route ? 1.0f : 0.0f;   // (nothing playing: start on the route)
+        if (route == 0 && brkRG[0] == 1.0f) chopper.process (L, R, numSamples, st, fs->v);
+        else
+        {
+            std::fill (brkTmp[0].begin(), brkTmp[0].begin() + numSamples, 0.0f); std::fill (brkTmp[1].begin(), brkTmp[1].begin() + numSamples, 0.0f);
+            chopper.process (brkTmp[0].data(), brkTmp[1].data(), numSamples, st, fs->v);
+            const float rc = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
+            float* dst[4][2] = { { L, R }, { dryBus[0][0].data(), dryBus[0][1].data() }, { dryBus[1][0].data(), dryBus[1][1].data() }, { dryBus[2][0].data(), dryBus[2][1].data() } };
+            for (int i = 0; i < numSamples; ++i)
+            {
+                for (int k = 0; k < 4; ++k)
+                {
+                    const float tg = k == route ? 1.0f : 0.0f;
+                    brkRG[k] += (tg - brkRG[k]) * rc;
+                    if (std::abs (tg - brkRG[k]) < 1.0e-5f) brkRG[k] = tg;
+                    if (brkRG[k] != 0.0f) { dst[k][0][i] += brkTmp[0][(size_t) i] * brkRG[k]; dst[k][1][i] += brkTmp[1][(size_t) i] * brkRG[k]; }
+                }
+            }
+            anyDry = true;
+        }
         const float pk = chopper.takePeak();
         auto& m = mixerPeak[(size_t) (kMxSources + 1)];
         if (pk > m.load (std::memory_order_relaxed)) m.store (pk, std::memory_order_relaxed);
@@ -1697,6 +1791,31 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         }
         else fxBus.process (L, R, numSamples, *fs, globalMod);
 
+        // ---- the dry buses: Master Volume, then the Spectral stage's latency, so they line up with the rest
+        const bool dryOn = dryReady && (anyDry || dryTail > 0);
+        if (dryOn)
+        {
+            const int lat = clampv (spec.latency (sp), 0, kDryDelayLen - 1);
+            dryTail = anyDry ? lat + numSamples : std::max (0, dryTail - numSamples);
+            const float mvT = fs->f (P_masterVolume);
+            if (dryMasterS < 0.0f) dryMasterS = mvT;
+            const float cs = 1.0f - std::exp (-1.0f / (0.02f * (float) sr));
+            for (int i = 0; i < numSamples; ++i)
+            {
+                dryMasterS += (mvT - dryMasterS) * cs;
+                const int w = (dryDelayPos + i) & (kDryDelayLen - 1), rd = (dryDelayPos + i - lat) & (kDryDelayLen - 1);
+                for (int b = 0; b < 3; ++b)
+                    for (int c = 0; c < 2; ++c)
+                    {
+                        float& x = dryBus[b][c][(size_t) i];
+                        x *= dryMasterS;
+                        if (lat > 0) { dryDelay[b][c][(size_t) w] = x; x = dryDelay[b][c][(size_t) rd]; }
+                    }
+            }
+            dryDelayPos = (dryDelayPos + numSamples) & (kDryDelayLen - 1);
+            for (int i = 0; i < numSamples; ++i) { L[i] += dryBus[0][0][(size_t) i]; R[i] += dryBus[0][1][(size_t) i]; }   // the break, into Performance FX
+        }
+
         // ---- Performance FX (bypassed, untouched, while no pad is engaged)
         {
             PerfFx::Settings pf;
@@ -1713,6 +1832,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             ck.beat = s.fxBeat; ck.beatInc = s.fxBeatInc; ck.barOrigin = s.fxBarOrigin; ck.beatsPerBar = s.fxBeatsPerBar; ck.tempo = s.fxTempo;
             perfFx.process (L, R, numSamples, pf, ck);
         }
+        if (dryOn) for (int i = 0; i < numSamples; ++i) { L[i] += dryBus[1][0][(size_t) i]; R[i] += dryBus[1][1][(size_t) i]; }   // into the Master Filter
 
         // ---- the Master Filter (everything passes through it), then the Output trim
         MasterFilter::Settings mf;
@@ -1720,6 +1840,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         mf.cutoff = fs->f (P_mfCutoff); mf.res = fs->f (P_mfRes); mf.driveDb = fs->f (P_mfDrive); mf.mix = fs->f (P_mfMix);
         mf.charModel = fs->i (P_mfChar); mf.charAmt = fs->f (P_mfCharAmt); mf.model = fs->i (P_mfModel);
         masterFilter.process (L, R, numSamples, mf);
+        if (dryOn) for (int i = 0; i < numSamples; ++i) { L[i] += dryBus[2][0][(size_t) i]; R[i] += dryBus[2][1][(size_t) i]; }   // after it: only Output
         outTrim.process (L, R, numSamples, fs->f (P_outGain));
     }
 

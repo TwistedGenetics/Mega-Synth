@@ -80,6 +80,10 @@ public:
                  const ModContext& = {}, float* liveOut = nullptr);
 
     float srcV[MS_COUNT] {};   // this voice's modulation sources (control rate)
+    // Sub Route: the dry sub buses (0: before the Master Filter, 1: after it), set by the engine; the
+    // voice adds its sub there (after its amp envelope and Mixer strip, skipping the filter and the bus)
+    float* subOut[2][2] {};
+    bool subDryUsed = false;
 
     bool active = false;
     bool released = false;
@@ -96,6 +100,7 @@ public:
     float msegLevel (int k) const { return mseg[k & 1].level; }
 
 private:
+    float subRG[3] { 1.0f, 0.0f, 0.0f };   // Sub Route gains (normal, dry before, dry after), ramped over 10 ms
     void computeSources (const Snapshot&, const GlobalModInputs*, float dt);
     void advanceLfos (const Snapshot&, int numSamples);
     void updateLfoOut (const Snapshot&, int offset, const ModContext&);   // the LFOs' outputs for this control step
@@ -345,6 +350,16 @@ private:
     Spectral spec;
     FeedbackMatrix fbm;
     std::vector<float> fbIn[2], fbOut[2], preFxBuf[2];
+    // the dry buses (Sub Route, Break FX Route): 0 joins before Performance FX, 1 before the Master
+    // Filter, 2 after it. They skip the bus stages and the effects, get Master Volume, and are delayed
+    // by the Spectral stage's latency so they stay in time with the rest.
+    std::vector<float> dryBus[3][2], brkTmp[2];
+    std::vector<float> dryDelay[3][2];
+    int dryDelayPos = 0, dryTail = 0;
+    float brkRG[4] { 1.0f, 0.0f, 0.0f, 0.0f }, dryMasterS = -1.0f;
+    // Sub Mono: the dry sub's side signal high-passed at 120 Hz (a 4-pole Butterworth: two state-variable stages per bus)
+    float monoIc[2][2][2] {};   // [bus][stage][state]
+    static constexpr int kDryDelayLen = 8192;
     ModState globalMod;     // modulation of global effects, taken from the newest voice
     uint64_t orderCounter = 0;
     double lastFreq = -1.0;

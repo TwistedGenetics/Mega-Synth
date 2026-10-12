@@ -1613,6 +1613,12 @@ void MegaSynthEditor::buildPages()
         sub->knob (P_subOct, "Octave", 60);
         sub->knob (P_subSemi, "Semi", 60);
         sub->knob (P_subGain, "Level", 60);
+        sub->newRow();
+        sub->choice (P_subRoute, "Route", 254)->box.setTooltip ("Normal: through the filters and every effect, as always. Dry: the sub skips the filters, "
+                                                               "the bus stages, the effects and Performance FX (keeping its envelope, level and Mixer strip), "
+                                                               "and joins before or after the Master Filter.");
+        sub->newRow();
+        sub->add (new ParamToggle (proc, P_subMono, "Mono below 120 Hz (dry)", col::osc), 220, 30);
 
         // the two sample / wavetable oscillators
         struct WtIds { int mode, dir, norm, semi, det, oct, root, pos, win, ls, le, gain; };
@@ -1672,7 +1678,7 @@ void MegaSynthEditor::buildPages()
             const int W = page->getWidth(), g = 10;
             const int w4 = (W - g * 5) / 4;
             for (int i = 0; i < 3; ++i) o[i]->setBounds (g + i * (w4 + g), g, w4, 170);
-            sub->setBounds (g + 3 * (w4 + g), g, w4, 170);
+            sub->setBounds (g + 3 * (w4 + g), g, w4, 258);
         };
         pageWt->onResize = [pageWt, wtS]
         {
@@ -2089,6 +2095,8 @@ void MegaSynthEditor::buildPages()
             sn->choice (bp.colour, "Colour", 130);
             sn->knob (bp.level, "Level", 62);
             sn->knob (bp.pan, "Pan", 62);
+            sn->choice (P_bcFxRoute, "Effects (all breaks)", 200)->box.setTooltip ("Through the effects (as always), or past them so the delay and reverb don't touch the breaks: "
+                                                                                 "into Performance FX, into the Master Filter, or after everything. Also on the Mixer page.");
             sound.add (sn);
         }
         auto* all = sec (page, "All Breaks  (Repitch: faster = higher, like a sampler. Akai Cyclic: S1000-style cyclic time-stretch; Cycle "
@@ -2492,13 +2500,23 @@ void MegaSynthEditor::buildPages()
         outS->knob (P_outGain, "Output", 58);
         auto* outL = page->own (new LevelMeter()); auto* outR = page->own (new LevelMeter());
         outMeters[0] = outL; outMeters[1] = outR;
-        page->onResize = [page, stripList, srcHelp, engS, chipList, rt, w, outS, outL, outR]
+        // routing: the sub and the breaks can skip the effects
+        auto* rtg = sec (page, "Routing", col::mixer);
+        rtg->addInfo ("Sub Route: Normal goes through the filters and every effect. Dry skips the filters, the bus stages, the effects and "
+                      "Performance FX, and joins before or after the Master Filter (it keeps its envelope, level, pan, mute and solo).  "
+                      "Break Effects: the breaks through the effects (as always), or past them: into Performance FX, into the Master Filter, "
+                      "or after everything. Dry signals get Master Volume and are delayed to match the Spectral stage, so they stay in time.");
+        rtg->choice (P_subRoute, "Sub Route", 170);
+        rtg->add (new ParamToggle (proc, P_subMono, "Mono < 120 Hz", col::mixer), 118, 40);
+        rtg->choice (P_bcFxRoute, "Break Effects", 196);
+        page->onResize = [page, stripList, srcHelp, engS, chipList, rt, w, outS, outL, outR, rtg]
         {
             const int g = 10, W = page->getWidth();
             const int stripW = 70, stripsW = stripW * kMxStrips + 2 * 4;
             srcHelp->setBounds (g, g, stripsW + 8, 32 + 360 + 8);
             for (int k = 0; k < stripList.size(); ++k) { stripList[k]->setBounds (g + 4 + k * stripW, g + 32, stripW - 4, 360); stripList[k]->toFront (false); }
             w->setBounds (g, g + 410, 260, 130);
+            rtg->setBounds (g + 270, g + 410, 520, 92);
             const int rx = g + stripsW + 8 + g, rw = W - rx - g;
             engS->setBounds (rx, g, rw, 270);
             const int cw = (rw - 20) / 4;

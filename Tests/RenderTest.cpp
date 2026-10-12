@@ -13,6 +13,7 @@
 #include "UI/SamplePages.h"
 #include "UI/BreakPages.h"
 #include "UI/Overview.h"
+#include "UI/CorePage.h"
 
 using namespace tg;
 
@@ -2280,6 +2281,7 @@ int main()
         if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ALLSHOTS", {}) == "char")
         { setP (*p, P_flt1Char, (float) CM_Formant); setP (*p, P_flt1CharAmt, 0.3f); setP (*p, P_filterRes, 10.0f); setP (*p, P_mfChar, (float) CM_Comb); setP (*p, P_mfCharAmt, 0.85f); setP (*p, P_mfCutoff, 300.0f); }
         p->msegs.setPreset (1, 2);
+        setP (*p, P_cAEngine, 1.0f); p->applyCoreAlgorithm (0, 2); setP (*p, P_cA6M6, 1.2f); setP (*p, P_cA4Ratio, 2.0f); setP (*p, P_cA5Fixed, 1.0f);
         {
             // a made-up sample for the Granular Synth page
             juce::AudioBuffer<float> b (2, (int) (3.0 * 44100));
@@ -6444,6 +6446,327 @@ int main()
         }
         return 0;
     }
+    // ---- the Core oscillator slots: the Kernel FM engine (accuracy, envelopes, stability, aliasing, silence when off, CPU)
+    auto coreTests = [&]
+    {
+        std::cout << "Core oscillator (Kernel FM)" << std::endl;
+        auto plainOf = [] (MegaSynthProcessor& q, int i) { return q.param (i)->convertFrom0to1 (q.param (i)->getValue()); };
+        auto sine = [] { CoreSettings s; s.uni = 1; s.op[0].level = 1.0f; s.op[0].out = 1.0f; return s; };
+        // render a kernel on its own (mono: the left channel)
+        auto run = [&] (CoreSettings s, double hz, int samples, std::vector<float>& out, int note = 60, float vel = 1.0f, int releaseAt = -1, std::vector<float>* env1 = nullptr)
+        {
+            CoreKernel k; k.prepare (sr); k.start (s, 0, 1, note, vel);
+            out.assign ((size_t) samples, 0.0f);
+            if (env1) env1->assign ((size_t) samples, 0.0f);
+            for (int pos = 0; pos < samples; pos += 16)
+            {
+                const int n = std::min (16, samples - pos);
+                if (releaseAt >= 0 && pos == releaseAt) k.release();
+                k.configure (s, hz, n);
+                for (int i = 0; i < n; ++i)
+                {
+                    float a, b; k.tick (a, b); out[(size_t) (pos + i)] = a;
+                    if (env1) (*env1)[(size_t) (pos + i)] = k.envelope (0);
+                }
+            }
+        };
+        // the magnitude of one frequency (Hann window over a whole number of its cycles: the window is 1 s)
+        auto magAt = [&] (const std::vector<float>& x, int from, int len, double f)
+        {
+            std::complex<double> acc {};
+            for (int i = 0; i < len; ++i)
+            {
+                const double w = 0.5 - 0.5 * std::cos (2.0 * kPi * i / len);
+                const double ph = 2.0 * kPi * f * i / sr;
+                acc += (double) x[(size_t) (from + i)] * w * std::complex<double> (std::cos (ph), -std::sin (ph));
+            }
+            return std::abs (acc) * 4.0 / len;   // (a sine of amplitude A reads A)
+        };
+        // the frequency of a near-sine: zero crossings (rising, interpolated) over the span
+        auto freqOf = [&] (const std::vector<float>& x, int from)
+        {
+            double first = -1, last = -1; int count = 0;
+            for (int i = from + 1; i < (int) x.size(); ++i)
+                if (x[(size_t) i - 1] <= 0.0f && x[(size_t) i] > 0.0f)
+                {
+                    const double t = (i - 1) + x[(size_t) i - 1] / (double) (x[(size_t) i - 1] - x[(size_t) i]);
+                    if (first < 0) first = t; else ++count;
+                    last = t;
+                }
+            return count > 0 ? count * sr / (last - first) : 0.0;
+        };
+        // 1. the Bessel check: a 2-operator pair, carrier 1000 Hz, modulator 250 Hz, index 1 (and 2.4): the sidebands
+        //    at 1000 +/- n x 250 are J_n(index) relative to J_0, within 0.5 dB (n = 1, 2, 3, both sides)
+        for (int q = 0; q < 3; ++q)
+            for (double index : { 1.0, 2.0 })
+            {
+                CoreSettings s = sine(); s.quality = q;
+                s.op[0].ratio = 4.0; s.op[1].ratio = 1.0; s.op[1].level = 1.0f; s.op[1].out = 0.0f; s.op[1].m[0] = (float) index;
+                std::vector<float> x; run (s, 250.0, (int) (sr * 1.3), x);
+                const int from = (int) (sr * 0.2), len = (int) sr;
+                const double c0 = magAt (x, from, len, 1000.0);
+                double worst = 0;
+                // (upper sidebands 1-4 and lower 1-2: the lower third has the reflected fifth on it)
+                for (int n = 1; n <= 4; ++n)
+                    for (int sgn : { -1, 1 })
+                    {
+                        if (sgn < 0 && n > 2) continue;
+                        const double expect = std::abs (std::cyl_bessel_j ((double) n, index) / std::cyl_bessel_j (0.0, index));
+                        const double got = magAt (x, from, len, 1000.0 + sgn * n * 250.0) / c0;
+                        worst = std::max (worst, std::abs (20.0 * std::log10 (got / expect)));
+                    }
+                std::cout << "  Bessel (" << kQualityLabels[q] << ", index " << index << "): carrier " << juce::String (c0, 4)
+                          << " (J0 " << juce::String (std::cyl_bessel_j (0.0, index), 4) << "), worst sideband error " << juce::String (worst, 3) << " dB" << std::endl;
+                CHECK (worst < 0.5, "FM sidebands match the Bessel functions within 0.5 dB");
+                CHECK (std::abs (20.0 * std::log10 (c0 / std::abs (std::cyl_bessel_j (0.0, index)))) < 0.5, "FM carrier amplitude is J0(index)");
+            }
+        // 1:1 against an ideal sin (wt + I sin wt), harmonics 1-6 (the folded sidebands included)
+        {
+            CoreSettings s = sine(); s.op[1].level = 1.0f; s.op[1].m[0] = 1.5f;
+            std::vector<float> x; run (s, 500.0, (int) (sr * 1.3), x);
+            std::vector<float> ideal (x.size());
+            for (size_t i = 0; i < x.size(); ++i) { const double w = 2.0 * kPi * 500.0 * (double) i / sr; ideal[i] = (float) std::sin (w + 1.5 * std::sin (w)); }
+            double worst = 0;
+            for (int h = 1; h <= 6; ++h)
+            {
+                const double a = magAt (x, (int) (sr * 0.2), (int) sr, 500.0 * h), b = magAt (ideal, (int) (sr * 0.2), (int) sr, 500.0 * h);
+                if (b > 0.01) worst = std::max (worst, std::abs (20.0 * std::log10 (a / b)));
+            }
+            std::cout << "  1:1 index 1.5 vs the ideal formula: worst harmonic error " << juce::String (worst, 3) << " dB" << std::endl;
+            CHECK (worst < 0.5, "1:1 FM matches sin (wt + I sin wt)");
+        }
+        // 2. tuning: ratio (with fine) and fixed frequencies within 0.1 cent
+        {
+            double worst = 0;
+            struct T { double note; double ratio; double fine; bool fixed; double hz; };
+            for (auto t : { T { 110.0, 1.0, 0.0, false, 0 }, T { 220.0, 3.5, 7.0, false, 0 }, T { 55.0, 0.5, -12.5, false, 0 }, T { 261.63, 12.0, 0.0, false, 0 },
+                            T { 100.0, 1.0, 0.0, true, 1234.5 }, T { 100.0, 1.0, -30.0, true, 77.7 } })
+            {
+                for (int q = 0; q < 3; ++q)
+                {
+                    CoreSettings s = sine(); s.quality = q; s.op[0].ratio = t.ratio; s.op[0].fine = t.fine; s.op[0].fixed = t.fixed; s.op[0].hz = t.hz;
+                    std::vector<float> x; run (s, t.note, (int) (sr * 2.0), x);
+                    const double expect = (t.fixed ? t.hz : t.note * t.ratio) * std::pow (2.0, t.fine / 1200.0);
+                    worst = std::max (worst, std::abs (1200.0 * std::log2 (freqOf (x, (int) (sr * 0.05)) / expect)));
+                }
+            }
+            std::cout << "  tuning: worst error " << juce::String (worst, 5) << " cents (ratios, fine, fixed Hz, all qualities)" << std::endl;
+            CHECK (worst < 0.1, "operator tuning within 0.1 cent");
+        }
+        // 3. envelope timing within 1 ms: delay + attack peak, hold, decay to -60 dB of its span, release to -60 dB
+        {
+            CoreSettings s = sine();
+            auto& o = s.op[0]; o.dly = 0.05f; o.att = 0.1f; o.hold = 0.05f; o.dec = 0.2f; o.sus = 0.5f; o.rel = 0.3f;
+            for (float spd : { 1.0f, 2.0f })
+            {
+                s.envSpd = spd;
+                const int relAt = (int) (sr * 1.0 / 16) * 16;
+                std::vector<float> x, e; run (s, 220.0, (int) (sr * 1.6), x, 60, 1.0f, relAt, &e);
+                auto firstAt = [&] (int from, std::function<bool (float)> f) { for (int i = from; i < (int) e.size(); ++i) if (f (e[(size_t) i])) return i; return -1; };
+                const double t0 = firstAt (0, [] (float v) { return v > 0.0f; }) / sr;
+                const double tPeak = firstAt (0, [] (float v) { return v >= 1.0f; }) / sr;
+                const double tDec = firstAt ((int) (tPeak * sr) + 1, [] (float v) { return v < 0.999f; }) / sr;   // hold ends
+                const double tSus = firstAt ((int) (tDec * sr), [&] (float v) { return v <= o.sus + (1.0f - o.sus) * 0.001f; }) / sr;
+                const double tRel = firstAt (relAt, [&] (float v) { return v <= o.sus * 0.001f; }) / sr - relAt / sr;
+                const double errs[] = { t0 - o.dly / spd, tPeak - (o.dly + o.att) / spd, tDec - (o.dly + o.att + o.hold) / spd,
+                                        tSus - (o.dly + o.att + o.hold + o.dec) / spd, tRel - o.rel / spd };
+                double worst = 0; for (double d : errs) worst = std::max (worst, std::abs (d));
+                std::cout << "  envelope (speed x" << spd << "): delay " << juce::String (t0 * 1000, 2) << " ms, peak " << juce::String (tPeak * 1000, 2)
+                          << " ms, decay from " << juce::String (tDec * 1000, 2) << " ms, sustain " << juce::String (tSus * 1000, 2) << " ms, release "
+                          << juce::String (tRel * 1000, 2) << " ms; worst error " << juce::String (worst * 1000, 3) << " ms" << std::endl;
+                CHECK (worst < 0.001, "operator envelope stages within 1 ms");
+            }
+        }
+        // 4. feedback: stable (finite, bounded, still sounding) from none to the top of the range, every quality and waveform
+        {
+            float peak = 0; bool fin = true; double minRms = 1e9;
+            for (int q = 0; q < 3; ++q)
+                for (int w = 0; w < 8; ++w)
+                    for (float fb : { 0.5f, 1.5f, 4.0f, 12.0f })
+                    {
+                        CoreSettings s = sine(); s.quality = q; s.op[0].wave = w; s.op[0].m[0] = fb; s.bright = 2.0f;
+                        std::vector<float> x; run (s, 110.0, (int) (sr * 1.0), x);
+                        double ss = 0;
+                        for (float v : x) { fin &= std::isfinite (v); peak = std::max (peak, std::abs (v)); ss += (double) v * v; }
+                        minRms = std::min (minRms, std::sqrt (ss / x.size()));
+                    }
+            std::cout << "  feedback up to 24 rad: peak " << juce::String (peak, 3) << ", lowest RMS " << juce::String (minRms, 3) << std::endl;
+            CHECK (fin && peak < 2.0f && minRms > 0.05, "feedback stays finite and bounded at every setting");
+        }
+        // 5. aliasing: a bright patch (feedback 1.5 into a 1:1 pair, index 4) at C6; everything that is not a harmonic
+        //    of the note, below 20 kHz, relative to the fundamental, at each quality
+        double aliasDb[3] {};
+        for (int q = 0; q < 3; ++q)
+        {
+            CoreSettings s = sine(); s.quality = q;
+            s.op[1].level = 1.0f; s.op[1].m[0] = 4.0f; s.op[1].m[1] = 1.5f;
+            const double f0 = 1046.502;
+            std::vector<float> x; run (s, f0, (int) (sr * 1.7), x);
+            const int from = (int) (sr * 0.2), len = 65536;
+            std::vector<std::complex<double>> fx ((size_t) len);
+            for (int i = 0; i < len; ++i) fx[(size_t) i] = x[(size_t) (from + i)] * (0.35875 - 0.48829 * std::cos (2 * kPi * i / len) + 0.14128 * std::cos (4 * kPi * i / len) - 0.01168 * std::cos (6 * kPi * i / len));
+            juce::dsp::FFT fft (16);
+            std::vector<juce::dsp::Complex<float>> in ((size_t) len), out ((size_t) len);
+            for (int i = 0; i < len; ++i) in[(size_t) i] = { (float) fx[(size_t) i].real(), 0.0f };
+            fft.perform (in.data(), out.data(), false);
+            const double binHz = sr / len;
+            double fund = 0, worstAlias = 0;
+            for (int b = 1; b < (int) (20000.0 / binHz); ++b)
+            {
+                const double f = b * binHz, m = std::abs (std::complex<double> (out[(size_t) b].real(), out[(size_t) b].imag()));
+                const double h = f / f0, dist = std::abs (h - std::round (h)) * f0;
+                if (std::abs (f - f0) < 3 * binHz) fund = std::max (fund, m);
+                else if (dist > 6 * binHz) worstAlias = std::max (worstAlias, m);
+            }
+            aliasDb[q] = 20.0 * std::log10 (worstAlias / fund);
+            std::cout << "  aliasing at C6 (" << kQualityLabels[q] << "): worst non-harmonic component " << juce::String (aliasDb[q], 1) << " dB below the fundamental" << std::endl;
+        }
+        CHECK (aliasDb[2] < -70.0, "High: aliasing at C6 more than 70 dB down");
+        CHECK (aliasDb[1] < -50.0, "Normal: aliasing at C6 more than 50 dB down");
+        CHECK (aliasDb[2] < aliasDb[0] - 20.0, "oversampling lowers the aliasing (High vs Eco)");
+
+        // ---- in the synth
+        auto coreOnly = [&] (int slot = 0)
+        {
+            auto p = make();
+            for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix, P_analogDrift, P_supersawGain, P_complexGain, P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain })
+                setP (*p, i, 0.0f);
+            setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_lfoAssignAmt0, 0.0f); setP (*p, P_ampS, 1.0f);
+            setP (*p, coreParam (slot, CS_Engine), 1.0f);
+            return p;
+        };
+        // 6. off: every Core setting moved but the engine Off renders bit-for-bit like the defaults
+        {
+            auto a = make(); auto b = make(); setP (*a, P_reverbMix, 0.0f); setP (*b, P_reverbMix, 0.0f);
+            for (int i = P_cAEngine; i <= P_cB6Out; ++i)
+            {
+                if (i == coreParam (0, CS_Engine) || i == coreParam (1, CS_Engine)) continue;
+                auto* prm = b->param (i); prm->setValueNotifyingHost (std::fmod (prm->getValue() + 0.37f, 1.0f));
+            }
+            juce::AudioBuffer<float> ca, cb;
+            tg::resetVoiceRandom(); render (*a, 1.5, chord (0.0, 1.0, { 45, 52, 57 }), &ca);
+            tg::resetVoiceRandom(); render (*b, 1.5, chord (0.0, 1.0, { 45, 52, 57 }), &cb);
+            bool same = true;
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < ca.getNumSamples(); ++i) same &= ca.getSample (c, i) == cb.getSample (c, i);
+            CHECK (same, "Core slots Off: bit-for-bit the same sound whatever their settings");
+
+        }
+        // 7. on: a sine at the note through the voice, both slots, its own Mixer strip (mute, pan), the level
+        for (int slot = 0; slot < 2; ++slot)
+        {
+            auto p = coreOnly (slot);
+            juce::AudioBuffer<float> cap;
+            const auto st = render (*p, 1.0, chord (0.0, 0.9, { 69 }), &cap);
+            std::vector<float> x ((size_t) cap.getNumSamples()); for (int i = 0; i < cap.getNumSamples(); ++i) x[(size_t) i] = cap.getSample (0, i);
+            std::vector<float> y (x.begin() + (int) (sr * 0.2), x.begin() + (int) (sr * 0.8));
+            const double f = freqOf (y, 0);
+            std::cout << "  Core " << (slot ? "B" : "A") << " in the synth: " << juce::String (f, 3) << " Hz at A4, peak " << juce::String (st.peak, 3) << std::endl;
+            CHECK (std::abs (1200.0 * std::log2 (f / 440.0)) < 1.0 && st.peak > 0.05f && st.finite, juce::String ("Core ") + (slot ? "B" : "A") + " plays the note");
+            p = coreOnly (slot);   // (a fresh one: no release tail from the note above)
+            setP (*p, P_mxCoreAMute + 3 * slot, 1.0f);
+            const auto m = render (*p, 0.6, chord (0.0, 0.5, { 69 }));
+            CHECK (m.peak < 1.0e-6f, juce::String ("Core ") + (slot ? "B" : "A") + " Mixer mute");
+            p = coreOnly (slot); setP (*p, P_mxCoreAPan + 3 * slot, -1.0f);
+            juce::AudioBuffer<float> pc; render (*p, 0.6, chord (0.0, 0.5, { 69 }), &pc);
+            CHECK (pc.getMagnitude (1, 0, pc.getNumSamples()) < 0.01f * pc.getMagnitude (0, 0, pc.getNumSamples()) + 1.0e-6f, juce::String ("Core ") + (slot ? "B" : "A") + " Mixer pan hard left");
+        }
+        // 8. unison spread is stereo; one voice is mono
+        {
+            auto p = coreOnly(); setP (*p, coreParam (0, CS_Uni), 3.0f); setP (*p, coreParam (0, CS_Spread), 1.0f);
+            juce::AudioBuffer<float> cap; render (*p, 0.8, chord (0.0, 0.7, { 57 }), &cap);
+            double diff = 0, sum = 0;
+            for (int i = 0; i < cap.getNumSamples(); ++i) { diff += std::abs (cap.getSample (0, i) - cap.getSample (1, i)); sum += std::abs (cap.getSample (0, i)); }
+            CHECK (diff > 0.1 * sum, "unison spread makes the Core stereo");
+        }
+        // 9. the Core A Out (audio rate) and Op 1 Env sources, and a Mod Matrix route into an operator setting
+        {
+            auto p = coreOnly();
+            juce::AudioBuffer<float> a; render (*p, 0.6, chord (0.0, 0.5, { 57 }), &a);
+            p->addRoute (MS_CoreAEnv, coreOpParam (0, 1, CO_Level), 1.0f);   // op 1's envelope opens op 2...
+            setP (*p, coreOpParam (0, 1, CO_M1), 3.0f);                               // ... which modulates op 1
+            juce::AudioBuffer<float> b; render (*p, 0.6, chord (0.0, 0.5, { 57 }), &b);
+            float d = 0; for (int i = 0; i < a.getNumSamples(); ++i) d = std::max (d, std::abs (a.getSample (0, i) - b.getSample (0, i)));
+            CHECK (d > 0.05f, "Core A Op 1 Env routed to an operator level changes the sound");
+        }
+        // ... and Core A (audio rate) into the filter cutoff, per sample (with Osc 1 through the filter to hear it)
+        {
+            auto mk = [&]
+            {
+                auto p = coreOnly(); setP (*p, P_osc1Gain, 0.5f); setP (*p, P_filterCutoff, 800.0f); setP (*p, P_cALevel, 0.001f);
+                setP (*p, P_reverbMix, 0.0f); tg::resetVoiceRandom(); return p;
+            };
+            auto a = mk(); juce::AudioBuffer<float> ca; render (*a, 0.5, chord (0.0, 0.4, { 45 }), &ca);
+            auto b = mk(); b->addRoute (MS_CoreAAudio, P_filterCutoff, 1.0f); setP (*b, P_cALevel, 1.0f); setP (*b, P_mxCoreAMute, 1.0f);
+            tg::resetVoiceRandom(); juce::AudioBuffer<float> cb; render (*b, 0.5, chord (0.0, 0.4, { 45 }), &cb);
+            float d = 0; for (int i = 0; i < ca.getNumSamples(); ++i) d = std::max (d, std::abs (ca.getSample (0, i) - cb.getSample (0, i)));
+            CHECK (d > 0.01f, "Core A (audio rate) drives the filter cutoff, even with its strip muted");
+        }
+        // 10. patches: a patch file carries the Core settings; old patches and projects load with the Core off
+        {
+            auto p = coreOnly(); setP (*p, coreOpParam (0, 2, CO_Ratio), 7.0f);
+            const auto text = p->exportBrowserPatch();
+            auto q = make(); q->importBrowserPatch (text);
+            CHECK (juce::approximatelyEqual (plainOf (*q, coreOpParam (0, 2, CO_Ratio)), 7.0f) && plainOf (*q, P_cAEngine) > 0.5f, "a patch file keeps the Core settings");
+            auto obj = juce::JSON::parse (text);
+            if (auto* ex = obj["plugin"].getDynamicObject())
+                for (auto& prop : juce::NamedValueSet (ex->getProperties()))
+                    if (prop.name.toString().startsWith ("cA") || prop.name.toString().startsWith ("cB") || prop.name.toString().startsWith ("mxCore")) ex->removeProperty (prop.name);
+            auto r = coreOnly(); r->importBrowserPatch (juce::JSON::toString (obj));
+            CHECK (plainOf (*r, P_cAEngine) < 0.5f, "a patch from before the Core loads with it Off");
+        }
+        // 11. Algorithm writes the matrix (one undo step), the picture follows it, Reset puts the slot back
+        {
+            auto p = coreOnly();
+            p->applyCoreAlgorithm (0, 0);   // the stack 6>5>4>3>2>1
+            bool ok = true;
+            for (int k = 0; k < 6; ++k)
+                for (int j = 0; j < 6; ++j)
+                    if (j != k) ok &= juce::approximatelyEqual (plainOf (*p, coreOpParam (0, k, CO_M1 + j)), (k == j + 1) ? 2.0f : 0.0f);
+            ok &= plainOf (*p, coreOpParam (0, 0, CO_Out)) > 0.99f && plainOf (*p, coreOpParam (0, 3, CO_Out)) < 0.01f && plainOf (*p, coreOpParam (0, 5, CO_Level)) > 0.4f;
+            CHECK (ok, "Algorithm: the stack written into the matrix");
+            tgui::CoreAlgoView view (*p, 0, juce::Colours::white);
+            int d[6]; tgui::CoreAlgoView::depths (view.read(), d);
+            CHECK (d[0] == 0 && d[1] == 1 && d[5] == 5, "the routing picture reads the stack (carrier op 1, op 6 five steps out)");
+            p->applyCoreAlgorithm (0, 11);   // all six heard
+            tgui::CoreAlgoView::depths (view.read(), d);
+            bool all = true; for (int k = 0; k < 6; ++k) all &= d[k] == 0;
+            CHECK (all, "the routing picture: organ, all six heard");
+            p->undo();
+            CHECK (juce::approximatelyEqual (plainOf (*p, coreOpParam (0, 1, CO_M1)), 2.0f) && plainOf (*p, coreOpParam (0, 5, CO_Out)) < 0.01f, "Algorithm is one undo step");
+            setP (*p, coreParam (0, CS_Bright), 1.7f);
+            p->resetCoreSlot (0);
+            CHECK (plainOf (*p, P_cAEngine) > 0.5f && juce::approximatelyEqual (plainOf (*p, coreParam (0, CS_Bright)), 1.0f) && plainOf (*p, coreOpParam (0, 1, CO_M1)) < 0.01f,
+                   "Reset: the slot back to its defaults, the engine kept");
+            // the pages are there
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            CHECK (showPage (ed.get(), "Core A") && showPage (ed.get(), "Core B"), "Oscillators > Core A and Core B pages");
+        }
+        // 12. CPU: a 4-note chord on Init, then with Core A on top (all six operators in a stack with feedback,
+        //     1 and 8 unison voices), per quality; the best of five runs
+        {
+            auto cpuOf = [&] (int uni, int q)
+            {
+                double best = 1e9;
+                for (int rep = 0; rep < 5; ++rep)
+                {
+                    auto p = make(); setP (*p, P_quality, (float) q);
+                    if (uni >= 0) { setP (*p, P_cAEngine, 1.0f); p->applyCoreAlgorithm (0, 0); setP (*p, P_cA6M6, 1.0f); setP (*p, coreParam (0, CS_Uni), (float) uni); }
+                    render (*p, 0.2, {});
+                    double cpu = 0; render (*p, 2.0, chord (0.0, 1.8, { 45, 52, 57, 60 }), nullptr, &cpu);
+                    best = std::min (best, cpu / 2.0 * 100.0);
+                }
+                return best;
+            };
+            for (int q = 0; q < 3; ++q)
+            {
+                const double base = cpuOf (-1, q), one = cpuOf (0, q), eight = cpuOf (5, q);
+                std::cout << "  CPU, 4 notes, " << kQualityLabels[q] << ": Init " << juce::String (base, 2) << "% of a core; with Core A (6-op stack) "
+                          << juce::String (one, 2) << "% (+" << juce::String (one - base, 2) << "), with 8 unison voices " << juce::String (eight, 2)
+                          << "% (+" << juce::String (eight - base, 2) << ")" << std::endl;
+                if (q == 1) CHECK (one - base < 15.0, "Core A (one voice), 4 notes, Normal: under 15% of a core on top of Init");
+            }
+        }
+    };
     // ---- the bank's checks: finite, peak below -1 dBFS, level within 3 dB of -12 dBFS, its information, mono low end
     //      for the basses, macros, unique names, the 36 before it unchanged in place
     auto presetBankTests = [&]
@@ -6523,9 +6846,20 @@ int main()
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_REACTONLY", {}).isNotEmpty())
     {
         reactTests();
-    categoryTests();
-    presetBankTests();
         std::cout << (failures == 0 ? "REACT TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BANKSEQ", {}).isNotEmpty())
+    {
+        // (the full run's order up to the bank, to check it in that state)
+        reeseTests(); reactTests(); coreTests(); categoryTests(); tg::resetVoiceRandom(); presetBankTests();
+        std::cout << (failures == 0 ? "BANKSEQ PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_COREONLY", {}).isNotEmpty())
+    {
+        coreTests();
+        std::cout << (failures == 0 ? "CORE TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;
     }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_REESEONLY", {}).isNotEmpty())
@@ -6566,6 +6900,36 @@ int main()
             if (w != nullptr) { os.release(); w->writeFromAudioSampleBuffer (all, 0, total); }
             std::cout << "DEMO " << f.getFullPathName() << " peak " << all.getMagnitude (0, total) << std::endl;
         };
+        // 10. the Core oscillator over the demo break: bars 1-4 Core A alone (a Kernel FM bass: a 1:1 pair with a
+        //     decaying index and feedback on the modulator, plus a sine an octave below), bars 5-8 Core B joins
+        //     (a metallic 1:3.5 pluck layer, three unison voices spread) and Core A gets brighter
+        auto coreDemo = [&]
+        {
+            auto p = make(); p->loadFactoryPreset (32);
+            for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_supersawGain, P_complexGain }) setP (*p, i, 0.0f);
+            setP (*p, P_ampA, 0.002f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.08f); setP (*p, P_filterCutoff, 20000.0f);
+            setP (*p, P_bcKeyBase, 96.0f); setP (*p, P_quality, 2.0f);
+            auto op = [&] (int s, int k, int w, float v) { setP (*p, coreOpParam (s, k, w), v); };
+            setP (*p, P_cAEngine, 1.0f); setP (*p, P_cALevel, 0.55f); setP (*p, P_cAOct, -1.0f);
+            op (0, 1, CO_Level, 1.0f); op (0, 1, CO_M1, 2.5f); op (0, 1, CO_M1 + 1, 0.9f); op (0, 1, CO_Dec, 0.35f); op (0, 1, CO_Sus, 0.25f);
+            op (0, 2, CO_Ratio, 0.5f); op (0, 2, CO_Level, 0.7f); op (0, 2, CO_Out, 0.5f);
+            setP (*p, P_cBLevel, 0.5f); setP (*p, P_cBUni, 2.0f); setP (*p, P_cBDetune, 8.0f); setP (*p, P_cBSpread, 0.8f);
+            op (1, 0, CO_Dec, 0.2f); op (1, 0, CO_Sus, 0.0f);
+            op (1, 1, CO_Ratio, 3.5f); op (1, 1, CO_Level, 1.0f); op (1, 1, CO_M1, 4.0f); op (1, 1, CO_Dec, 0.12f); op (1, 1, CO_Sus, 0.0f);
+            std::vector<std::pair<int, juce::MidiMessage>> ev;
+            const int notes[] = { 45, 45, 41, 43, 45, 45, 48, 43 };
+            for (int b = 0; b < 8; ++b)
+                for (double off : { 0.0, 1.5, 3.0 })   // (three hits a bar: the bass rhythm)
+                {
+                    ev.push_back ({ (int) ((b * 4.0 + off) / inc), juce::MidiMessage::noteOn (1, notes[b], (juce::uint8) 100) });
+                    ev.push_back ({ (int) ((b * 4.0 + off + (off < 3.0 ? 1.25 : 0.85)) / inc), juce::MidiMessage::noteOff (1, notes[b]) });
+                }
+            bool switched = false;
+            onBeat = [&] (double beat) { if (! switched && beat >= 16.0 - 0.02) { switched = true; setP (*p, P_cBEngine, 1.0f); setP (*p, P_cABright, 1.6f); } };
+            renderTo (*p, "core_demo_kernel_fm_172.wav", ev);
+            onBeat = nullptr;
+        };
+        if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BREAKDEMOS", {}) == "core") { coreDemo(); return 0; }
         const int slot = MegaSynthProcessor::kSlotBreak;
         // 1. the break as it is: pattern A (Original) for 8 bars, Akai Cyclic, 170 -> 172 BPM
         {
@@ -6782,11 +7146,11 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.62.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.66.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         for (auto& id : before) if (ids.count (id) == 0) lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.62 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine and Break React added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.66 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React and the Core A / B slots added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Mixer", "Filters", "Envelopes",
@@ -8193,6 +8557,10 @@ int main()
     perfTests();
     reeseTests();
     reactTests();
+    coreTests();
+    categoryTests();
+    tg::resetVoiceRandom();   // (the bank's levels are measured from the random sequence's start, as when run on its own)
+    presetBankTests();
     granTests();
     breakTests();
     hardTests();

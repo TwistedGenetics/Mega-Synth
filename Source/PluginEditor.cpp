@@ -11,6 +11,8 @@
 #include "UI/PerfFxPage.h"
 #include "UI/SamplePages.h"
 #include "UI/BreakPages.h"
+#include "UI/CorePage.h"
+#include "CoreAlgorithms.h"
 
 using namespace tg;
 using namespace tgui;
@@ -1562,7 +1564,7 @@ void MegaSynthEditor::buildPages()
     struct TabDef { const char* name; juce::StringArray subs; juce::Colour colour; };
     const TabDef layout[] = {
         { "Perform", { "Perform", "Performance FX" }, col::accent }, { "Overview", {}, col::accent },
-        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Break Chopper", "Reese", "Break React" }, col::osc },
+        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Break Chopper", "Reese", "Core A", "Core B", "Break React" }, col::osc },
         { "Mixer", {}, col::mixer }, { "Filters", {}, col::filter },
         { "Envelopes", { "Amp & Filter", "Mod Envelopes", "Pitch Envelope", "MSEG 1 & 2" }, col::env },
         { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Space", "Dirt", "Motion", "Rack" }, col::fx },
@@ -2504,6 +2506,110 @@ void MegaSynthEditor::buildPages()
         };
     }
 
+    // ---------------------------------------------------------------- Oscillators > Core A, Core B
+    for (int slot = 0; slot < 2; ++slot)
+    {
+        auto* page = addPage (slot == 0 ? "Core A" : "Core B");
+        const auto c = slot == 0 ? juce::Colour (0xff59d0ff) : juce::Colour (0xffb98cff);
+        const juce::String nm = slot == 0 ? "Core A" : "Core B";
+        auto* top = sec (page, nm, c);
+        top->addInfo ("A slot for a Core engine, heard alongside everything else (own Mixer strip, then the filters). Kernel FM: six "
+                      "operators, each a waveform at a ratio of the note (or a fixed frequency) with its own envelope; any operator "
+                      "can modulate any other and itself. Off costs nothing and changes nothing. Unison stacks the whole kernel; "
+                      "Brightness scales every modulation amount; Envelope Speed makes all six envelopes faster or slower.");
+        top->choice (tg::coreParam (slot, tg::CS_Engine), "Engine", 104);
+        top->knob (tg::coreParam (slot, tg::CS_Level), "Level", 56);
+        top->knob (tg::coreParam (slot, tg::CS_Oct), "Octave", 56);
+        top->knob (tg::coreParam (slot, tg::CS_Semi), "Semi", 56);
+        top->knob (tg::coreParam (slot, tg::CS_Fine), "Fine", 56);
+        top->choice (tg::coreParam (slot, tg::CS_Uni), "Unison", 92);
+        top->knob (tg::coreParam (slot, tg::CS_Detune), "Detune", 56);
+        top->knob (tg::coreParam (slot, tg::CS_Spread), "Spread", 56);
+        top->choice (tg::coreParam (slot, tg::CS_Retrig), "Retrigger", 90)->box.setTooltip ("Reset: every note starts the operators together (the usual for FM). Free: they run on from the last note. Random: a new start each note.");
+        top->knob (tg::coreParam (slot, tg::CS_Bright), "Bright", 56);
+        top->knob (tg::coreParam (slot, tg::CS_EnvSpd), "Env Speed", 60);
+
+        auto* rt = sec (page, "Routing", c);
+        rt->addInfo ("What the matrix is doing now: the operators you hear on the right, the ones modulating them to the left, a loop "
+                     "for feedback (thicker lines: more). Algorithm writes a starting routing into the matrix (connections at 2, "
+                     "the heard operators' outputs, and a level for any it uses that was at 0); then edit it freely. "
+                     "Reset puts this slot back to its defaults (one sine).");
+        auto* view = page->own (new CoreAlgoView (proc, slot, c));
+        auto* algoBtn = page->own (new juce::TextButton ("Algorithm..."));
+        auto* resetBtn = page->own (new juce::TextButton ("Reset"));
+        algoBtn->onClick = [this, slot, algoBtn]
+        {
+            juce::PopupMenu m;
+            for (int a = 0; a < tg::kNumCoreAlgorithms; ++a) m.addItem (a + 1, tg::kCoreAlgorithms[a].name);
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (algoBtn), [this, slot] (int r)
+            {
+                if (r <= 0) return;
+                proc.applyCoreAlgorithm (slot, r - 1);
+                setStatus (juce::String ("Core ") + (slot ? "B" : "A") + " routing: " + tg::kCoreAlgorithms[r - 1].name);
+            });
+        };
+        resetBtn->onClick = [this, slot] { proc.resetCoreSlot (slot); setStatus (juce::String ("Core ") + (slot ? "B" : "A") + " reset"); };
+
+        auto* ops = sec (page, "Operators", c);
+        ops->addInfo ("One row per operator. Ratio: times the note (Fixed: a frequency of its own, for clangs and noise). Level: how loud it "
+                      "is heard, and how hard it modulates. Vel: how much velocity changes the level. Key: louder up the keyboard (+) "
+                      "or quieter (-). Out: how much of it you hear (0: it only modulates). The envelope is Delay, Attack, Hold, "
+                      "Decay, Sustain, Release. The last six knobs send this operator into operators 1-6 (the modulation index, in "
+                      "radians); the one on its own row is feedback.");
+        juce::Array<Knob*> ratioKnobs, hzKnobs;
+        juce::Array<juce::Component*> dimmable;
+        const char* envCaps[6] = { "Delay", "Attack", "Hold", "Decay", "Sustain", "Release" };
+        const int envW[6] = { 44, 44, 44, 44, 44, 44 };
+        for (int k = 0; k < 6; ++k)
+        {
+            if (k > 0) ops->newRow();
+            auto* lbl = new juce::Label ({}, juce::String (k + 1));
+            lbl->setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
+            lbl->setColour (juce::Label::textColourId, c);
+            lbl->setJustificationType (juce::Justification::centred);
+            ops->add (lbl, 18, 58);
+            auto op = [slot, k] (int w) { return tg::coreOpParam (slot, k, w); };
+            auto knob = [&] (int w, const juce::String& cap, int width) { auto* kn = new Knob (proc, op (w), cap, c); ops->add (kn, width, 60); return kn; };
+            auto* wv = new Choice (proc, op (tg::CO_Wave), "Wave"); ops->add (wv, 84, 44);
+            ratioKnobs.add (knob (tg::CO_Ratio, "Ratio", 48));
+            ops->add (new ParamToggle (proc, op (tg::CO_Fixed), "Fixed", c), 58, 24);
+            hzKnobs.add (knob (tg::CO_Hz, "Hz", 54));
+            knob (tg::CO_Fine, "Fine", 56);
+            knob (tg::CO_Level, "Level", 48);
+            knob (tg::CO_Vel, "Vel", 44);
+            knob (tg::CO_Key, "Key", 52);
+            knob (tg::CO_Out, "Out", 44);
+            for (int e = 0; e < 6; ++e) knob (tg::CO_Dly + e, envCaps[e], envW[e]);
+            for (int j = 0; j < 6; ++j)
+                knob (tg::CO_M1 + j, j == k ? juce::String ("FB") : juce::String (juce::CharPointer_UTF8 ("\xe2\x86\x92")) + juce::String (j + 1), 40);
+        }
+        auto* ticker = page->own (new StoreTicker());
+        ticker->tick = [this, slot, ratioKnobs, hzKnobs, ops, top]
+        {
+            auto plain = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+            const bool on = plain (tg::coreParam (slot, tg::CS_Engine)) > 0.5f;
+            ops->setAlpha (on ? 1.0f : 0.55f);
+            for (int k = 0; k < 6; ++k)
+            {
+                const bool fixed = plain (tg::coreOpParam (slot, k, tg::CO_Fixed)) > 0.5f;
+                ratioKnobs[k]->setAlpha (fixed ? 0.4f : 1.0f); hzKnobs[k]->setAlpha (fixed ? 1.0f : 0.4f);
+            }
+            juce::ignoreUnused (top);
+        };
+        ticker->tick();
+        page->onResize = [page, top, rt, view, algoBtn, resetBtn, ops]
+        {
+            const int g = 10, W = page->getWidth();
+            top->setBounds (g, g, 820, 126);
+            rt->setBounds (g + 830, g, W - 2 * g - 830, 126);
+            view->setBounds (rt->getX() + 8, rt->getY() + 30, rt->getWidth() - 96, 90);
+            algoBtn->setBounds (rt->getRight() - 86, rt->getY() + 34, 78, 24);
+            resetBtn->setBounds (rt->getRight() - 86, rt->getY() + 64, 78, 24);
+            algoBtn->toFront (false); resetBtn->toFront (false); view->toFront (false);
+            ops->setBounds (g, g + 134, W - 2 * g, 432);
+        };
+    }
+
     // ---------------------------------------------------------------- Oscillators > Break React
     {
         auto* page = addPage ("Break React");
@@ -2811,7 +2917,9 @@ void MegaSynthEditor::buildPages()
             { "Ring", P_ringGain, P_ringMix, "Ring Mix", -1, col::fm },
             { "Granular", P_gsLevel, P_gsDensity, "Density", 99, col::supersaw },
             { "Break", P_bcLevel, P_bcPitch, "Pitch", -1, col::complex },
-            { "Reese", P_rsLevel, P_rsWidth, "Width", 99, juce::Colour (0xffff7a59) } };   // (99: lit only when the pitch envelope moves all)
+            { "Reese", P_rsLevel, P_rsWidth, "Width", 99, juce::Colour (0xffff7a59) },
+            { "Core A", tg::coreParam (0, tg::CS_Level), tg::coreParam (0, tg::CS_Bright), "Bright", 99, juce::Colour (0xff59d0ff) },
+            { "Core B", tg::coreParam (1, tg::CS_Level), tg::coreParam (1, tg::CS_Bright), "Bright", 99, juce::Colour (0xffb98cff) } };   // (99: lit only when the pitch envelope moves all)
         juce::Array<ChannelStrip*> stripList;
         for (int k = 0; k < kMxStrips; ++k)
             stripList.add (page->own (new ChannelStrip (proc, k, strips[k].name, strips[k].level, strips[k].extra, strips[k].extraCap, strips[k].pEnv, strips[k].c)));
@@ -2849,7 +2957,7 @@ void MegaSynthEditor::buildPages()
         auto* rt = sec (page, "Effect Returns", col::mixer);
         for (auto [idx, n] : { std::pair<int, const char*> { P_delayMix, "Delay" }, { P_reverbMix, "Reverb" }, { P_shimmerMix, "Shimmer" },
                                { P_chorusMix, "Chorus" }, { P_reverseMix, "Reverse" } })
-            rt->knob (idx, n, 66);
+            rt->knob (idx, n, 54);
         auto* pageFm = addPage ("FM & Ring");
         auto* fmS = sec (pageFm, "FM Matrix  (source -> destination, Hz of deviation)", col::fm);
         for (int i = 0; i < 4; ++i)
@@ -2870,9 +2978,9 @@ void MegaSynthEditor::buildPages()
         }
         // Analog Warmth: the colour of the whole output
         auto* w = sec (page, "Analog", col::supersaw);
-        w->knob (P_warmth, "Warmth", 64);
-        w->knob (P_bassKeep, "Bass Keep", 64);
-        w->knob (P_analogDrift, "Drift", 64);
+        w->knob (P_warmth, "Warmth", 56);
+        w->knob (P_bassKeep, "Bass Keep", 56);
+        w->knob (P_analogDrift, "Drift", 56);
         w->addInfo ("Warmth: softer, rounder filter Drive saturation, plus a gentle low lift and smoother top.  "
                     "Bass Keep: holds onto low end in the classic models with high-pass or band-pass stages.  "
                     "Drift: each oscillator wanders slightly and starts free-running.  All at zero = the browser's exact sound.");
@@ -2898,11 +3006,14 @@ void MegaSynthEditor::buildPages()
         page->onResize = [page, stripList, srcHelp, engS, chipList, rt, w, outS, outL, outR, rtg]
         {
             const int g = 10, W = page->getWidth();
-            const int stripW = 64, stripsW = stripW * kMxStrips + 2 * 4;
+            const int stripW = 60, stripsW = stripW * kMxStrips + 2 * 4;
             srcHelp->setBounds (g, g, stripsW + 8, 32 + 360 + 8);
             for (int k = 0; k < stripList.size(); ++k) { stripList[k]->setBounds (g + 4 + k * stripW, g + 32, stripW - 4, 360); stripList[k]->toFront (false); }
-            w->setBounds (g, g + 410, 260, 130);
-            rtg->setBounds (g + 270, g + 410, 520, 92);
+            // under the strips: Analog, Routing, Effect Returns; on the right: the engines and the output
+            const int by = g + 410;
+            w->setBounds (g, by, 200, 136);
+            rtg->setBounds (g + 208, by, 318, 136);
+            rt->setBounds (g + 534, by, stripsW + 8 - 534, 136);
             const int rx = g + stripsW + 8 + g, rw = W - rx - g;
             engS->setBounds (rx, g, rw, 270);
             const int cw = (rw - 20) / 4;
@@ -2912,10 +3023,9 @@ void MegaSynthEditor::buildPages()
                 chipList[k]->setBounds (rx + 10 + c * cw, g + 32 + row * 114, cw - 6, 110);
                 chipList[k]->toFront (false);
             }
-            rt->setBounds (rx, g + 280, rw, 130);
-            outS->setBounds (rx, g + 420, rw - 46, 130);
-            outL->setBounds (rx + rw - 40, g + 420, 14, 130);
-            outR->setBounds (rx + rw - 22, g + 420, 14, 130);
+            outS->setBounds (rx, g + 280, rw - 46, 226);
+            outL->setBounds (rx + rw - 40, g + 280, 14, 226);
+            outR->setBounds (rx + rw - 22, g + 280, 14, 226);
         };
         pageFm->onResize = [pageFm, fmS, rg]
         {

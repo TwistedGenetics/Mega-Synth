@@ -9,15 +9,24 @@ namespace tgui
 {
 
 static float plainOf (MegaSynthProcessor& p, int i) { return p.param (i)->convertFrom0to1 (p.param (i)->getValue()); }
+// "Oscillators", plus the Reese and the Core slots when they are on
+static juce::String oscBoxName (MegaSynthProcessor& p)
+{
+    juce::String n ("Oscillators");
+    if (plainOf (p, P_rsLevel) > 0.0f) n << " + Reese";
+    const bool a = plainOf (p, P_cAEngine) > 0.5f, b = plainOf (p, P_cBEngine) > 0.5f;
+    if (a || b) n << " + Core" << (a && b ? " A/B" : (a ? " A" : " B"));
+    return n;
+}
 
 //==============================================================================
 // Signal flow: the per-note chain, then the bus, with live on/off state, Mod Matrix route
 // counts per stage and the Feedback Matrix paths drawn as arcs.
 namespace
 {
-    struct Box { const char* name; const char* modules[5]; };
+    struct Box { const char* name; const char* modules[7]; };
     const Box kBoxes[] = {
-        { "Oscillators", { "Oscillator", "Wavetable", "Complex", "SuperSaw", "Reese" } },
+        { "Oscillators", { "Oscillator", "Wavetable", "Complex", "SuperSaw", "Reese", "Core A", "Core B" } },
         { "DNA Splice", { "DNA Splice", nullptr } },
         { "Wave Mutation", { "Wave Mutation", nullptr } },
         { "Audio-Rate", { "Audio-Rate Transform", nullptr } },
@@ -129,7 +138,7 @@ void SignalFlowView::paint (juce::Graphics& g)
         g.drawRoundedRectangle (rb, 7.0f, active[b] ? 1.6f : 1.0f);
         g.setColour (active[b] ? col::text : col::muted);
         g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
-        g.drawFittedText (b == 0 && plainOf (proc, P_rsLevel) > 0.0f ? juce::String ("Oscillators + Reese") : juce::String (kBoxes[b].name), rb.reduced (3).toNearestInt(), juce::Justification::centred, 2);
+        g.drawFittedText (b == 0 ? oscBoxName (proc) : juce::String (kBoxes[b].name), rb.reduced (3).toNearestInt(), juce::Justification::centred, 2);
         if (routesTo[b] > 0)
         {
             const auto badge = juce::Rectangle<float> (rb.getRight() - 22, rb.getY() - 8, 24, 16);

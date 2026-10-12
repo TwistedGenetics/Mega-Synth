@@ -10,6 +10,7 @@
 #include "Mut/DnaSplice.h"
 #include "Mut/Resonator.h"
 #include "Reese.h"
+#include "CoreKernel.h"
 #include "BreakReact.h"
 #include "Fx/MasterFilter.h"
 #include "Fx/PerfFx.h"
@@ -173,6 +174,12 @@ private:
     ReeseOsc reese;          // the Reese engine
     S lRs;                   // its level (smoothed)
     bool rsRun = false;      // on, or still fading out
+    // the Core oscillator slots (A, B)
+    CoreKernel core[2];
+    CoreSettings coreSet[2];
+    S lCore[2];              // their levels (smoothed)
+    bool coreRun[2] {};      // on, or still fading out
+    double coreHz[2] {};
     // Break-Reactive mode: Osc 1-3 and the sub's old phases, faded out just after a phase reset
     double rxOldPh[4] {};
     int rxXf[4] {};
@@ -258,7 +265,7 @@ private:
     float rndA = 0, rndB = 0, shVal = 0, chaosX = 0.5f, drA = 0, drB = 0;
     float envF = 0, audF = 0, trFast = 0, trSlow = 0;
     float lastDt = 0.0f;
-    float aPrev[4] {};           // previous sample of Osc 1, 2, 3 and Sub, for audio-rate routes
+    float aPrev[6] {};           // previous sample of Osc 1, 2, 3, Sub, Core A and Core B, for audio-rate routes
     RouteState rstate;
     Snapshot modSnap;
 

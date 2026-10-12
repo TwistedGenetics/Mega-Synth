@@ -84,14 +84,14 @@ public:
         g.setColour (colour); g.fillRoundedRectangle (juce::Rectangle<float> (r.getX() + 8, r.getY() + 8, r.getWidth() - 16, 3), 1.5f);
         g.setColour (col::text);
         g.setFont (juce::Font (juce::FontOptions (12.5f, juce::Font::bold)));
-        g.drawText (title, juce::Rectangle<float> (r.getX(), r.getY() + 13, r.getWidth(), 18), juce::Justification::centred);
+        g.drawFittedText (title, juce::Rectangle<float> (r.getX() + 2, r.getY() + 13, r.getWidth() - 4, 18).toNearestInt(), juce::Justification::centred, 1, 0.75f);
         if (pEnvIndex >= 0)
         {
             const auto tag = juce::Rectangle<float> (r.getX() + 8, r.getBottom() - 22, r.getWidth() - 16, 15);
             g.setColour (pEnvLit ? col::env : col::panel2); g.fillRoundedRectangle (tag, 4.0f);
             g.setColour (pEnvLit ? col::bg : col::muted);
             g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
-            g.drawText ("PITCH ENV", tag, juce::Justification::centred);
+            g.drawFittedText ("PITCH ENV", tag.toNearestInt(), juce::Justification::centred, 1, 0.6f);
         }
     }
     void resized() override
@@ -102,8 +102,9 @@ public:
         if (unison != nullptr) unison->setBounds (kx, 210, kw, 84);
         meter.setBounds (w - mw - 5, 34, mw, 262);
         const int by = 302;
-        mute.setBounds (6, by, (w - 16) / 2, 24);
-        solo.setBounds (10 + (w - 16) / 2, by, (w - 16) / 2, 24);
+        const int bw = (w - 12) / 2;
+        mute.setBounds (4, by, bw, 24);
+        solo.setBounds (w - 4 - bw, by, bw, 24);
     }
 private:
     float plain (int i) const { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); }

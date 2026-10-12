@@ -62,7 +62,7 @@ The tabs follow the signal: the oscillators, the mix, the filters, the envelopes
 |---|---|
 | Perform | Perform, Performance FX |
 | Overview | (one page) |
-| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring, Granular Synth, Break Chopper |
+| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring, Granular Synth, Break Chopper, Reese, Core A, Core B, Break React |
 | Mixer | (one page) |
 | Filters | (one page) |
 | Envelopes | Amp & Filter, Mod Envelopes, Pitch Envelope, MSEG 1 & 2 |
@@ -169,7 +169,7 @@ The character models, with ideas from Beep Street's Sunrizer plus extras:
 
 A console, in the order the sound flows:
 
-- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, the Ring modulator, the Granular Synth, the Break Chopper and the Reese engine, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
+- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, the Ring modulator, the Granular Synth, the Break Chopper, the Reese engine and the two Core slots, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
   - Pan is a balance: centred, both sides stay at full level, so a centred mix sounds exactly as it did before the strips. Panning turns the other side down.
   - A muted source still works as an FM or ring modulator. With any Solo on, only soloed sources are heard. Mute and Solo ramp over a few milliseconds, so they don't click.
   - Pan is a Mod Matrix destination. The strips aren't changed by Mutate.
@@ -213,6 +213,22 @@ Break-Reactive mode: the synth listens to the breaks and reacts on the hits you 
 - **Mod Matrix:** two new sources, **Break Hit** (the attack/decay envelope, 0 to 1) and **Break Hit Type** (the last hit: 0 kick, 0.5 snare, 1 hat). Drag them from the chips in the title. The amounts are per voice, so they can be modulated; Sensitivity, the shape and the timing follow the global sources, like the arpeggiator's settings.
 - **Measured:** the reaction lands on the slice's first sample, from the slice keys and from the Break Sequencer (0 samples apart); Offset +10 ms is 480 samples later at 48 kHz and -5 ms plays the break 240 samples late. After a MIDI trigger, the oscillator's phase is within 0.005 samples of a note started on that sample. The reset's largest step is about the same as the sine's own steepest step, so no click; the duck's is smaller.
 - **CPU:** small. With 8 notes and a reaction on every 16th at 172 BPM it measured 1-3% of a core more, within run-to-run noise.
+
+## Core A and Core B (Oscillators > Core A, Core B)
+
+Two slots for a **Core engine**, each heard alongside everything else: its own Mixer strip, then the voice's filters. Both are **off by default** (Engine: Off). Off, the sound is bit-for-bit what it was, whatever the slot's other settings, so older patches and projects are unchanged and load with them off. The first engine is **Kernel FM**; more engines will be added to the same Engine list later (saved patches keep their choice).
+
+**Kernel FM** is six-operator phase modulation ("FM") with a free matrix: any operator can modulate any other and itself.
+
+- **Slot:** **Engine**, **Level**, **Octave**, **Semi**, **Fine** (relative to the note; the pitch bend, pitch LFOs and the pitch envelope set to "all oscillators" move it too), **Unison** (1, 2, 3, 4, 6 or 8 copies of the whole kernel) with **Detune** (the outer copies are +/- this many cents) and **Spread** (across the stereo field), **Retrigger** (Reset: every note starts the operators together, the usual for FM; Free: they run on from the last note; Random), **Bright** (scales every modulation amount, 0-200%: one knob for the whole timbre) and **Env Speed** (all six envelopes x0.25 to x4 as fast).
+- **Operators** (one row each): **Wave** (Sine, Half Sine, Abs Sine, Quarter Sine, Alt Sine, Camel Sine, Soft Square, Soft Saw), **Ratio** (x0.25 to x32 of the note, in quarters) or **Fixed** at its own **Hz** (for clangs and noise), **Fine** (+/- 100 cents), **Level** (how loud it's heard and how hard it modulates), **Vel** (how much velocity changes the level), **Key** (key scaling: louder or quieter up the keyboard, +/- 6 dB per octave from middle C), **Out** (how much of it you hear; 0 = it only modulates), and its envelope: **Delay, Attack, Hold, Decay, Sustain, Release**.
+- **Modulation:** the last six knobs on each row send that operator into operators 1-6, in radians (the modulation index: 1 at full level moves the other operator's phase by up to 1 radian). The one on its own row (**FB**) is feedback: it uses the average of the operator's last two samples, so it stays stable all the way up (it turns into noise rather than blowing up). Operators are worked out from 6 down to 1, so a higher operator modulating a lower one (the usual stacks) acts in the same sample; the other way round acts one (oversampled) sample later.
+- **Routing:** a picture of what the matrix is doing right now (heard operators on the right, the ones modulating them to the left, a loop for feedback, thicker lines for more). **Algorithm...** writes one of 12 starting routings into the matrix (stacks, pairs, a Y, a tree, a fan, all six heard...): connections at 2, outputs for the heard operators, and a level for any operator it uses that was at 0. Then edit the matrix freely; the picture follows. These are in the spirit of the classic six-operator algorithms, not a copy of any synth's numbering. **Reset** puts the slot back to one sine (the engine choice kept). Both are one undo step.
+- **Mixer:** each slot has its own strip (Level, Pan, Bright, Mute, Solo, meter), and the Overview's first block reads "Oscillators + Core A" (or B, or A/B) when they're on.
+- **Mod Matrix:** every continuous control is a destination (Octave and Semi aren't; the switches aren't). New sources: **Core A (audio rate)** and **Core B (audio rate)** (the slot's output, for the audio-rate destinations like the filter cutoff), and **Core A Op 1 Env** / **Core B Op 1 Env** (operator 1's envelope). Mutate leaves the Core slots alone.
+- **Quality:** the whole kernel runs oversampled on **Normal (x2)** and **High (x4)** and comes back down through half-band filters, so the sidebands a high index makes do not fold back as aliasing; on **Eco** it isn't oversampled.
+- **Measured** (our build machine, 48 kHz): a 2-operator pair matches the Bessel functions (the textbook FM spectrum) within 0.03 dB at index 1 and 2, and a 1:1 pair matches the formula sin(wt + I sin wt) exactly; operator tuning within 0.0003 cents (ratios, fine and fixed Hz, every quality); envelope stages within 0.1 ms of their settings (Env Speed x1 and x2); feedback finite and bounded (peak below 1.6) up to 24 radians on every waveform and quality. Aliasing on a bright patch (index 4 with feedback) at C6: the worst non-harmonic component is -98 dB on High, -65 dB on Normal and -30 dB on Eco (no oversampling).
+- **CPU** (4 notes held, all six operators in a stack with feedback, on top of Init): about 5-6% of one core on Eco, 8-10% on Normal and 15-17% on High with one unison voice; with 8 unison voices about 9%, 15-20% and 35-45%. Fewer operators cost less (silent ones are skipped). The numbers vary a few percent from run to run.
 
 ## Granular Synth (Oscillators > Granular Synth)
 
@@ -679,6 +695,7 @@ edited, saved, mutated or bred. Loading one can be undone.
   (also lowers latency). Use it for big projects.
 - **Normal** - as designed (2x oversampled Wave Mutation).
 - **High** - 4x oversampled Wave Mutation for the cleanest folding and crushing at high notes.
+- The Reese engine's Drive and the Core slots follow it too (none / x2 / x4).
 
 Quality is your setting rather than part of the sound, so loading a preset keeps it.
 

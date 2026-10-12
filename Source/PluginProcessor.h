@@ -234,13 +234,17 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 25;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode
+    static constexpr int kStateVersion = 26;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
     void redo();
     void returnToOriginal();
     void pushHistory (const juce::String& label);   // record the current state now
+    // the Core slots: write one of the starting routings (CoreAlgorithms.h) into a slot's matrix; reset a slot
+    // to its defaults (the engine choice kept). Both are ordinary parameter changes, one undo step each.
+    void applyCoreAlgorithm (int slot, int algorithm);
+    void resetCoreSlot (int slot);
     void markOriginal();                             // the current state becomes "the original"
     // ---- A/B compare: two versions of the patch to switch between (both start as the loaded patch)
     int abSlot() const { return abSel; }
@@ -272,6 +276,7 @@ private:
     void setGranDefaultsForOldPatch();      // ... and from before the Granular Synth
     void setBreakDefaultsForOldPatch();     // ... and from before the Break Chopper
     void setBreak3DefaultsForOldPatch();    // ... and from before three breaks
+    void setCoreDefaultsForOldPatch();      // ... and from before the Core oscillator slots
     void setReeseDefaultsForOldPatch();     // ... and from before the Reese engine
     void setReactDefaultsForOldPatch();     // ... and from before Break-Reactive mode
     void setAkaiDefaultsForOldPatch();      // ... and from before the Akai Stretch pad

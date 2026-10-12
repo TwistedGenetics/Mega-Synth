@@ -93,6 +93,42 @@ inline juce::String formatParam (int idx, float v)
     if (id == "bcTempo" || id == "bcTempo2" || id == "bcTempo3") return v < 1.0f ? juce::String ("auto") : fixed (v, 1) + " BPM";
     if (id == "bcActive") return "Break " + juce::String (juce::roundToInt (v));
     if (id == "bcChopLatency") return fixed (v, 1) + " ms";
+    // ---- the Core oscillator slots (by index: the layout in coreParam / coreOpParam)
+    if (idx >= P_cAEngine && idx <= P_cB6Out)
+    {
+        const int rel = (idx - P_cAEngine) % kCoreSlotStride;
+        auto pct = [&] { return juce::String (juce::roundToInt (v * 100.0f)) + "%"; };
+        auto secs = [&] { return v < 1.0f ? juce::String (v * 1000.0f, v < 0.01f ? 1 : 0) + " ms" : fixed (v, 2) + " s"; };
+        auto signedInt = [&] (const char* u) { const int n = juce::roundToInt (v); return (n > 0 ? "+" : "") + juce::String (n) + u; };
+        if (rel < kCoreSlotHead)
+        {
+            switch (rel)
+            {
+                case CS_Level: case CS_Spread: return pct();
+                case CS_Oct: return signedInt (" oct");
+                case CS_Semi: return signedInt (" st");
+                case CS_Fine: return (v > 0 ? "+" : "") + fixed (v, 1) + " cents";
+                case CS_Detune: return fixed (v, 1) + " cents";
+                case CS_Bright: return pct();
+                case CS_EnvSpd: return "x" + fixed (v, 2);
+                default: break;
+            }
+        }
+        else
+        {
+            const int w = (rel - kCoreSlotHead) % kCoreOpStride;
+            switch (w)
+            {
+                case CO_Ratio: return "x" + juce::String (v, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+                case CO_Hz: return v < 100.0f ? fixed (v, 2) + " Hz" : formatHz (v);
+                case CO_Fine: return (v > 0 ? "+" : "") + fixed (v, 1) + " ct";
+                case CO_Level: case CO_Vel: case CO_Sus: case CO_Out: return pct();
+                case CO_Key: return (v > 0 ? "+" : "") + fixed (v * 6.0, 1) + "/oct";   // (dB per octave)
+                case CO_Dly: case CO_Att: case CO_Hold: case CO_Dec: case CO_Rel: return secs();
+                default: if (w >= CO_M1 && w < CO_M1 + 6) return fixed (v, 2);   // (radians: the modulation index)
+            }
+        }
+    }
     // ---- the Reese engine
     if (id == "rsLevel" || id == "rsTwist" || id == "rsWidth" || id == "rsRotate" || id == "rsNotch" || id == "rsNotchMove" || id == "rsSub" || id == "rsDrive" || id == "rsTone")
         return juce::String (juce::roundToInt (v * 100.0f)) + "%";

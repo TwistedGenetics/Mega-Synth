@@ -52,6 +52,7 @@ void Voice::prepare (double sampleRate)
     sr = sampleRate;
     gran.prepare (sampleRate);
     reese.prepare (sampleRate);
+    for (auto& c : core) c.prepare (sampleRate);
     waveMut.prepare (sampleRate);
     dna.prepare (sampleRate);
     reso.prepare (sampleRate);
@@ -85,6 +86,7 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     released = false;
     t = 0.0;
     { const int r = clampv (s.i (P_subRoute), 0, 2); for (int j = 0; j < 3; ++j) subRG[j] = j == r ? 1.0f : 0.0f; }   // (a new note starts on its route)
+    for (auto& c : core) c.stop();   // (a Core slot starts with the note when it is on: see updateControl)
     if (s.f (P_rsLevel) > 0.0f) reese.start (clampv (s.i (P_rsRetrig), 0, 2), (uint32_t) (ord * 131u + (uint64_t) k));
     startedAt = voiceRand01() * 1000.0;
     for (int i = 0; i < 9; ++i) ssDriftSin[i] = std::sin ((startedAt + i * 0.37) * 7.123);   // fixed per note
@@ -196,6 +198,7 @@ void Voice::release()
     filtEnv.release (t);
     for (auto& e : modEnv) e.release (t);
     for (auto& m : mseg) m.release();
+    for (auto& c : core) if (c.isStarted()) c.release();
 }
 
 void Voice::computeMod (const Snapshot& s, ModState& mod) const
@@ -251,6 +254,8 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
         v[MS_Sidechain]   = in->sidechain;
         v[MS_BsStep] = in->bsStep; v[MS_BsPattern] = in->bsPattern; v[MS_BsSlice] = in->bsSlice; v[MS_BsBreak] = in->bsBreak; v[MS_BsFill] = in->bsFill;
         v[MS_ReesePhase] = rsRun ? (float) reese.beatPhase() : 0.0f;
+        v[MS_CoreAEnv] = coreRun[0] ? core[0].envelope (0) : 0.0f;
+        v[MS_CoreBEnv] = coreRun[1] ? core[1].envelope (0) : 0.0f;
     }
     v[MS_RandNote] = randNote;
     v[MS_CellNoise] = inst.value (CI_Source);
@@ -667,6 +672,45 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
         reese.setFrequency (fr, s.fxTempo > 0.0 ? s.fxTempo : (double) s.f (P_seqTempo), rs);
     }
 
+    // the Core oscillator slots: their settings for this block (the kernel takes them in render, per sub-block)
+    for (int c = 0; c < 2; ++c)
+    {
+        const bool on = s.i (coreParam (c, CS_Engine)) >= 1;
+        lCore[c].target = on ? clampv (s.f (coreParam (c, CS_Level)), 0.0f, 1.0f) : 0.0f;
+        if (first) lCore[c].v = lCore[c].target; else lCore[c].step (c10);
+        if (lCore[c].target <= 0.0f && lCore[c].v < 1.0e-5f) lCore[c].v = 0.0f;
+        coreRun[c] = lCore[c].target > 0.0f || (lCore[c].v > 0.0f && core[c].isStarted());
+        if (! coreRun[c]) continue;
+        CoreSettings& cs = coreSet[c];
+        static const int uniN[6] = { 1, 2, 3, 4, 6, 8 };
+        cs.uni = uniN[clampv (s.i (coreParam (c, CS_Uni)), 0, 5)];
+        cs.detune = clampv (s.f (coreParam (c, CS_Detune)), 0.0f, 100.0f);
+        cs.spread = clampv (s.f (coreParam (c, CS_Spread)), 0.0f, 1.0f);
+        cs.bright = clampv (s.f (coreParam (c, CS_Bright)), 0.0f, 4.0f);
+        cs.envSpd = clampv (s.f (coreParam (c, CS_EnvSpd)), 0.05f, 16.0f);
+        cs.quality = clampv (s.i (P_quality), 0, 2);
+        for (int k = 0; k < CoreKernel::kOps; ++k)
+        {
+            auto& o = cs.op[k];
+            auto op = [&] (int w) { return s.f (coreOpParam (c, k, w)); };
+            o.wave = clampv (s.i (coreOpParam (c, k, CO_Wave)), 0, 7);
+            o.ratio = clampv (op (CO_Ratio), 0.0f, 64.0f); o.fixed = op (CO_Fixed) > 0.5f; o.hz = clampv (op (CO_Hz), 0.0f, 24000.0f);
+            o.fine = op (CO_Fine); o.level = clampv (op (CO_Level), 0.0f, 1.0f); o.vel = clampv (op (CO_Vel), 0.0f, 1.0f);
+            o.key = clampv (op (CO_Key), -1.0f, 1.0f);
+            o.dly = std::max (0.0f, op (CO_Dly)); o.att = std::max (0.0f, op (CO_Att)); o.hold = std::max (0.0f, op (CO_Hold));
+            o.dec = std::max (0.001f, op (CO_Dec)); o.sus = clampv (op (CO_Sus), 0.0f, 1.0f); o.rel = std::max (0.001f, op (CO_Rel));
+            for (int j = 0; j < 6; ++j) o.m[j] = clampv (op (CO_M1 + j), 0.0f, 24.0f);
+            o.out = clampv (op (CO_Out), 0.0f, 1.0f);
+        }
+        const double pe = s.i (P_pEnvTarget) == 0 ? (double) peRatio[0] : 1.0;
+        coreHz[c] = baseFreq * pow2 (std::round (s.f (coreParam (c, CS_Oct)))) * pow2 ((100.0 * std::round (s.f (coreParam (c, CS_Semi))) + s.f (coreParam (c, CS_Fine)) + pitch) / 1200.0) * pe;
+        if (on && ! core[c].isStarted())
+        {
+            core[c].start (cs, clampv (s.i (coreParam (c, CS_Retrig)), 0, 2), (uint32_t) (order * 131u + (uint64_t) key + 977u * (uint64_t) c), key, velocity);
+            if (released) core[c].release();
+        }
+    }
+
     // --- mixer levels
     l1.target   = hardMuted (s.f (P_osc1Gain), mod[MT_osc1Gain], 2);
     l2.target   = hardMuted (s.f (P_osc2Gain), mod[MT_osc2Gain], 2);
@@ -688,7 +732,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
 
     // --- "source mute": silence the voice when every source is at zero
     const float audible = l1.target + l2.target + l3.target + lSub.target + wt[0].level.target + wt[1].level.target + lC.target + lSS.target
-                        + rm * std::max (0.0f, s.f (P_ringGain)) + lGs.target + lRs.target;   // (+ 0 when the Granular Synth and the Reese are off: unchanged)
+                        + rm * std::max (0.0f, s.f (P_ringGain)) + lGs.target + lRs.target + lCore[0].target + lCore[1].target;   // (+ 0 when the Granular Synth, the Reese and the Core slots are off: unchanged)
     const float mute = audible > 0.0001f ? 1.0f : 0.0f;
     srcMute.target = mute;
     srcMute.step (first ? 1.0f : smoothCoef (dtc, mute > 0 ? 0.008 : 0.02));
@@ -839,7 +883,8 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     updateUnison (s);
     updateMixer (s, first, c10);
     // stereo processing is only needed for the SuperSaw spread, a stereo sample, spread unison or a panned source
-    bool stereoWt = uniAny || mxActive || (rsRun && (s.f (P_rsWidth) > 0.001f || s.f (P_rsRotate) > 0.001f));
+    bool stereoWt = uniAny || mxActive || (rsRun && (s.f (P_rsWidth) > 0.001f || s.f (P_rsRotate) > 0.001f))
+                 || (coreRun[0] && coreSet[0].uni > 1 && coreSet[0].spread > 0.0005f) || (coreRun[1] && coreSet[1].uni > 1 && coreSet[1].spread > 0.0005f);
     for (auto& w : wt) if (w.loaded && w.wav->numChannels > 1 && w.level.target > 0) stereoWt = true;
     if (! stereo && ((lSS.target > 0 && width > 0.001f) || stereoWt))
     {
@@ -899,6 +944,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         ModState mod;
         computeMod (ps, mod);
         updateControl (ps, wavs, mod, false);
+        for (int c = 0; c < 2; ++c) if (coreRun[c]) core[c].configure (coreSet[c], coreHz[c], n);
         updatePitchEnv (ps);
         modOut = mod;
 
@@ -923,7 +969,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                     k *= 1.0f - r.viaDepth + r.viaDepth * vv;
                 }
                 if (std::abs (k) < 1.0e-9f) continue;
-                ar[nar++] = { ad, r.src - MS_Osc1Audio, r.curve, k, r.unipolar };
+                ar[nar++] = { ad, r.src >= MS_CoreAAudio ? 4 + (r.src - MS_CoreAAudio) : r.src - MS_Osc1Audio, r.curve, k, r.unipolar };
                 arCut |= ad == AD_Cut || ad == AD_Res;
                 arCut2 |= ad == AD_Cut2 || ad == AD_Res2;
                 arFmSlot |= ad >= AD_Fm1 && ad <= AD_Fm4;
@@ -1344,6 +1390,17 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                 if (rx != nullptr && rxT[4]) { a *= rxG; b *= rxG; if (rxD > 0.0f) { a = kickSat (a, rxD); b = kickSat (b, rxD); } }
                 if (mc.meters) mxPeak[kMxReeseStrip] = std::max (mxPeak[kMxReeseStrip], std::max (std::abs (a), std::abs (b)));
                 if (mxActive) { a *= mxL[kMxReeseStrip]; b *= mxR[kMxReeseStrip]; }
+                mL += a; mR += b;
+            }
+            for (int c = 0; c < 2; ++c)
+            {
+                if (! coreRun[c]) continue;
+                // a Core slot, through its own Mixer strip, into the mix before the filters
+                float a, b; core[c].tick (a, b);
+                a *= lCore[c].v; b *= lCore[c].v;
+                aPrev[4 + c] = 0.5f * (a + b);
+                if (mc.meters) mxPeak[kMxCoreStrip + c] = std::max (mxPeak[kMxCoreStrip + c], std::max (std::abs (a), std::abs (b)));
+                if (mxActive) { a *= mxL[kMxCoreStrip + c]; b *= mxR[kMxCoreStrip + c]; }
                 mL += a; mR += b;
             }
             if (subSplit)

@@ -156,6 +156,15 @@ inline const char* const kRxBreakKeys[]    = { "any","b1","b2","b3" };
 inline const char* const kRxBreakLabels[]  = { "Any break","Break 1","Break 2","Break 3" };
 inline const char* const kRsRetrigKeys[]   = { "free","reset","random" };
 inline const char* const kRsRetrigLabels[] = { "Free","Reset","Random" };
+// the Core oscillator slots (A and B): the engine (more engines are added at the end of the list later)
+inline const char* const kCoreEngineKeys[]   = { "off","kernel" };
+inline const char* const kCoreEngineLabels[] = { "Off","Kernel FM" };
+inline const char* const kCoreUniKeys[]      = { "1","2","3","4","6","8" };
+inline const char* const kCoreUniLabels[]    = { "1 voice","2 voices","3 voices","4 voices","6 voices","8 voices" };
+inline const char* const kCoreRetrigKeys[]   = { "reset","free","random" };
+inline const char* const kCoreRetrigLabels[] = { "Reset","Free","Random" };
+inline const char* const kCoreWaveKeys[]     = { "sine","halfsine","abssine","quartersine","altsine","camelsine","softsquare","softsaw" };
+inline const char* const kCoreWaveLabels[]   = { "Sine","Half Sine","Abs Sine","Quarter Sine","Alt Sine","Camel Sine","Soft Square","Soft Saw" };
 inline const char* const kMfModelKeys[]   = { "clean","lp","sallenkey","ladder","steiner","svf","ota","polivoks","swcap","acid","ms20","oberheim","sem","tb303","moogfat","arpodyssey","cs15","sh2" };
 inline const char* const kMfModelLabels[] = { "Clean (SVF)","Standard LP","Sallen-Key LP","Ladder","Steiner-Parker","State Variable","Discrete OTA","Polivoks","Switched Capacitor","Acid Filter Approx","MS-20","Oberheim","SEM","TB-303","Minimoog - Fat Cat","Arp Odyssey","CS-15","SH-2" };
 inline const char* const kMfSlopeKeys[]   = { "12","24" };
@@ -390,6 +399,10 @@ inline const ChoiceList kListRsMode     = TG_LIST(kRsMode);
 inline const ChoiceList kListRsBeat     = TG_LIST(kRsBeat);
 inline const ChoiceList kListRsRatio    = TG_LIST(kRsRatio);
 inline const ChoiceList kListRsRetrig   = TG_LIST(kRsRetrig);
+inline const ChoiceList kListCoreEngine = TG_LIST(kCoreEngine);
+inline const ChoiceList kListCoreUni    = TG_LIST(kCoreUni);
+inline const ChoiceList kListCoreRetrig = TG_LIST(kCoreRetrig);
+inline const ChoiceList kListCoreWave   = TG_LIST(kCoreWave);
 inline const ChoiceList kListRxListen   = TG_LIST(kRxListen);
 inline const ChoiceList kListRxBreak    = TG_LIST(kRxBreak);
 inline const ChoiceList kListPfAkaiMode = TG_LIST(kPfAkaiMode);
@@ -412,7 +425,7 @@ constexpr int kUniStride = 5, kUniOscs = 6;
 // Mixer channel strips: Pan, Mute, Solo per source (Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, Ring), from P_mxOsc1Pan
 constexpr int kMxStride = 3, kMxSources = 9;
 // ... plus strips added later, each Pan / Mute / Solo in a row: 9 = Granular Synth, 10 = Break Chopper
-constexpr int kMxStrips = 12;
+constexpr int kMxStrips = 14;   // ... 11 = Reese, 12 = Core A, 13 = Core B
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
@@ -1216,7 +1229,287 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(rxOsc2,      "Break React Osc 2", true) \
     B(rxOsc3,      "Break React Osc 3", true) \
     B(rxSub,       "Break React Sub", true) \
-    B(rxReese,     "Break React Reese", true)
+    B(rxReese,     "Break React Reese", true) \
+    C(cAEngine, "Core A Engine", kListCoreEngine, 0) \
+    F(cALevel,  "Core A Level", 0, 1, 0.7, 0.01, 0) \
+    F(cAOct,    "Core A Octave", -3, 3, 0, 1, 0) \
+    F(cASemi,   "Core A Semi", -12, 12, 0, 1, 0) \
+    F(cAFine,   "Core A Fine", -100, 100, 0, 0.1, 0) \
+    C(cAUni,    "Core A Unison", kListCoreUni, 0) \
+    F(cADetune, "Core A Unison Detune", 0, 100, 12, 0.1, 0) \
+    F(cASpread, "Core A Unison Spread", 0, 1, 0.5, 0.01, 0) \
+    C(cARetrig, "Core A Retrigger", kListCoreRetrig, 0) \
+    F(cABright, "Core A Brightness", 0, 2, 1, 0.01, 0) \
+    F(cAEnvSpd, "Core A Envelope Speed", 0.25, 4, 1, 0.01, 1) \
+    C(cA1Wave,  "Core A Op 1 Wave", kListCoreWave, 0) \
+    F(cA1Ratio, "Core A Op 1 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cA1Fixed, "Core A Op 1 Fixed", false) \
+    F(cA1Hz,    "Core A Op 1 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cA1Fine,  "Core A Op 1 Fine", -100, 100, 0, 0.1, 0) \
+    F(cA1Level, "Core A Op 1 Level", 0, 1, 1, 0.001, 0) \
+    F(cA1Vel,   "Core A Op 1 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cA1Key,   "Core A Op 1 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cA1Dly,   "Core A Op 1 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cA1Att,   "Core A Op 1 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cA1Hold,  "Core A Op 1 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cA1Dec,   "Core A Op 1 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cA1Sus,   "Core A Op 1 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cA1Rel,   "Core A Op 1 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cA1M1, "Core A Op 1 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cA1M2, "Core A Op 1 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cA1M3, "Core A Op 1 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cA1M4, "Core A Op 1 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cA1M5, "Core A Op 1 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cA1M6, "Core A Op 1 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cA1Out,   "Core A Op 1 Output", 0, 1, 1, 0.01, 0) \
+    C(cA2Wave,  "Core A Op 2 Wave", kListCoreWave, 0) \
+    F(cA2Ratio, "Core A Op 2 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cA2Fixed, "Core A Op 2 Fixed", false) \
+    F(cA2Hz,    "Core A Op 2 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cA2Fine,  "Core A Op 2 Fine", -100, 100, 0, 0.1, 0) \
+    F(cA2Level, "Core A Op 2 Level", 0, 1, 0, 0.001, 0) \
+    F(cA2Vel,   "Core A Op 2 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cA2Key,   "Core A Op 2 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cA2Dly,   "Core A Op 2 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cA2Att,   "Core A Op 2 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cA2Hold,  "Core A Op 2 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cA2Dec,   "Core A Op 2 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cA2Sus,   "Core A Op 2 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cA2Rel,   "Core A Op 2 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cA2M1, "Core A Op 2 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cA2M2, "Core A Op 2 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cA2M3, "Core A Op 2 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cA2M4, "Core A Op 2 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cA2M5, "Core A Op 2 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cA2M6, "Core A Op 2 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cA2Out,   "Core A Op 2 Output", 0, 1, 0, 0.01, 0) \
+    C(cA3Wave,  "Core A Op 3 Wave", kListCoreWave, 0) \
+    F(cA3Ratio, "Core A Op 3 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cA3Fixed, "Core A Op 3 Fixed", false) \
+    F(cA3Hz,    "Core A Op 3 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cA3Fine,  "Core A Op 3 Fine", -100, 100, 0, 0.1, 0) \
+    F(cA3Level, "Core A Op 3 Level", 0, 1, 0, 0.001, 0) \
+    F(cA3Vel,   "Core A Op 3 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cA3Key,   "Core A Op 3 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cA3Dly,   "Core A Op 3 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cA3Att,   "Core A Op 3 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cA3Hold,  "Core A Op 3 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cA3Dec,   "Core A Op 3 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cA3Sus,   "Core A Op 3 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cA3Rel,   "Core A Op 3 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cA3M1, "Core A Op 3 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cA3M2, "Core A Op 3 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cA3M3, "Core A Op 3 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cA3M4, "Core A Op 3 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cA3M5, "Core A Op 3 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cA3M6, "Core A Op 3 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cA3Out,   "Core A Op 3 Output", 0, 1, 0, 0.01, 0) \
+    C(cA4Wave,  "Core A Op 4 Wave", kListCoreWave, 0) \
+    F(cA4Ratio, "Core A Op 4 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cA4Fixed, "Core A Op 4 Fixed", false) \
+    F(cA4Hz,    "Core A Op 4 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cA4Fine,  "Core A Op 4 Fine", -100, 100, 0, 0.1, 0) \
+    F(cA4Level, "Core A Op 4 Level", 0, 1, 0, 0.001, 0) \
+    F(cA4Vel,   "Core A Op 4 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cA4Key,   "Core A Op 4 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cA4Dly,   "Core A Op 4 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cA4Att,   "Core A Op 4 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cA4Hold,  "Core A Op 4 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cA4Dec,   "Core A Op 4 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cA4Sus,   "Core A Op 4 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cA4Rel,   "Core A Op 4 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cA4M1, "Core A Op 4 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cA4M2, "Core A Op 4 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cA4M3, "Core A Op 4 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cA4M4, "Core A Op 4 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cA4M5, "Core A Op 4 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cA4M6, "Core A Op 4 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cA4Out,   "Core A Op 4 Output", 0, 1, 0, 0.01, 0) \
+    C(cA5Wave,  "Core A Op 5 Wave", kListCoreWave, 0) \
+    F(cA5Ratio, "Core A Op 5 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cA5Fixed, "Core A Op 5 Fixed", false) \
+    F(cA5Hz,    "Core A Op 5 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cA5Fine,  "Core A Op 5 Fine", -100, 100, 0, 0.1, 0) \
+    F(cA5Level, "Core A Op 5 Level", 0, 1, 0, 0.001, 0) \
+    F(cA5Vel,   "Core A Op 5 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cA5Key,   "Core A Op 5 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cA5Dly,   "Core A Op 5 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cA5Att,   "Core A Op 5 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cA5Hold,  "Core A Op 5 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cA5Dec,   "Core A Op 5 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cA5Sus,   "Core A Op 5 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cA5Rel,   "Core A Op 5 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cA5M1, "Core A Op 5 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cA5M2, "Core A Op 5 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cA5M3, "Core A Op 5 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cA5M4, "Core A Op 5 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cA5M5, "Core A Op 5 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cA5M6, "Core A Op 5 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cA5Out,   "Core A Op 5 Output", 0, 1, 0, 0.01, 0) \
+    C(cA6Wave,  "Core A Op 6 Wave", kListCoreWave, 0) \
+    F(cA6Ratio, "Core A Op 6 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cA6Fixed, "Core A Op 6 Fixed", false) \
+    F(cA6Hz,    "Core A Op 6 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cA6Fine,  "Core A Op 6 Fine", -100, 100, 0, 0.1, 0) \
+    F(cA6Level, "Core A Op 6 Level", 0, 1, 0, 0.001, 0) \
+    F(cA6Vel,   "Core A Op 6 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cA6Key,   "Core A Op 6 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cA6Dly,   "Core A Op 6 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cA6Att,   "Core A Op 6 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cA6Hold,  "Core A Op 6 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cA6Dec,   "Core A Op 6 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cA6Sus,   "Core A Op 6 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cA6Rel,   "Core A Op 6 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cA6M1, "Core A Op 6 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cA6M2, "Core A Op 6 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cA6M3, "Core A Op 6 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cA6M4, "Core A Op 6 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cA6M5, "Core A Op 6 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cA6M6, "Core A Op 6 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cA6Out,   "Core A Op 6 Output", 0, 1, 0, 0.01, 0) \
+    C(cBEngine, "Core B Engine", kListCoreEngine, 0) \
+    F(cBLevel,  "Core B Level", 0, 1, 0.7, 0.01, 0) \
+    F(cBOct,    "Core B Octave", -3, 3, 0, 1, 0) \
+    F(cBSemi,   "Core B Semi", -12, 12, 0, 1, 0) \
+    F(cBFine,   "Core B Fine", -100, 100, 0, 0.1, 0) \
+    C(cBUni,    "Core B Unison", kListCoreUni, 0) \
+    F(cBDetune, "Core B Unison Detune", 0, 100, 12, 0.1, 0) \
+    F(cBSpread, "Core B Unison Spread", 0, 1, 0.5, 0.01, 0) \
+    C(cBRetrig, "Core B Retrigger", kListCoreRetrig, 0) \
+    F(cBBright, "Core B Brightness", 0, 2, 1, 0.01, 0) \
+    F(cBEnvSpd, "Core B Envelope Speed", 0.25, 4, 1, 0.01, 1) \
+    C(cB1Wave,  "Core B Op 1 Wave", kListCoreWave, 0) \
+    F(cB1Ratio, "Core B Op 1 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cB1Fixed, "Core B Op 1 Fixed", false) \
+    F(cB1Hz,    "Core B Op 1 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cB1Fine,  "Core B Op 1 Fine", -100, 100, 0, 0.1, 0) \
+    F(cB1Level, "Core B Op 1 Level", 0, 1, 1, 0.001, 0) \
+    F(cB1Vel,   "Core B Op 1 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cB1Key,   "Core B Op 1 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cB1Dly,   "Core B Op 1 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cB1Att,   "Core B Op 1 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cB1Hold,  "Core B Op 1 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cB1Dec,   "Core B Op 1 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cB1Sus,   "Core B Op 1 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cB1Rel,   "Core B Op 1 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cB1M1, "Core B Op 1 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cB1M2, "Core B Op 1 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cB1M3, "Core B Op 1 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cB1M4, "Core B Op 1 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cB1M5, "Core B Op 1 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cB1M6, "Core B Op 1 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cB1Out,   "Core B Op 1 Output", 0, 1, 1, 0.01, 0) \
+    C(cB2Wave,  "Core B Op 2 Wave", kListCoreWave, 0) \
+    F(cB2Ratio, "Core B Op 2 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cB2Fixed, "Core B Op 2 Fixed", false) \
+    F(cB2Hz,    "Core B Op 2 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cB2Fine,  "Core B Op 2 Fine", -100, 100, 0, 0.1, 0) \
+    F(cB2Level, "Core B Op 2 Level", 0, 1, 0, 0.001, 0) \
+    F(cB2Vel,   "Core B Op 2 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cB2Key,   "Core B Op 2 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cB2Dly,   "Core B Op 2 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cB2Att,   "Core B Op 2 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cB2Hold,  "Core B Op 2 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cB2Dec,   "Core B Op 2 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cB2Sus,   "Core B Op 2 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cB2Rel,   "Core B Op 2 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cB2M1, "Core B Op 2 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cB2M2, "Core B Op 2 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cB2M3, "Core B Op 2 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cB2M4, "Core B Op 2 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cB2M5, "Core B Op 2 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cB2M6, "Core B Op 2 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cB2Out,   "Core B Op 2 Output", 0, 1, 0, 0.01, 0) \
+    C(cB3Wave,  "Core B Op 3 Wave", kListCoreWave, 0) \
+    F(cB3Ratio, "Core B Op 3 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cB3Fixed, "Core B Op 3 Fixed", false) \
+    F(cB3Hz,    "Core B Op 3 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cB3Fine,  "Core B Op 3 Fine", -100, 100, 0, 0.1, 0) \
+    F(cB3Level, "Core B Op 3 Level", 0, 1, 0, 0.001, 0) \
+    F(cB3Vel,   "Core B Op 3 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cB3Key,   "Core B Op 3 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cB3Dly,   "Core B Op 3 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cB3Att,   "Core B Op 3 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cB3Hold,  "Core B Op 3 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cB3Dec,   "Core B Op 3 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cB3Sus,   "Core B Op 3 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cB3Rel,   "Core B Op 3 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cB3M1, "Core B Op 3 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cB3M2, "Core B Op 3 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cB3M3, "Core B Op 3 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cB3M4, "Core B Op 3 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cB3M5, "Core B Op 3 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cB3M6, "Core B Op 3 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cB3Out,   "Core B Op 3 Output", 0, 1, 0, 0.01, 0) \
+    C(cB4Wave,  "Core B Op 4 Wave", kListCoreWave, 0) \
+    F(cB4Ratio, "Core B Op 4 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cB4Fixed, "Core B Op 4 Fixed", false) \
+    F(cB4Hz,    "Core B Op 4 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cB4Fine,  "Core B Op 4 Fine", -100, 100, 0, 0.1, 0) \
+    F(cB4Level, "Core B Op 4 Level", 0, 1, 0, 0.001, 0) \
+    F(cB4Vel,   "Core B Op 4 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cB4Key,   "Core B Op 4 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cB4Dly,   "Core B Op 4 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cB4Att,   "Core B Op 4 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cB4Hold,  "Core B Op 4 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cB4Dec,   "Core B Op 4 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cB4Sus,   "Core B Op 4 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cB4Rel,   "Core B Op 4 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cB4M1, "Core B Op 4 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cB4M2, "Core B Op 4 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cB4M3, "Core B Op 4 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cB4M4, "Core B Op 4 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cB4M5, "Core B Op 4 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cB4M6, "Core B Op 4 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cB4Out,   "Core B Op 4 Output", 0, 1, 0, 0.01, 0) \
+    C(cB5Wave,  "Core B Op 5 Wave", kListCoreWave, 0) \
+    F(cB5Ratio, "Core B Op 5 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cB5Fixed, "Core B Op 5 Fixed", false) \
+    F(cB5Hz,    "Core B Op 5 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cB5Fine,  "Core B Op 5 Fine", -100, 100, 0, 0.1, 0) \
+    F(cB5Level, "Core B Op 5 Level", 0, 1, 0, 0.001, 0) \
+    F(cB5Vel,   "Core B Op 5 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cB5Key,   "Core B Op 5 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cB5Dly,   "Core B Op 5 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cB5Att,   "Core B Op 5 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cB5Hold,  "Core B Op 5 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cB5Dec,   "Core B Op 5 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cB5Sus,   "Core B Op 5 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cB5Rel,   "Core B Op 5 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cB5M1, "Core B Op 5 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cB5M2, "Core B Op 5 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cB5M3, "Core B Op 5 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cB5M4, "Core B Op 5 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cB5M5, "Core B Op 5 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cB5M6, "Core B Op 5 to Op 6", 0, 12, 0, 0.001, 2.5) \
+    F(cB5Out,   "Core B Op 5 Output", 0, 1, 0, 0.01, 0) \
+    C(cB6Wave,  "Core B Op 6 Wave", kListCoreWave, 0) \
+    F(cB6Ratio, "Core B Op 6 Ratio", 0.25, 32, 1, 0.25, 4) \
+    B(cB6Fixed, "Core B Op 6 Fixed", false) \
+    F(cB6Hz,    "Core B Op 6 Fixed Hz", 1, 16000, 440, 0.01, -1) \
+    F(cB6Fine,  "Core B Op 6 Fine", -100, 100, 0, 0.1, 0) \
+    F(cB6Level, "Core B Op 6 Level", 0, 1, 0, 0.001, 0) \
+    F(cB6Vel,   "Core B Op 6 Velocity", 0, 1, 0, 0.01, 0) \
+    F(cB6Key,   "Core B Op 6 Key Scaling", -1, 1, 0, 0.01, 0) \
+    F(cB6Dly,   "Core B Op 6 Delay", 0, 2, 0, 0.001, 0.2) \
+    F(cB6Att,   "Core B Op 6 Attack", 0, 10, 0.001, 0.001, 0.3) \
+    F(cB6Hold,  "Core B Op 6 Hold", 0, 2, 0, 0.001, 0.2) \
+    F(cB6Dec,   "Core B Op 6 Decay", 0.001, 10, 0.3, 0.001, 0.5) \
+    F(cB6Sus,   "Core B Op 6 Sustain", 0, 1, 1, 0.01, 0) \
+    F(cB6Rel,   "Core B Op 6 Release", 0.001, 10, 0.2, 0.001, 0.5) \
+    F(cB6M1, "Core B Op 6 to Op 1", 0, 12, 0, 0.001, 2.5) \
+    F(cB6M2, "Core B Op 6 to Op 2", 0, 12, 0, 0.001, 2.5) \
+    F(cB6M3, "Core B Op 6 to Op 3", 0, 12, 0, 0.001, 2.5) \
+    F(cB6M4, "Core B Op 6 to Op 4", 0, 12, 0, 0.001, 2.5) \
+    F(cB6M5, "Core B Op 6 to Op 5", 0, 12, 0, 0.001, 2.5) \
+    F(cB6M6, "Core B Op 6 Feedback", 0, 12, 0, 0.001, 2.5) \
+    F(cB6Out,   "Core B Op 6 Output", 0, 1, 0, 0.01, 0) \
+    F(mxCoreAPan, "Core A Pan", -1, 1, 0, 0.01, 0) \
+    B(mxCoreAMute, "Core A Mute", false) \
+    B(mxCoreASolo, "Core A Solo", false) \
+    F(mxCoreBPan, "Core B Pan", -1, 1, 0, 0.01, 0) \
+    B(mxCoreBMute, "Core B Mute", false) \
+    B(mxCoreBSolo, "Core B Solo", false)
 
 enum ParamIndex
 {
@@ -1247,8 +1540,17 @@ inline const char* const kParamIds[] = {
 };
 
 // a Mixer strip's Pan parameter (Mute and Solo follow it)
-inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : (strip == kMxSources ? P_mxGranPan : (strip == kMxSources + 1 ? P_mxBreakPan : P_mxReesePan)); }
+inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : (strip == kMxSources ? P_mxGranPan : (strip == kMxSources + 1 ? P_mxBreakPan : (strip == kMxSources + 2 ? P_mxReesePan : (strip == kMxSources + 3 ? P_mxCoreAPan : P_mxCoreBPan)))); }
 constexpr int kMxReeseStrip = kMxSources + 2;
+constexpr int kMxCoreStrip = kMxSources + 3;   // Core A; Core B is the next
+
+// The Core oscillator slots: slot s (0 = A, 1 = B) starts at coreParam (s, 0); then 6 operators of kCoreOpStride
+constexpr int kCoreSlotHead = 11, kCoreOpStride = 21, kCoreOps = 6, kCoreSlotStride = kCoreSlotHead + kCoreOps * kCoreOpStride;
+enum CoreSlotParam { CS_Engine, CS_Level, CS_Oct, CS_Semi, CS_Fine, CS_Uni, CS_Detune, CS_Spread, CS_Retrig, CS_Bright, CS_EnvSpd };
+enum CoreOpParam { CO_Wave, CO_Ratio, CO_Fixed, CO_Hz, CO_Fine, CO_Level, CO_Vel, CO_Key, CO_Dly, CO_Att, CO_Hold, CO_Dec, CO_Sus, CO_Rel, CO_M1, CO_Out = CO_M1 + 6 };
+inline constexpr int coreParam (int slot, int which) { return P_cAEngine + slot * kCoreSlotStride + which; }
+inline constexpr int coreOpParam (int slot, int op, int which) { return P_cAEngine + slot * kCoreSlotStride + kCoreSlotHead + op * kCoreOpStride + which; }
+static_assert (coreParam (1, 0) == P_cBEngine && coreOpParam (0, 5, CO_Out) == P_cA6Out && coreOpParam (1, 5, CO_Out) == P_cB6Out && P_mxCoreAPan == P_cB6Out + 1, "Core parameter layout");
 
 // The Break Chopper's per-break parameters (break k = 0, 1, 2)
 struct BreakParamSet { int sliceMode, sens, bars, tempo, stretch, colour, level, pan; };

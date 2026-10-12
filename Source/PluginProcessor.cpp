@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "CoreAlgorithms.h"
 #include "PluginEditor.h"
 #include "ParamFormat.h"
 #include "Registry.h"
@@ -38,7 +39,7 @@ namespace
         return id.startsWith ("lfo4") || id == "randRate" || id == "ccANum" || id == "ccBNum" || (id.startsWith ("mod") && id.endsWith ("Amt"))
             || id.startsWith ("macro") || id.startsWith ("scene") || id.startsWith ("wm") || id.startsWith ("ar") || id.startsWith ("dna") || id.startsWith ("res") || id.startsWith ("gr") || id.startsWith ("sp") || id.startsWith ("bus") || id.startsWith ("fb") || id.startsWith ("cap") || id.startsWith ("ci") || id.startsWith ("mut") || id.startsWith ("ds") || id == "quality"
             || isFilterV2Param (id) || isFxV2Param (id) || isLfoV2Param (id) || id.startsWith ("chd") || id.startsWith ("sch") || id.startsWith ("uni") || id.startsWith ("pEnv") || id.startsWith ("mseg")
-            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx") || id.startsWith ("flt") || id.startsWith ("pf") || id.startsWith ("gs") || id.startsWith ("bc") || id.startsWith ("bs") || id.startsWith ("rs") || id.startsWith ("rx");
+            || id == "wheelLfo1" || id == "sustainPedal" || id.startsWith ("mf") || id == "outGain" || id.startsWith ("mx") || id.startsWith ("flt") || id.startsWith ("pf") || id.startsWith ("gs") || id.startsWith ("bc") || id.startsWith ("bs") || id.startsWith ("rs") || id.startsWith ("rx") || id.startsWith ("cA") || id.startsWith ("cB");
     }
 
     bool isBrowserParam (const juce::String& id)
@@ -1647,6 +1648,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 23) setAkaiDefaultsForOldPatch();
     if (version < 24) setReeseDefaultsForOldPatch();
     if (version < 25) setReactDefaultsForOldPatch();
+    if (version < 26) setCoreDefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -1885,6 +1887,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("pfAkai")) setAkaiDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("rsLevel")) setReeseDefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("rxOn")) setReactDefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("cAEngine")) setCoreDefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2160,6 +2163,54 @@ void MegaSynthProcessor::setChopDefaultsForOldPatch()
 void MegaSynthProcessor::setReactDefaultsForOldPatch()
 {
     for (int i = P_rxOn; i <= P_rxReese; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::applyCoreAlgorithm (int slot, int algorithm)
+{
+    if (slot < 0 || slot > 1 || algorithm < 0 || algorithm >= tg::kNumCoreAlgorithms) return;
+    const auto& al = tg::kCoreAlgorithms[algorithm];
+    bool edge[6][6] {}, carrier[6] {}, used[6] {};
+    for (const char* e = al.edges; e[0] != 0 && e[1] != 0; )
+    {
+        const int a = e[0] - '1', b = e[1] - '1';
+        if (a >= 0 && a < 6 && b >= 0 && b < 6) { edge[a][b] = true; used[a] = used[b] = true; }
+        e += 2; while (*e == ' ') ++e;
+    }
+    int nc = 0;
+    for (const char* c = al.carriers; *c != 0; ++c) if (*c >= '1' && *c <= '6') { carrier[*c - '1'] = true; used[*c - '1'] = true; ++nc; }
+    auto set = [this] (int i, float plain)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (plain)); prm->endChangeGesture();
+    };
+    auto plainOf = [this] (int i) { return params[(size_t) i]->convertFrom0to1 (params[(size_t) i]->getValue()); };
+    for (int k = 0; k < 6; ++k)
+    {
+        for (int j = 0; j < 6; ++j) if (j != k) set (tg::coreOpParam (slot, k, tg::CO_M1 + j), edge[k][j] ? 2.0f : 0.0f);
+        set (tg::coreOpParam (slot, k, tg::CO_Out), carrier[k] ? 1.0f / std::sqrt ((float) std::max (1, nc)) : 0.0f);
+        if (used[k] && plainOf (tg::coreOpParam (slot, k, tg::CO_Level)) <= 0.0f) set (tg::coreOpParam (slot, k, tg::CO_Level), carrier[k] ? 1.0f : 0.5f);
+    }
+    pushHistory ("Core algorithm");
+}
+
+void MegaSynthProcessor::resetCoreSlot (int slot)
+{
+    if (slot < 0 || slot > 1) return;
+    for (int i = tg::coreParam (slot, tg::CS_Level); i < tg::coreParam (slot, 0) + tg::kCoreSlotStride; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+    pushHistory ("Reset Core slot");
+}
+
+void MegaSynthProcessor::setCoreDefaultsForOldPatch()
+{
+    for (int i = P_cAEngine; i <= P_mxCoreBSolo; ++i)
     {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();

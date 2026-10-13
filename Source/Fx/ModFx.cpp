@@ -25,28 +25,37 @@ void EnsembleChorus::reset() { dl.reset(); phS = phF = 0.0; lpL = lpR = 0.0f; de
 void EnsembleChorus::process (float* L, float* R, int n, const float* v, const FxContext&)
 {
     const float depth = clampv (v[P_cpEnsDepth], 0.0f, 1.0f), speed = clampv (v[P_cpEnsSpeed], 0.0f, 1.0f);
-    if (depthS < 0.0f) { depthS = depth; speedS = speed; }
-    const float cs = smoothCoef (1.0 / sr, 0.03);
+    const bool first = depthS < 0.0f;
+    if (first) { depthS = depth; speedS = speed; }
     const float tc = 1.0f - (float) std::exp (-2.0 * kPi * clampv (v[P_cpEnsTone], 2000.0f, 12000.0f) / sr);
     const double incS = 0.63 / sr, incF = 5.9 / sr;
     const double centre = 0.0075 * sr;
-    for (int i = 0; i < n; ++i)
+    auto tapsAt = [&] (double* d)
     {
+        const double slowA = (1.0f - 0.75f * speedS) * depthS * 0.0028 * sr;   // (up to 2.8 ms of slow sweep)
+        const double fastA = (0.25f + 0.75f * speedS) * depthS * 0.00045 * sr; // (and 0.45 ms of fast)
+        for (int k = 0; k < 3; ++k) { const double o = k / 3.0; d[k] = centre + slowA * std::sin (2.0 * kPi * (phS + o)) + fastA * std::sin (2.0 * kPi * (phF + o)); }
+    };
+    if (first) tapsAt (dPrev);
+    for (int i0 = 0; i0 < n; i0 += kModSub)
+    {
+        const int m = std::min (kModSub, n - i0);
+        const float cs = smoothCoef ((double) m / sr, 0.03);
         depthS += (depth - depthS) * cs; speedS += (speed - speedS) * cs;
-        const float slowA = (1.0f - 0.75f * speedS) * depthS * (float) (0.0028 * sr);   // (up to 2.8 ms of slow sweep)
-        const float fastA = (0.25f + 0.75f * speedS) * depthS * (float) (0.00045 * sr); // (and 0.45 ms of fast)
-        dl.push (0.5f * (L[i] + R[i]));
-        float t[3];
-        for (int k = 0; k < 3; ++k)
+        advance (phS, incS * m); advance (phF, incF * m);
+        double dNext[3]; tapsAt (dNext);
+        for (int j = 0; j < m; ++j)
         {
-            const double o = k / 3.0;
-            const double d = centre + slowA * std::sin (2.0 * kPi * (phS + o)) + fastA * std::sin (2.0 * kPi * (phF + o));
-            t[k] = dl.read (d);
+            const int i = i0 + j;
+            const double u = (double) (j + 1) / m;
+            dl.push (0.5f * (L[i] + R[i]));
+            float t[3];
+            for (int k = 0; k < 3; ++k) t[k] = dl.read (dPrev[k] + (dNext[k] - dPrev[k]) * u);
+            const float wl = (t[0] + 0.6f * t[1] + 0.25f * t[2]) * 0.62f, wr = (t[2] + 0.6f * t[1] + 0.25f * t[0]) * 0.62f;
+            lpL += (wl - lpL) * tc; lpR += (wr - lpR) * tc;
+            L[i] = lpL; R[i] = lpR;
         }
-        advance (phS, incS); advance (phF, incF);
-        const float wl = (t[0] + 0.6f * t[1] + 0.25f * t[2]) * 0.62f, wr = (t[2] + 0.6f * t[1] + 0.25f * t[0]) * 0.62f;
-        lpL += (wl - lpL) * tc; lpR += (wr - lpR) * tc;
-        L[i] = lpL; R[i] = lpR;
+        for (int k = 0; k < 3; ++k) dPrev[k] = dNext[k];
     }
 }
 
@@ -93,29 +102,50 @@ void MultiChorus::process (float* L, float* R, int n, const float* v, const FxCo
     const float depth = clampv (v[P_cpMulDepth], 0.0f, 1.0f), spread = clampv (v[P_cpMulSpread], 0.0f, 1.0f);
     const float fb = clampv (v[P_cpMulFb], -0.9f, 0.9f);
     const float rate = (float) rateOf (v, P_cpMulRate, P_cpMulSync, ctx, 0.05f, 5.0f);
-    if (depthS < 0.0f) { depthS = depth; rateS = rate; spreadS = spread; fbS = fb; }
+    const bool first = depthS < 0.0f;
+    if (first) { depthS = depth; rateS = rate; spreadS = spread; fbS = fb; }
     for (int k = 0; k < kMax; ++k) if (voiceG[k] < 0.0f) voiceG[k] = k < nv ? 1.0f : 0.0f;
-    const float cs = smoothCoef (1.0 / sr, 0.03);
-    for (int i = 0; i < n; ++i)
+    auto delayOf = [&] (int k) { return (0.009 + 0.0013 * k) * sr + depthS * 0.004 * sr * std::sin (2.0 * kPi * ph[k]); };
+    if (first) for (int k = 0; k < kMax; ++k) dPrev[k] = delayOf (k);
+    for (int i0 = 0; i0 < n; i0 += kModSub)
     {
+        const int m = std::min (kModSub, n - i0);
+        const float cs = smoothCoef ((double) m / sr, 0.03);
         depthS += (depth - depthS) * cs; rateS += (rate - rateS) * cs; spreadS += (spread - spreadS) * cs; fbS += (fb - fbS) * cs;
-        dl.push (0.5f * (L[i] + R[i]) + softLimit (fbS * lastWet, 1.0f));
-        float wl = 0.0f, wr = 0.0f, mono = 0.0f, gsum = 0.0f;
+        double dNext[kMax]; float g0[kMax], g1[kMax], cl[kMax], cr[kMax];
+        int active = 0;
         for (int k = 0; k < kMax; ++k)
         {
+            g0[k] = voiceG[k];
             voiceG[k] += ((k < nv ? 1.0f : 0.0f) - voiceG[k]) * cs;
-            if (voiceG[k] < 1.0e-4f && k >= nv) { voiceG[k] = 0.0f; continue; }
-            const double d = (0.009 + 0.0013 * k) * sr + depthS * 0.004 * sr * std::sin (2.0 * kPi * ph[k]);
-            advance (ph[k], rateS * (1.0 + 0.11 * k) / sr);
-            const float y = dl.read (d) * voiceG[k];
+            if (voiceG[k] < 1.0e-4f && k >= nv) voiceG[k] = 0.0f;
+            g1[k] = voiceG[k];
+            advance (ph[k], rateS * (1.0 + 0.11 * k) / sr * m);
+            dNext[k] = delayOf (k);
+            if (g0[k] > 0.0f || g1[k] > 0.0f) active = k + 1;
             const float pan = nv > 1 ? spreadS * (2.0f * (float) std::min (k, nv - 1) / (float) (nv - 1) - 1.0f) * (k % 2 == 0 ? 1.0f : -1.0f) : 0.0f;
             const float a = (pan + 1.0f) * 0.25f * (float) kPi;
-            wl += y * std::cos (a); wr += y * std::sin (a);
-            mono += y; gsum += voiceG[k] * voiceG[k];
+            cl[k] = std::cos (a); cr[k] = std::sin (a);
         }
-        const float norm = 1.2f / std::sqrt (std::max (1.0f, gsum));
-        lastWet = mono / std::max (1.0f, gsum);
-        L[i] = wl * norm; R[i] = wr * norm;
+        float gsum = 0.0f; for (int k = 0; k < kMax; ++k) gsum += g1[k] * g1[k];
+        const float norm = 1.2f / std::sqrt (std::max (1.0f, gsum)), monoN = 1.0f / std::max (1.0f, gsum);
+        for (int j = 0; j < m; ++j)
+        {
+            const int i = i0 + j;
+            const double u = (double) (j + 1) / m;
+            dl.push (0.5f * (L[i] + R[i]) + softLimit (fbS * lastWet, 1.0f));
+            float wl = 0.0f, wr = 0.0f, mono = 0.0f;
+            for (int k = 0; k < active; ++k)
+            {
+                const float g = g0[k] + (g1[k] - g0[k]) * (float) u;
+                if (g <= 0.0f) continue;
+                const float y = dl.read (dPrev[k] + (dNext[k] - dPrev[k]) * u) * g;
+                wl += y * cl[k]; wr += y * cr[k]; mono += y;
+            }
+            lastWet = mono * monoN;
+            L[i] = wl * norm; R[i] = wr * norm;
+        }
+        for (int k = 0; k < kMax; ++k) dPrev[k] = dNext[k];
     }
 }
 
@@ -128,24 +158,30 @@ void ScriptPhase::process (float* L, float* R, int n, const float* v, const FxCo
 {
     const float rate = (float) rateOf (v, P_cpScrSpeed, P_cpScrSync, ctx, 0.05f, 10.0f);
     const float fbT = v[P_cpScrFb] > 0.5f ? 0.45f : 0.0f;
-    if (rateS < 0.0f) { rateS = rate; fbS = fbT; }
-    const float cs = smoothCoef (1.0 / sr, 0.03);
+    auto coefNow = [&] { const float u = tri01 (ph); return Ap1::coef (160.0 * std::pow (12.0, (double) (u * u * 0.6f + u * 0.4f)), sr); };   // (about 160 Hz to 1.9 kHz)
+    if (rateS < 0.0f) { rateS = rate; fbS = fbT; aPrev = coefNow(); }
     float* io[2] = { L, R };
-    for (int i = 0; i < n; ++i)
+    for (int i0 = 0; i0 < n; i0 += kModSub)
     {
-        rateS += (rate - rateS) * cs; fbS += (fbT - fbS) * cs;
-        const float u = tri01 (ph);
-        advance (ph, rateS / sr);
-        const double fc = 160.0 * std::pow (12.0, (double) (u * u * 0.6f + u * 0.4f));   // (about 160 Hz to 1.9 kHz)
-        const float a = Ap1::coef (fc, sr);
-        for (int c = 0; c < 2; ++c)
+        const int m = std::min (kModSub, n - i0);
+        const float cs = smoothCoef ((double) m / sr, 0.03);
+        rateS += (rate - rateS) * cs;
+        const float fb0 = fbS; fbS += (fbT - fbS) * cs;
+        advance (ph, rateS / sr * m);
+        const float aNext = coefNow();
+        for (int j = 0; j < m; ++j)
         {
-            const float x = io[c][i];
-            float y = x + fbS * fb[c];
-            for (auto& st : ap[c]) y = st.tick (y, a);
-            fb[c] = y;
-            io[c][i] = 0.5f * (x + y);
+            const float u = (float) (j + 1) / m, a = aPrev + (aNext - aPrev) * u, f = fb0 + (fbS - fb0) * u;
+            for (int c = 0; c < 2; ++c)
+            {
+                const float x = io[c][i0 + j];
+                float y = x + f * fb[c];
+                for (auto& st : ap[c]) y = st.tick (y, a);
+                fb[c] = y;
+                io[c][i0 + j] = 0.5f * (x + y);
+            }
         }
+        aPrev = aNext;
     }
 }
 
@@ -158,24 +194,30 @@ void ColourPhase::process (float* L, float* R, int n, const float* v, const FxCo
 {
     const float rate = (float) rateOf (v, P_cpColRate, P_cpColSync, ctx, 0.05f, 10.0f);
     const float fbT = v[P_cpColColour] > 0.5f ? 0.72f : 0.12f;
-    if (rateS < 0.0f) { rateS = rate; fbS = fbT; }
-    const float cs = smoothCoef (1.0 / sr, 0.03);
+    auto coefNow = [&] { return Ap1::coef (110.0 * std::pow (32.0, (double) sine01 (ph)), sr); };   // (110 Hz to 3.5 kHz)
+    if (rateS < 0.0f) { rateS = rate; fbS = fbT; aPrev = coefNow(); }
     float* io[2] = { L, R };
-    for (int i = 0; i < n; ++i)
+    for (int i0 = 0; i0 < n; i0 += kModSub)
     {
-        rateS += (rate - rateS) * cs; fbS += (fbT - fbS) * cs;
-        const float u = sine01 (ph);
-        advance (ph, rateS / sr);
-        const double fc = 110.0 * std::pow (32.0, (double) u);   // (110 Hz to 3.5 kHz)
-        const float a = Ap1::coef (fc, sr);
-        for (int c = 0; c < 2; ++c)
+        const int m = std::min (kModSub, n - i0);
+        const float cs = smoothCoef ((double) m / sr, 0.03);
+        rateS += (rate - rateS) * cs;
+        const float fb0 = fbS; fbS += (fbT - fbS) * cs;
+        advance (ph, rateS / sr * m);
+        const float aNext = coefNow();
+        for (int j = 0; j < m; ++j)
         {
-            const float x = io[c][i];
-            float y = x - fbS * fb[c];   // (negative feedback: the Small Stone's colour peaks sit between its notches)
-            for (auto& st : ap[c]) y = st.tick (y, a);
-            fb[c] = y;
-            io[c][i] = 0.5f * (x + y);
+            const float u = (float) (j + 1) / m, a = aPrev + (aNext - aPrev) * u, f = fb0 + (fbS - fb0) * u;
+            for (int c = 0; c < 2; ++c)
+            {
+                const float x = io[c][i0 + j];
+                float y = x - f * fb[c];   // (negative feedback: the Small Stone's colour peaks sit between its notches)
+                for (auto& st : ap[c]) y = st.tick (y, a);
+                fb[c] = y;
+                io[c][i0 + j] = 0.5f * (x + y);
+            }
         }
+        aPrev = aNext;
     }
 }
 
@@ -194,8 +236,9 @@ void DualPhaser::process (float* L, float* R, int n, const float* v, const FxCon
     const int mode = clampv ((int) std::lround (v[P_cpDualMode]), 0, 1);
     const bool link = v[P_cpDualLink] > 0.5f;
     const float rA = (float) rateOf (v, P_cpDualRateA, P_cpDualSync, ctx, 0.05f, 10.0f);
-    const float rB = link ? rA : (float) syncRate (kListModSync, 0, ctx.tempo, clampv (v[P_cpDualRateB], 0.05f, 10.0f));
+    const float rB = link ? rA : clampv (v[P_cpDualRateB], 0.05f, 10.0f);
     const float depth = clampv (v[P_cpDualDepth], 0.0f, 1.0f), fbAmt = clampv (v[P_cpDualFb], 0.0f, 0.95f);
+    auto coefNow = [&] (int p) { return Ap1::coef (180.0 * std::pow (2.0, (double) (depthS * 4.5f * sine01 (ph[p]))), sr); };
     // a change of routing: the phasers restart from silence and fade back in (no click)
     if (modeS < 0.0f || (int) modeS != mode)
     {
@@ -205,33 +248,36 @@ void DualPhaser::process (float* L, float* R, int n, const float* v, const FxCon
         modeS = (float) mode;
         fadeIn = first ? 1.0f : 0.0f;
     }
-    if (depthS < 0.0f) { depthS = depth; rateS[0] = rA; rateS[1] = rB; }
+    if (depthS < 0.0f) { depthS = depth; rateS[0] = rA; rateS[1] = rB; aPrev[0] = coefNow (0); aPrev[1] = coefNow (1); }
     if (link) { const double want = ph[0] + 0.25; ph[1] += (want - std::floor (want) - ph[1]) * 0.05; ph[1] -= std::floor (ph[1]); }   // (B follows A, a quarter turn behind)
-    const float cs = smoothCoef (1.0 / sr, 0.03), cf = smoothCoef (1.0 / sr, 0.01);
-    for (int i = 0; i < n; ++i)
+    for (int i0 = 0; i0 < n; i0 += kModSub)
     {
+        const int m = std::min (kModSub, n - i0);
+        const float cs = smoothCoef ((double) m / sr, 0.03), cf = smoothCoef (1.0 / sr, 0.01);
         depthS += (depth - depthS) * cs; rateS[0] += (rA - rateS[0]) * cs; rateS[1] += (rB - rateS[1]) * cs;
-        fadeIn += (1.0f - fadeIn) * cf;
-        float a[2];
-        for (int p = 0; p < 2; ++p)
+        float aNext[2];
+        for (int p = 0; p < 2; ++p) { advance (ph[p], rateS[p] / sr * m); aNext[p] = coefNow (p); }
+        for (int j = 0; j < m; ++j)
         {
-            const float u = sine01 (ph[p]);
-            advance (ph[p], rateS[p] / sr);
-            a[p] = Ap1::coef (180.0 * std::pow (2.0, (double) (depthS * 4.5f * u)), sr);
+            const int i = i0 + j;
+            const float u = (float) (j + 1) / m;
+            const float a[2] = { aPrev[0] + (aNext[0] - aPrev[0]) * u, aPrev[1] + (aNext[1] - aPrev[1]) * u };
+            fadeIn += (1.0f - fadeIn) * cf;
+            const float xl = L[i], xr = R[i];
+            auto run = [&] (int p, int c, float x)
+            {
+                float y = x + fbAmt * fb[p][c];
+                for (auto& st : ap[p][c]) y = st.tick (y, a[p]);
+                fb[p][c] = y;
+                return y;
+            };
+            float yl, yr;
+            if (mode == 0) { yl = run (0, 0, xl); yr = run (1, 1, xr); }
+            else { yl = run (1, 0, 0.5f * (xl + run (0, 0, xl))); yr = run (1, 1, 0.5f * (xr + run (0, 1, xr))); }
+            L[i] = 0.5f * (xl * (2.0f - fadeIn) + yl * fadeIn);
+            R[i] = 0.5f * (xr * (2.0f - fadeIn) + yr * fadeIn);
         }
-        const float xl = L[i], xr = R[i];
-        auto run = [&] (int p, int c, float x)
-        {
-            float y = x + fbAmt * fb[p][c];
-            for (auto& st : ap[p][c]) y = st.tick (y, a[p]);
-            fb[p][c] = y;
-            return y;
-        };
-        float yl, yr;
-        if (mode == 0) { yl = run (0, 0, xl); yr = run (1, 1, xr); }
-        else { yl = run (1, 0, 0.5f * (xl + run (0, 0, xl))); yr = run (1, 1, 0.5f * (xr + run (0, 1, xr))); }
-        L[i] = 0.5f * (xl * (2.0f - fadeIn) + yl * fadeIn);
-        R[i] = 0.5f * (xr * (2.0f - fadeIn) + yr * fadeIn);
+        aPrev[0] = aNext[0]; aPrev[1] = aNext[1];
     }
 }
 
@@ -246,30 +292,52 @@ void BarberPhaser::process (float* L, float* R, int n, const float* v, const FxC
     const float rate = (float) rateOf (v, P_cpBarSpeed, P_cpBarSync, ctx, 0.02f, 2.0f);
     const float dir = clampv ((int) std::lround (v[P_cpBarDir]), 0, 1) == 0 ? 1.0f : -1.0f;
     const float fbAmt = clampv (v[P_cpBarFb], 0.0f, 0.9f);
-    if (rateS < 0.0f) { rateS = rate; dirS = dir; }
-    const float cs = smoothCoef (1.0 / sr, 0.05);
-    float* io[2] = { L, R };
-    for (int i = 0; i < n; ++i)
+    auto at = [&] (float* a, float* w)
     {
-        rateS += (rate - rateS) * cs; dirS += (dir - dirS) * cs;   // (a change of direction slows, stops and turns round)
-        advance (ph, dirS * rateS / sr);
         for (int c = 0; c < 2; ++c)
-        {
-            const float x = io[c][i];
-            float y = 0.0f;
             for (int k = 0; k < kChains; ++k)
             {
                 double u = ph + (double) k / kChains + (c == 1 ? 1.0 / (2.0 * kChains) : 0.0);
                 u -= std::floor (u);
-                const float w = (float) (std::sin (kPi * u) * std::sin (kPi * u)) * (2.0f / kChains);
-                const float a = Ap1::coef (60.0 * std::pow (2.0, 7.0 * u), sr);
-                float z = x + fbAmt * fb[c][k];
-                for (auto& st : ap[c][k]) z = st.tick (z, a);
-                fb[c][k] = z;
-                y += w * z;
+                w[c * kChains + k] = (float) (std::sin (kPi * u) * std::sin (kPi * u)) * (2.0f / kChains);
+                a[c * kChains + k] = Ap1::coef (60.0 * std::pow (2.0, 7.0 * u), sr);
             }
-            io[c][i] = 0.5f * (x + y);
+    };
+    if (rateS < 0.0f) { rateS = rate; dirS = dir; at (&aPrev[0][0], &wPrev[0][0]); }
+    float* io[2] = { L, R };
+    for (int i0 = 0; i0 < n; i0 += kModSub)
+    {
+        const int m = std::min (kModSub, n - i0);
+        const float cs = smoothCoef ((double) m / sr, 0.05);
+        rateS += (rate - rateS) * cs; dirS += (dir - dirS) * cs;   // (a change of direction slows, stops and turns round)
+        // a chain that wraps from the top of its sweep to the bottom does so at zero level: jump its coefficient, don't ramp it
+        const double ph0 = ph;
+        advance (ph, dirS * rateS / sr * m);
+        float aNext[2][kChains], wNext[2][kChains];
+        at (&aNext[0][0], &wNext[0][0]);
+        (void) ph0;
+        for (int c = 0; c < 2; ++c)
+            for (int k = 0; k < kChains; ++k)
+                if (std::abs (aNext[c][k] - aPrev[c][k]) > 0.5f) aPrev[c][k] = aNext[c][k];
+        for (int j = 0; j < m; ++j)
+        {
+            const float u = (float) (j + 1) / m;
+            for (int c = 0; c < 2; ++c)
+            {
+                const float x = io[c][i0 + j];
+                float y = 0.0f;
+                for (int k = 0; k < kChains; ++k)
+                {
+                    const float a = aPrev[c][k] + (aNext[c][k] - aPrev[c][k]) * u, w = wPrev[c][k] + (wNext[c][k] - wPrev[c][k]) * u;
+                    float z = x + fbAmt * fb[c][k];
+                    for (auto& st : ap[c][k]) z = st.tick (z, a);
+                    fb[c][k] = z;
+                    y += w * z;
+                }
+                io[c][i0 + j] = 0.5f * (x + y);
+            }
         }
+        for (int c = 0; c < 2; ++c) for (int k = 0; k < kChains; ++k) { aPrev[c][k] = aNext[c][k]; wPrev[c][k] = wNext[c][k]; }
     }
 }
 
@@ -284,26 +352,37 @@ void VibeFx::process (float* L, float* R, int n, const float* v, const FxContext
     const float rate = (float) rateOf (v, P_cpVibeSpeed, P_cpVibeSync, ctx, 0.1f, 10.0f);
     const float inten = clampv (v[P_cpVibeInt], 0.0f, 1.0f);
     const float mode = clampv ((int) std::lround (v[P_cpVibeMode]), 0, 1) == 1 ? 1.0f : 0.0f;
-    if (intS < 0.0f) { intS = inten; modeS = mode; rateS = rate; }
-    const float cs = smoothCoef (1.0 / sr, 0.03);
-    const float up = smoothCoef (1.0 / sr, 0.012), down = smoothCoef (1.0 / sr, 0.05);
-    float* io[2] = { L, R };
-    for (int i = 0; i < n; ++i)
+    auto coefs = [&] (float* a)
     {
-        intS += (inten - intS) * cs; modeS += (mode - modeS) * cs; rateS += (rate - rateS) * cs;
-        const float drive = std::pow (sine01 (ph), 1.6f);
-        advance (ph, rateS / sr);
-        lamp += (drive - lamp) * (drive > lamp ? up : down);
         const double cell = std::pow (std::max (0.0f, lamp), 0.7f);   // (the photocell's curve)
-        float a[4];
         for (int k = 0; k < 4; ++k) a[k] = Ap1::coef (base[k] * std::pow (2.0, (double) intS * 3.2 * (cell - 0.35)), sr);
-        for (int c = 0; c < 2; ++c)
+    };
+    if (intS < 0.0f) { intS = inten; modeS = mode; rateS = rate; coefs (aPrev); }
+    float* io[2] = { L, R };
+    for (int i0 = 0; i0 < n; i0 += kModSub)
+    {
+        const int m = std::min (kModSub, n - i0);
+        const float cs = smoothCoef ((double) m / sr, 0.03);
+        const float up = smoothCoef ((double) m / sr, 0.012), down = smoothCoef ((double) m / sr, 0.05);
+        intS += (inten - intS) * cs; rateS += (rate - rateS) * cs;
+        const float m0 = modeS; modeS += (mode - modeS) * cs;
+        advance (ph, rateS / sr * m);
+        const float drive = std::pow (sine01 (ph), 1.6f);
+        lamp += (drive - lamp) * (drive > lamp ? up : down);
+        float aNext[4]; coefs (aNext);
+        for (int j = 0; j < m; ++j)
         {
-            const float x = io[c][i];
-            float y = x;
-            for (int k = 0; k < 4; ++k) y = ap[c][k].tick (y, a[k]);
-            io[c][i] = x * 0.5f * (1.0f - modeS) + y * (0.5f + 0.5f * modeS);   // (Chorus: dry + shifted; Vibrato: shifted only)
+            const float u = (float) (j + 1) / m, md = m0 + (modeS - m0) * u;
+            float a[4]; for (int k = 0; k < 4; ++k) a[k] = aPrev[k] + (aNext[k] - aPrev[k]) * u;
+            for (int c = 0; c < 2; ++c)
+            {
+                const float x = io[c][i0 + j];
+                float y = x;
+                for (int k = 0; k < 4; ++k) y = ap[c][k].tick (y, a[k]);
+                io[c][i0 + j] = x * 0.5f * (1.0f - md) + y * (0.5f + 0.5f * md);   // (Chorus: dry + shifted; Vibrato: shifted only)
+            }
         }
+        for (int k = 0; k < 4; ++k) aPrev[k] = aNext[k];
     }
 }
 

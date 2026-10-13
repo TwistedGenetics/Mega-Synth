@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(MegaSynth VERSION 0.1.0 LANGUAGES C CXX)
+# (v0.1.72) CI passes the build number, so each release carries its own version (0.1.N) and hosts see a new plug-in to scan
+set(MEGASYNTH_BUILD_NUMBER "0" CACHE STRING "The release's build number (0.1.N)")
+project(MegaSynth VERSION 0.1.${MEGASYNTH_BUILD_NUMBER} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -23,6 +23,8 @@
 namespace tg
 {
 
+constexpr int kModSub = 16;   // the sweeps are worked out every 16 samples and joined by straight lines in between
+
 // a first-order all-pass (y = a x + x1 - a y1), its coefficient from a corner frequency
 struct Ap1
 {
@@ -42,6 +44,7 @@ private:
     double sr = 48000.0, phS = 0.0, phF = 0.0;
     DelayLine dl;
     float lpL = 0.0f, lpR = 0.0f, depthS = -1.0f, speedS = -1.0f;
+    double dPrev[3] {};
 };
 
 class BbdChorus
@@ -70,6 +73,7 @@ private:
     DelayLine dl;
     float fbS = 0.0f, depthS = -1.0f, rateS = -1.0f, spreadS = -1.0f, lastWet = 0.0f;
     float voiceG[kMax] {};   // each voice fades in or out when Voices changes
+    double dPrev[kMax] {};
 };
 
 // the phasers: a chain of all-passes per side, swept by an LFO
@@ -82,7 +86,7 @@ public:
 private:
     double sr = 48000.0, ph = 0.0;
     Ap1 ap[2][4];
-    float fb[2] {}, fbS = 0.0f, rateS = -1.0f;
+    float fb[2] {}, fbS = 0.0f, rateS = -1.0f, aPrev = 0.0f;
 };
 
 class ColourPhase
@@ -94,7 +98,7 @@ public:
 private:
     double sr = 48000.0, ph = 0.0;
     Ap1 ap[2][4];
-    float fb[2] {}, fbS = 0.0f, rateS = -1.0f;
+    float fb[2] {}, fbS = 0.0f, rateS = -1.0f, aPrev = 0.0f;
 };
 
 class DualPhaser
@@ -106,7 +110,7 @@ public:
 private:
     double sr = 48000.0, ph[2] {};
     Ap1 ap[2][2][6];   // [phaser][side][stage]
-    float fb[2][2] {}, modeS = -1.0f, depthS = -1.0f, rateS[2] { -1.0f, -1.0f }, fadeIn = 1.0f;
+    float fb[2][2] {}, modeS = -1.0f, depthS = -1.0f, rateS[2] { -1.0f, -1.0f }, fadeIn = 1.0f, aPrev[2] {};
 };
 
 class BarberPhaser
@@ -119,7 +123,7 @@ private:
     static constexpr int kChains = 3, kStages = 8;
     double sr = 48000.0, ph = 0.0;
     Ap1 ap[2][kChains][kStages];
-    float fb[2][kChains] {}, rateS = -1.0f, dirS = -2.0f;
+    float fb[2][kChains] {}, rateS = -1.0f, dirS = -2.0f, aPrev[2][kChains] {}, wPrev[2][kChains] {};
 };
 
 class VibeFx
@@ -131,7 +135,7 @@ public:
 private:
     double sr = 48000.0, ph = 0.0;
     Ap1 ap[2][4];
-    float lamp = 0.0f, intS = -1.0f, modeS = -1.0f, rateS = -1.0f;
+    float lamp = 0.0f, intS = -1.0f, modeS = -1.0f, rateS = -1.0f, aPrev[4] {};
 };
 
 } // namespace tg

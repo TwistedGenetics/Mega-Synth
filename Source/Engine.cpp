@@ -567,10 +567,14 @@ void Voice::updateWt (int slot, const Snapshot& s, const ModState& mod, double b
     if (! w.loaded) return;
 
     const double det = clampv (s.f (P.det) + mod[P.mDet], -50.0f, 50.0f);
-    const double f = baseFreq * pow2 (std::round (s.f (P.oct))) * pow2 ((100.0 * s.f (P.semi) + det + bendC) / 1200.0);
+    // (v0.1.72) with Portamento on, the wavetables follow the same glide as everything else (gHz) from the note's first
+    // moment; before, a new note's rate glided from wherever that voice slot last was (or from nothing). Off, as always.
+    const bool glide = s.f (P_porta) > 0.0005f;
+    const double f = (glide ? (double) gHz.v : baseFreq) * pow2 (std::round (s.f (P.oct))) * pow2 ((100.0 * s.f (P.semi) + det + bendC) / 1200.0);
     const double root = midiToFreq (std::round (s.f (P.root)));
     w.rate.target = (float) clampv (f / std::max (10.0, root), 0.01, 16.0);
-    w.rate.step (cPort);
+    if (glide) w.rate.v = w.rate.target;
+    else w.rate.step (cPort);
 
     const double len = w.wav->length;
     const int mode = s.i (P.mode);
@@ -2242,7 +2246,8 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         if (custom || brkCustom)
         {
             if (! brkCustom)   // (into the per-break path: each break starts where the old route had it)
-                for (int b = 0; b < 4; ++b) { for (int d = 0; d < kDests; ++d) brkDG[b][d] = 0.0f; for (int k = 0; k < 4; ++k) brkDG[b][k] = brkRG[k]; }
+                for (int b = 0; b < 4; ++b) { for (int d = 0; d < kDests; ++d) brkDG[b][d] = 0.0f; for (int k = 0; k < 4; ++k) brkDG[b][k] = breakWasRunning ? brkRG[k] : 0.0f; }
+            const bool snapToTarget = ! breakWasRunning;   // (nothing playing: each break starts on its own route, as the old path does)
             brkCustom = true;
             const uint32_t rmask = bxRouteMask (route);
             int target[4];
@@ -2275,6 +2280,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
                     target[b] = 4 + li;
                 }
                 breakDestShown[b].store (target[b], std::memory_order_relaxed);
+                if (snapToTarget) for (int d = 0; d < kDests; ++d) brkDG[b][d] = d == target[b] ? 1.0f : 0.0f;
             }
             const float rc = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
             bool settled = true;

@@ -231,7 +231,8 @@ namespace
             const bool admin = isAny (id, { "polyphony", "keyboardOctave", "bendRange", "seqLength", "seqEuclidPulses",
                                             "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum", "mutSeed", "dsSteps",
                                             "chdSpread", "chdInversion", "arpOctaves", "arpVelFixed", "arpRepeats", "arpSteps",
-                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot", "bcKeyBase", "bcTempo", "bcTempo2", "bcTempo3", "bcTempo4", "bcChopLatency", "bsFillKey", "bsVarAmount", "bsAutoFillProb", "rsOct", "rsSemi", "rxNote", "rxSeed", "cAOct", "cASemi", "cBOct", "cBSemi", "sxDuckNote" });
+                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot", "bcKeyBase", "bcTempo", "bcTempo2", "bcTempo3", "bcTempo4", "bcChopLatency", "bsFillKey", "bsVarAmount", "bsAutoFillProb", "rsOct", "rsSemi", "rxNote", "rxSeed", "cAOct", "cASemi", "cBOct", "cBSemi", "sxDuckNote",
+                                            "bsRollCresc", "bsRollTight", "bsRollPitch", "bsRollSnare", "bsRollVar" });
             m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin
                             && ! isAny (id, { "pfX1", "pfY1", "pfX2", "pfY2" });   // the XY pads are sources, not destinations
             float adScale;

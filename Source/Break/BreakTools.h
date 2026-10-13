@@ -320,6 +320,82 @@ inline void snareBuild (BreakData& d, int pat, int steps, int seed, float amount
     }
 }
 
+// Snare Roll (v0.1.71): the early-90s jungle roll. One clean snare slice retriggered all the way through, speeding up
+// (16ths, then 32nds, then 64ths, or a buzz at the end), building from ghost level to full, each hit cut short so the
+// fast part stays tight, a small pitch rise, landing on the next downbeat (optionally with a gap or a reverse snare
+// before it). Its steps use the per-step roll shape (Ramp, Tight, Pitch) and Level, so the climb is smooth inside a step.
+struct RollSettings
+{
+    int lenSteps = 16;        // 4, 8, 16 or 32 (capped at the pattern's length); it always ends with the pattern
+    int curve = 1;            // 0 Straight (16 > 32), 1 Accelerate (16 > 32 > 64), 2 Buzz finish (the last half beat x8)
+    float cresc = 0.8f;       // 0..1: how quiet the first hit is next to the last (0: all the same)
+    float tight = 0.6f;       // 0..1: how short each hit is
+    float pitch = 2.0f;       // semitones it rises by, over the roll (mostly at the end)
+    int snare = -1;           // the slice (-1: Auto, the cleanest snare)
+    int gap = 0;              // 0 none, 1 the last 16th silent, 2 a reverse snare on the last 16th
+    float var = 0.3f;         // 0..1: small seeded changes to level and timing
+};
+// the cleanest snare: the most snare-like slice with the least kick in it (by the analysis); a guess without one
+inline int cleanSnare (const BreakSlot& b)
+{
+    if (b.nSlices <= 0) return 4;
+    if (! Picker::hasAnalysis (b)) return Picker::slicesOf (b, Snare).front();
+    int best = 0; float bs = -1.0e9f;
+    for (int k = 0; k < b.nSlices; ++k)
+    {
+        const float sc = b.snare[k] - 0.7f * b.kick[k] - 0.2f * b.hat[k];
+        if (sc > bs) { bs = sc; best = k; }
+    }
+    return best;
+}
+inline void snareRoll (BreakData& d, int pat, int steps, int seed, const RollSettings& rs, int brk)
+{
+    Rng r (seed);
+    auto* st = d.step[pat];
+    const BreakSlot& b = d.brk[std::clamp (brk, 0, BreakData::kBreaks - 1)];
+    const int len = std::clamp (rs.lenSteps, 2, steps), e0 = steps - len;
+    const int slice = rs.snare >= 0 ? (b.nSlices > 0 ? std::min (rs.snare, b.nSlices - 1) : rs.snare) : cleanSnare (b);
+    const float c = std::clamp (rs.cresc, 0.0f, 1.0f), P = std::clamp (rs.pitch, 0.0f, 12.0f), var = std::clamp (rs.var, 0.0f, 1.0f);
+    const bool gap = rs.gap > 0;
+    const int rollLen = gap ? len - 1 : len;   // (the steps the roll itself covers)
+    auto levelAt = [&] (float f) { return (1.0f - c) + c * std::pow (std::clamp (f, 0.0f, 1.0f), 1.6f); };
+    auto pitchAt = [&] (float f) { return P * std::clamp (f, 0.0f, 1.0f) * std::clamp (f, 0.0f, 1.0f); };
+    for (int j = 0; j < len; ++j)
+    {
+        auto& s = st[e0 + j];
+        s = BreakStep();
+        if (j >= rollLen)
+        {
+            // the last 16th before the downbeat: silent, or a reverse snare swelling into it
+            if (rs.gap == 2) { s.on = true; s.slice = slice; s.reverse = true; s.vel = 0.9f; s.level = 1.0f; s.pitch = std::round (pitchAt (1.0f) * 10.0f) / 10.0f; }
+            continue;
+        }
+        const float f0 = rollLen > 1 ? (float) j / (float) rollLen : 1.0f, f1 = rollLen > 1 ? (float) (j + 1) / (float) rollLen : 1.0f;
+        int R;
+        switch (rs.curve)
+        {
+            case 0:  R = f0 < 0.5f ? 1 : 2; break;
+            case 2:  R = rollLen - j <= 2 ? 8 : (f0 < 0.34f ? 1 : (f0 < 0.67f ? 2 : 4)); break;
+            default: R = f0 < 0.34f ? 1 : (f0 < 0.67f ? 2 : 4); break;
+        }
+        s.on = true; s.slice = slice; s.roll = R;
+        s.vel = 0.6f + 0.4f * f1;
+        s.rollTight = std::clamp (rs.tight, 0.0f, 1.0f);
+        // the crescendo: a single hit at its point on the curve; a roll climbs inside its step to where the next starts
+        const float lA = levelAt (f0), lB = levelAt (f1);
+        if (R > 1) { s.level = lB; s.rollRamp = lB > 1.0e-4f ? std::clamp (1.0f - lA / lB, 0.0f, 1.0f) : 0.0f; }
+        else s.level = lA;
+        s.pitch = pitchAt (f0);
+        if (R > 1) s.rollPitch = pitchAt (f1) - pitchAt (f0);
+        if (var > 0.0f)
+        {
+            s.level = std::clamp (s.level * (1.0f - 0.18f * var * r.next()), 0.0f, 1.0f);
+            if (R == 1 && j > 0) s.nudge = 0.06f * var * r.next();   // (only the slow part sways; the fast part stays tight)
+        }
+        s.accent = j == rollLen - 1;
+    }
+}
+
 // Stutter: a 1/16 or 1/32 of a hit repeated 2-4 times at random places (Amount: how many)
 inline void stutter (BreakData& d, int pat, int steps, int seed, float amount)
 {
@@ -472,11 +548,12 @@ enum Tool { ToolRollers, ToolTwoStep, ToolHalftime, ToolDoubleTime, ToolSnareBui
             ToolGhosts, ToolHatShuffle, ToolThinOut, ToolHumanise, ToolPitchDive, ToolVariation, kNumTools };
 inline const char* toolName (int t)
 {
-    static const char* n[] = { "Rollers", "Two-Step", "Halftime", "Double", "Snare Build", "Stutter", "Rev Swell", "Cut-up",
+    static const char* n[] = { "Rollers", "Two-Step", "Halftime", "Double", "Snare Roll", "Stutter", "Rev Swell", "Cut-up",
                                "Ghosts", "Hat Shuffle", "Thin Out", "Humanise", "Pitch Dive", "Variation" };
     return n[std::clamp (t, 0, (int) kNumTools - 1)];
 }
-inline void applyTool (int tool, BreakData& d, int pat, int steps, int seed, float amount, int brk, bool all)
+// legacySnare: Snare Build as it was before v0.1.71 (older projects' Auto fills are remade with it when they're converted)
+inline void applyTool (int tool, BreakData& d, int pat, int steps, int seed, float amount, int brk, bool all, bool legacySnare = false)
 {
     amount = std::clamp (amount, 0.0f, 1.0f);
     brk = std::clamp (brk, 0, BreakData::kBreaks - 1);
@@ -490,7 +567,10 @@ inline void applyTool (int tool, BreakData& d, int pat, int steps, int seed, flo
         case ToolTwoStep:      twoStep (d, pat, steps, seed, amount, brk, all); break;
         case ToolHalftime:     halftime (d, pat, steps, seed, amount, brk, all); break;
         case ToolDoubleTime:   doubleTime (d, pat, steps, seed, amount); break;
-        case ToolSnareBuild:   snareBuild (d, pat, steps, seed, amount, brk, all); break;
+        case ToolSnareBuild:
+            if (legacySnare) snareBuild (d, pat, steps, seed, amount, brk, all);
+            else { RollSettings rs; rs.lenSteps = amount < 0.34f ? 4 : (amount < 0.67f ? 8 : 16); snareRoll (d, pat, steps, seed, rs, brk); }
+            break;
         case ToolStutter:      stutter (d, pat, steps, seed, amount); break;
         case ToolReverseSwell: reverseSwell (d, pat, steps, seed, amount, brk, all); break;
         case ToolCutUp:        cutUp (d, pat, steps, seed, amount, brk, all); break;

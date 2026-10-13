@@ -54,7 +54,15 @@ void Segmented::paint (juce::Graphics& g)
         }
         g.setColour (on ? juce::Colours::white : (allowed ? col::text : col::muted.withAlpha (0.35f)));
         g.setFont (juce::Font (juce::FontOptions (12.5f, on ? juce::Font::bold : juce::Font::plain)));
-        g.drawFittedText (labels[i], r.toNearestInt(), juce::Justification::centred, 1, 0.72f);   // (squeezed a little rather than cut short)
+        const bool small = (cornerText != nullptr || footText != nullptr) && r.getHeight() >= 26.0f;
+        g.drawFittedText (labels[i], (small ? r.withTrimmedBottom (8.0f).withTrimmedTop (1.0f) : r).toNearestInt(), juce::Justification::centred, 1, 0.72f);   // (squeezed a little rather than cut short)
+        if (small)
+        {
+            g.setFont (juce::Font (juce::FontOptions (8.5f, juce::Font::bold)));
+            const auto ink = on ? juce::Colours::white.withAlpha (0.9f) : col::muted;
+            if (cornerText != nullptr) { const auto t = cornerText (i); if (t.isNotEmpty()) { g.setColour (ink); g.drawText (t, r.reduced (3.0f, 1.0f).toNearestInt(), juce::Justification::topRight, false); } }
+            if (footText != nullptr) { const auto t = footText (i); if (t.isNotEmpty()) { g.setColour (on ? juce::Colours::white.withAlpha (0.85f) : col::seq.brighter (0.2f)); g.drawFittedText (t, r.reduced (2.0f, 1.0f).toNearestInt(), juce::Justification::centredBottom, 1, 0.6f); } }
+        }
     }
 }
 
@@ -68,6 +76,7 @@ void Segmented::mouseDown (const juce::MouseEvent& e)
 {
     const int s = segmentAt (e.getPosition());
     if (s < 0 || (mask >= 0 && (mask & (1 << s)) == 0)) return;
+    if (e.mods.isPopupMenu() && onRightClick) { onRightClick (s); return; }
     if (param < 0)
     {
         local = s;

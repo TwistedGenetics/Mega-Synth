@@ -2913,7 +2913,7 @@ void MegaSynthEditor::buildPages()
         top->addTitleChip (new ModSourceChip (MS_SnareHit, "Snare"), 44);
         top->addTitleChip (new ModSourceChip (MS_HatHit, "Hat"), 34);
         top->add (new ParamToggle (proc, P_rxOn, "On", c), 56, 40);
-        top->choice (P_rxBreak, "From", 104);
+        auto* fromChoice = top->choice (P_rxBreak, "From", 104);
         top->choice (P_rxDetect, "Detection", 120);
         top->choice (P_bcSliceKeys, "Slice Keys", 92);
         auto* presetBtn = new juce::TextButton ("Presets...");
@@ -3015,8 +3015,15 @@ void MegaSynthEditor::buildPages()
         info->setFont (juce::Font (juce::FontOptions (12.0f)));
         info->setJustificationType (juce::Justification::topLeft);
         auto* ticker = page->own (new StoreTicker());
-        ticker->tick = [this, kNote, kSc, info, lights, rowParts]
+        ticker->tick = [this, kNote, kSc, info, lights, rowParts, fromChoice]
         {
+            {
+                // (v0.1.71) From in its break's colour (Any: the active break's)
+                auto pl = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+                const int fb = juce::roundToInt (pl (P_rxBreak));
+                const auto c = breakColour (fb > 0 ? fb - 1 : juce::jlimit (0, 3, juce::roundToInt (pl (P_bcActive)) - 1));
+                if (fromChoice->box.findColour (juce::ComboBox::outlineColourId) != c) { fromChoice->box.setColour (juce::ComboBox::outlineColourId, c); fromChoice->box.setColour (juce::ComboBox::arrowColourId, c); }
+            }
             auto plain = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
             kNote->setAlpha (plain (P_rxFromNote) > 0.5f ? 1.0f : 0.4f);
             kSc->setAlpha (plain (P_rxFromSc) > 0.5f ? 1.0f : 0.4f);
@@ -3067,13 +3074,21 @@ void MegaSynthEditor::buildPages()
         auto editLayer = std::make_shared<bool> (false);
         auto clip = std::make_shared<std::vector<tg::BreakStep>>();
         auto plainOf = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
-        // the pattern a sequencer edits: the main's selected one; the layer's own (or the main's letter while it follows the main)
-        auto patFor = [plainOf] (bool layer)
-        {
-            const bool own = layer && plainOf (P_bsLFollow) > 0.5f;
-            return juce::jlimit (0, 7, juce::roundToInt (plainOf (own ? P_bsLPattern : P_bsPattern)));
-        };
-        juce::Array<StoreKnob*> knobs; juce::Array<StoreToggle*> toggles;
+        // the pattern a sequencer edits: the main's selected one; the layer bank's own selected one (never moved by the main)
+        auto patFor = [plainOf] (bool layer) { return juce::jlimit (0, 7, juce::roundToInt (plainOf (layer ? P_bsLPattern : P_bsPattern))); };
+        auto activeBreak = [plainOf] { return juce::jlimit (0, tg::BreakData::kBreaks - 1, juce::roundToInt (plainOf (P_bcActive)) - 1); };
+        juce::Array<StoreKnob*> knobs; juce::Array<StoreToggle*> toggles; juce::Array<StoreChoice*> storeChoices;
+        juce::Array<Choice*> withChoices;   // (Alternate's "With": tinted in its break's colour)
+        juce::Array<Segmented*> patButtons;
+        // the Snare Roll's settings (shown over the grid when its button is pressed)
+        auto rollLayer = std::make_shared<bool> (false);
+        auto* rollSec = sec (page, "Snare Roll  (The early-90s jungle roll: one clean snare retriggered all the way through, speeding up (16ths, "
+                                   "32nds, 64ths, or a buzz at the end), building from ghost level to full, each hit cut short so the fast part stays "
+                                   "tight, a small pitch rise, landing on the next downbeat. Length: how long, always ending with the pattern. Snare: "
+                                   "Auto picks the cleanest snare slice (the most snare and the least kick, from the analysis). Gap: the last 16th "
+                                   "silent, or a reverse snare into the downbeat. Variation: small seeded changes to the levels and the timing. Roll it "
+                                   "writes the roll into the edited pattern (a new one each press; Undo takes it back). The steps it writes use the "
+                                   "step's Roll, Level, Roll Ramp, Roll Tight and Roll Pitch, so you can edit any of it after.)", juce::Colour (0xffff6b6b));
         juce::Array<juce::TextButton*> editButtons;
         struct ChainEd { juce::TextEditor* ed; bool layer; };
         std::vector<ChainEd> chains;
@@ -3084,8 +3099,11 @@ void MegaSynthEditor::buildPages()
             const juce::Colour c = layer ? col::complex : col::seq;
             auto* top = sec (page, layer
                 ? juce::String ("Layer Sequencer  (A second Break Sequencer with everything the main one has, for a layer such as hats or a shaker "
-                                "from another break. Follow main: it plays its own pattern of the same letter as the main, starting and switching "
-                                "with it (and its chain). Own: its own pattern, Switch, Pattern Keys and chain. Its hits choke only each other "
+                                "from another break. It has one bank of eight layer patterns, A-H, for the whole project. Paired: each main pattern "
+                                "plays the layer pattern it's paired with (the main row's Layer setting, e.g. main A with Layer B, main B with "
+                                "Layer C; A-H with A-H unless you change them), switching with it, on the same steps; these A-H buttons pick the "
+                                "layer pattern you edit, and Edit pair makes them jump to the pair when the main pattern changes. Own: its own "
+                                "pattern, Switch, Pattern Keys and chain. Right-click an A-H button to learn a pad for it. Its hits choke only each other "
                                 "(their own choke groups), and it has its own Mixer strip (Break Layer: level, pan, mute, solo, swing). Each of its "
                                 "patterns can own its break too. Break React can listen to it (Sequencer: Layer or Both). Layer Seq Step and Layer "
                                 "Seq Pattern are Mod Matrix sources.)")
@@ -3093,8 +3111,9 @@ void MegaSynthEditor::buildPages()
                                 "synth's tempo when it doesn't). Pick the pattern to edit and play here, or from 8 keys (Pattern Keys); a new pattern "
                                 "starts on the next step, beat or bar (Switch). Chain plays patterns in order, e.g. AABA. Each pattern owns its break "
                                 "(Pattern Break: Break 1-4; Active follows the Active Break, as before): Original and the tools use it, and when the "
-                                "pattern starts it becomes the Active Break. Each step plays a slice, with its own velocity, accent, pitch, reverse, "
-                                "roll, probability or tie. Step, pattern and slice are Mod Matrix sources.)"),
+                                "pattern starts it becomes the Active Break. Layer: the layer pattern it plays with (Paired). Right-click an A-H "
+                                "button to learn a pad (a note or CC) for it: a press selects it as a click does. Each step plays a slice, with its "
+                                "own velocity, accent, pitch, reverse, roll, probability or tie. Step, pattern and slice are Mod Matrix sources.)"),
                 c);
             tops[li] = top;
             // title row: which sequencer to edit, and where the tools draw from
@@ -3114,15 +3133,51 @@ void MegaSynthEditor::buildPages()
             auto* td = new BareChoice (proc, P_bsToolSource);
             td->box.setTooltip ("This pattern's break: the tools use the edited pattern's break (or the Active Break when it's set to Active). All four breaks: they mix in hits from every loaded break");
             top->addTitleChip (td, 170);
+            if (layer)
+            {
+                auto* ep = new ParamToggle (proc, P_bsLEditPair, "Edit pair", c);
+                ep->setTooltip ("Edit pair: when the main pattern changes, the layer's A-H buttons jump to the layer pattern it's paired with");
+                top->addTitleChip (ep, 84);
+            }
             if (layer) top->addTitleChip (new ModSourceChip (MS_LsStep, "Step"), 40);
             if (layer) top->addTitleChip (new ModSourceChip (MS_LsPattern, "Pattern"), 56);
             // row 1
             top->add (new ParamToggle (proc, layer ? P_bsLOn : P_bsOn, "Run", c), 70, 40);
-            top->add (new Segmented (proc, layer ? P_bsLPattern : P_bsPattern, { "A", "B", "C", "D", "E", "F", "G", "H" }, c), 240, 30);
+            auto* patSeg = new Segmented (proc, layer ? P_bsLPattern : P_bsPattern, { "A", "B", "C", "D", "E", "F", "G", "H" }, c);
+            const int padBase = layer ? 8 : 0;
+            patSeg->footText = [this, padBase] (int i) { return proc.patPadText (padBase + i); };
+            if (! layer)
+                patSeg->cornerText = [this, plainOf] (int i)
+                {
+                    if (plainOf (P_bsLFollow) > 0.5f) return juce::String();
+                    const int pr = proc.breakStore.get().lpair[juce::jlimit (0, 7, i)];
+                    return pr > 0 ? juce::String::charToString ((juce::juce_wchar) ('A' + pr - 1)) : juce::String ("-");
+                };
+            patSeg->onRightClick = [this, padBase, layer] (int i)
+            {
+                const juce::String nm = juce::String (layer ? "layer " : "") + juce::String::charToString ((juce::juce_wchar) ('A' + i));
+                juce::PopupMenu m;
+                m.addItem (1, "Learn a pad for " + nm + " (then hit a pad or press a CC button)");
+                m.addItem (2, "Clear the pad for " + nm, proc.patPadKind[padBase + i].load() != 0);
+                m.addSeparator();
+                m.addItem (3, juce::String ("Learn A-H in a row (eight pads, from ") + nm + ")");
+                m.addItem (4, "Clear all " + juce::String (layer ? "layer " : "") + "A-H pads");
+                m.showMenuAsync (juce::PopupMenu::Options(), [this, padBase, i, nm] (int r)
+                {
+                    if (r == 1) { proc.patPadLearnRun = false; proc.patPadLearn = padBase + i; setStatus ("Hit a pad (or press a CC button) for " + nm); }
+                    if (r == 2) { proc.clearPatPads (padBase + i, padBase + i); setStatus ("Pad for " + nm + " cleared"); }
+                    if (r == 3) { proc.patPadLearnRun = true; proc.patPadLearn = padBase + i; setStatus ("Hit the pads for " + nm + " onwards, one after another"); }
+                    if (r == 4) { proc.clearPatPads (padBase, padBase + 7); setStatus ("Pattern pads cleared"); }
+                });
+            };
+            patSeg->setTooltip ("Click to pick the pattern (it starts on the next step, beat or bar: Switch). Right-click: learn a pad (a note or "
+                                "a CC button) for it; the learned pad shows under the letter" + juce::String (layer ? "" : "; the small letter is the layer pattern it's paired with"));
+            patButtons.add (patSeg);
+            top->add (patSeg, 240, 36);
             top->choice (layer ? P_bsLSteps : P_bsSteps, "Length", 90);
             top->choice (layer ? P_bsLSwitch : P_bsSwitch, "Switch", 100);
             top->choice (layer ? P_bsLKeys : P_bsKeys, "Pattern Keys", layer ? 130 : 150);
-            if (layer) top->choice (P_bsLFollow, "Plays", 112)->box.setTooltip ("Follow main: the pattern of the same letter as the main, in step with it. Own: its own pattern, switching and chain");
+            if (layer) top->choice (P_bsLFollow, "Plays", 112)->box.setTooltip ("Paired: the layer pattern paired with the playing main pattern (the main row's Layer setting), in step with it. Own: its own pattern, switching and chain");
             top->knob (layer ? P_bsLSwing : P_bsSwing, "Swing", 62);
             if (layer) top->knob (P_bsLLevel, "Level", 62);
             top->knob (P_bsAmount, "Amount", 62);
@@ -3132,9 +3187,22 @@ void MegaSynthEditor::buildPages()
                                             [] (double v) { return v < 0.5 ? juce::String ("Active") : "Break " + juce::String (juce::roundToInt (v)); });
             patBreak->setTooltip (layer ? "The break this layer pattern plays (Active: whichever is active). Original and the tools use it."
                                         : "The break this pattern plays: Original and the tools use it, and it becomes the Active Break when the pattern starts (Active: no change, as before)");
+            patBreak->colourFor = [patBreak, activeBreak] { const int v = juce::roundToInt (patBreak->slider.getValue()); return breakColour (v > 0 ? v - 1 : activeBreak()); };
+            patBreak->isFollowing = [patBreak] { return patBreak->slider.getValue() < 0.5; };
             top->add (patBreak, 84, 84);
             knobs.add (patBreak);
             top->knob (P_bsVarAmount, "Variation", 66);
+            if (! layer)
+            {
+                // the layer pattern this main pattern plays with (Paired)
+                juce::StringArray items { "Off" }; for (int q = 0; q < 8; ++q) items.add ("Layer " + juce::String::charToString ((juce::juce_wchar) ('A' + q)));
+                auto* pair = new StoreChoice ("Layer", items,
+                                              [this, patFor] { return proc.breakStore.get().lpair[patFor (false)]; },
+                                              [this, patFor] (int v) { const int p = patFor (false); proc.breakStore.edit ([p, v] (tg::BreakData& d) { d.lpair[p] = juce::jlimit (0, 8, v); }); });
+                pair->setTooltip ("The layer pattern this main pattern plays with (when the layer plays Paired): e.g. main A with Layer B, main B with Layer C. Off: no layer for this pattern");
+                top->add (pair, 100, 44);
+                storeChoices.add (pair);
+            }
             top->newRow();
             // row 2: chain, the pattern tools, Alternate
             top->add (new ParamToggle (proc, layer ? P_bsLChainOn : P_bsChainOn, "Chain", c), 76, 40);
@@ -3173,7 +3241,7 @@ void MegaSynthEditor::buildPages()
             clearB->onClick = [run] { run (MegaSynthProcessor::BtClear, "Clear"); };
             for (auto* b : { copyB, pasteB, clearB }) top->add (b, 64, 26);
             top->choice (layer ? P_bsLAlternate : P_bsAlternate, "Alternate", 150);
-            top->choice (layer ? P_bsLAltBreak : P_bsAltBreak, "With", 96);
+            withChoices.add (top->choice (layer ? P_bsLAltBreak : P_bsAltBreak, "With", 96));
             top->newRow();
             // row 3: the Stage 4 tools: each press applies straight away (a new seed each time) and Undo takes it back
             static const char* tips[] = {
@@ -3181,7 +3249,7 @@ void MegaSynthEditor::buildPages()
                 "Two-Step: kick on 1 and the 'and' of 2, snares on 2 and 4, the rest from the pattern (Amount: how many of its other kicks go)",
                 "Halftime: the snare on 3 only, kicks on 1 and the 'and' of 3, hats from the break (Amount: how many hats)",
                 "Double-time: each half bar squeezed into a quarter and played twice (Amount: how many half bars)",
-                "Snare Build: a snare roll into the end of the pattern, x2 then x3 then x4, rising in pitch (Amount: how long and how high)",
+                "Snare Roll: an early-90s jungle snare roll into the end of the pattern (opens its settings: length, speed-up, crescendo, tightness, pitch, which snare, the gap)",
                 "Stutter: a hit repeated 2-4 times as 1/16s or 1/32s, at random places (Amount: how many)",
                 "Reverse Swell: a reversed snare leading into the backbeats (Amount: how many)",
                 "Cut-up: 1/8s swapped at random, keeping the kick on 1 and the snares on 2 and 4 (Amount: how many swaps)",
@@ -3196,10 +3264,42 @@ void MegaSynthEditor::buildPages()
                 auto* b = new juce::TextButton (tg::breaktools::toolName (t));
                 b->setTooltip (juce::String (tips[t]) + ". From the pattern's break; applied straight away, a new result each press; Undo takes it back.");
                 const juce::String nm (tg::breaktools::toolName (t));
-                b->onClick = [run, t, nm] { run (t, nm); };
+                if (t == tg::breaktools::ToolSnareBuild)
+                {
+                    b->setTooltip (tips[t]);
+                    b->onClick = [rollSec, rollLayer, layer] { *rollLayer = layer; rollSec->setVisible (! rollSec->isVisible()); rollSec->toFront (false); };
+                }
+                else b->onClick = [run, t, nm] { run (t, nm); };
                 top->add (b, 76, 26);
             }
         }
+        // ---- the Snare Roll's settings
+        rollSec->choice (P_bsRollLen, "Length", 92);
+        rollSec->choice (P_bsRollCurve, "Rate", 190);
+        rollSec->choice (P_bsRollGap, "Before the downbeat", 140);
+        rollSec->knob (P_bsRollCresc, "Crescendo", 70);
+        rollSec->knob (P_bsRollTight, "Tightness", 70);
+        rollSec->knob (P_bsRollPitch, "Pitch Rise", 70);
+        rollSec->knob (P_bsRollSnare, "Snare", 70);
+        rollSec->knob (P_bsRollVar, "Variation", 70);
+        {
+            auto* rollIt = new juce::TextButton ("Roll it");
+            rollIt->setTooltip ("Write the roll into the end of the edited pattern (a new one each press; Undo takes it back)");
+            rollIt->setColour (juce::TextButton::buttonColourId, juce::Colour (0xffff6b6b).withAlpha (0.55f));
+            rollIt->onClick = [this, rollLayer, patFor]
+            {
+                const bool l = *rollLayer;
+                const int b = proc.runBreakTool (tg::breaktools::ToolSnareBuild, l, patFor (l));
+                setStatus ("Snare Roll on " + juce::String (l ? "layer " : "") + "pattern " + juce::String::charToString ((juce::juce_wchar) ('A' + patFor (l)))
+                           + ", from Break " + juce::String (b + 1) + " (Undo takes it back)");
+            };
+            rollSec->add (rollIt, 90, 30);
+            auto* closeB = new juce::TextButton ("Close");
+            closeB->onClick = [rollSec] { rollSec->setVisible (false); };
+            rollSec->add (closeB, 64, 30);
+        }
+        rollSec->setVisible (false);
+        breakRollPanel = rollSec;
         // ---- the selected step (of the sequencer being edited)
         auto* stepSec = sec (page, "Step", col::seq);
         {
@@ -3231,15 +3331,27 @@ void MegaSynthEditor::buildPages()
         toggles.add (new StoreToggle ("Accent", col::supersaw, stepGet ([] (const tg::BreakStep& x) { return x.accent; }), stepSet ([] (tg::BreakStep& x, bool v) { x.accent = v; })));
         stepKnobs.add (new StoreKnob ("Pitch", -24, 24, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.pitch; }), stepSet ([] (tg::BreakStep& x, float v) { x.pitch = v; }), [] (double v) { return (v > 0 ? "+" : "") + juce::String (juce::roundToInt (v)) + " st"; }));
         toggles.add (new StoreToggle ("Reverse", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.reverse; }), stepSet ([] (tg::BreakStep& x, bool v) { x.reverse = v; })));
-        stepKnobs.add (new StoreKnob ("Roll", 1, 4, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.roll; }), stepSet ([] (tg::BreakStep& x, float v) { x.roll = juce::roundToInt (v); }), [] (double v) { return v < 1.5 ? juce::String ("off") : "x" + juce::String (juce::roundToInt (v)); }));
+        // (Roll: x2, x3, x4, x6 or x8; 5 and 7 round to their neighbours)
+        stepKnobs.add (new StoreKnob ("Roll", 1, 8, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.roll; }),
+                                      stepSet ([] (tg::BreakStep& x, float v) { int r = juce::roundToInt (v); if (r == 5) r = x.roll > 5 ? 4 : 6; if (r == 7) r = x.roll > 7 ? 6 : 8; x.roll = r; }),
+                                      [] (double v) { const int r = juce::roundToInt (v); return r < 2 ? juce::String ("off") : "x" + juce::String (r == 5 ? 6 : (r == 7 ? 8 : r)); }));
         stepKnobs.add (new StoreKnob ("Probability", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.prob; }), stepSet ([] (tg::BreakStep& x, float v) { x.prob = v; }), [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; }));
         toggles.add (new StoreToggle ("Tie", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.tie; }), stepSet ([] (tg::BreakStep& x, bool v) { x.tie = v; })));
         auto* brkKnob = new StoreKnob ("Break", 0, 4, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.brk; }), stepSet ([] (tg::BreakStep& x, float v) { x.brk = juce::roundToInt (v); }),
                                        [] (double v) { return v < 0.5 ? juce::String ("Pattern") : "Break " + juce::String (juce::roundToInt (v)); });
         brkKnob->setTooltip ("Which break this step plays: Pattern (the pattern's break, or the Active Break when that's Active) or always Break 1-4");
+        brkKnob->colourFor = [this, brkKnob, grid, activeBreak]
+        {
+            const int v = juce::roundToInt (brkKnob->slider.getValue());
+            if (v > 0) return breakColour (v - 1);
+            const auto d = proc.breakStore.get(); const int p = grid->editedPattern(); const int pb = grid->layer ? d.lpatBreak[p] : d.patBreak[p];
+            return breakColour (pb > 0 ? pb - 1 : activeBreak());
+        };
+        brkKnob->isFollowing = [brkKnob] { return brkKnob->slider.getValue() < 0.5; };
         auto* layerT = new StoreToggle ("Layer", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.layer; }), stepSet ([] (tg::BreakStep& x, bool v) { x.layer = v; }));
         auto* lb = new StoreKnob ("Layer Break", 1, 4, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.layerBrk; }), stepSet ([] (tg::BreakStep& x, float v) { x.layerBrk = juce::roundToInt (v); x.layer = true; }),
                                   [] (double v) { return "Break " + juce::String (juce::roundToInt (v)); });
+        lb->colourFor = [lb] { return breakColour (juce::jlimit (1, 4, juce::roundToInt (lb->slider.getValue())) - 1); };
         auto* ls = new StoreKnob ("Layer Slice", 1, 32, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) (x.layerSlice + 1); }), stepSet ([] (tg::BreakStep& x, float v) { x.layerSlice = juce::roundToInt (v) - 1; x.layer = true; }),
                                   [] (double v) { return juce::String (juce::roundToInt (v)); });
         auto* ll = new StoreKnob ("Layer Level", 0, 1.5, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.layerLevel; }), stepSet ([] (tg::BreakStep& x, float v) { x.layerLevel = v; }),
@@ -3253,17 +3365,32 @@ void MegaSynthEditor::buildPages()
         auto* stLate = new StoreKnob ("Late", 0, 0.5, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.nudge; }), stepSet ([] (tg::BreakStep& x, float v) { x.nudge = v; }),
                                       [] (double v) { return v < 0.005 ? juce::String ("on time") : juce::String (juce::roundToInt (v * 100)) + "% step"; });
         stLate->setTooltip ("How late this hit plays, as a share of a step (Humanise sets it)");
+        // (v0.1.71) the step's level and its roll's shape
+        auto* stLevel = new StoreKnob ("Level", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.level; }), stepSet ([] (tg::BreakStep& x, float v) { x.level = v; }),
+                                       [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; });
+        stLevel->setTooltip ("The step's level, on top of its velocity (the Snare Roll's crescendo uses it)");
+        auto* stRamp = new StoreKnob ("Roll Ramp", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.rollRamp; }), stepSet ([] (tg::BreakStep& x, float v) { x.rollRamp = v; }),
+                                      [] (double v) { return v < 0.005 ? juce::String ("flat") : juce::String (juce::roundToInt (v * 100)) + "%"; });
+        stRamp->setTooltip ("Roll Ramp: the roll's repeats climb from this much quieter up to the step's level (a crescendo inside the step)");
+        auto* stTight = new StoreKnob ("Roll Tight", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.rollTight; }), stepSet ([] (tg::BreakStep& x, float v) { x.rollTight = v; }),
+                                       [] (double v) { return v < 0.005 ? juce::String ("off") : juce::String (juce::roundToInt (v * 100)) + "%"; });
+        stTight->setTooltip ("Roll Tight: each hit (and each repeat) is cut short; at 100% it lasts only as long as the gap to the next repeat");
+        auto* stRp = new StoreKnob ("Roll Pitch", -12, 12, 0.1, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.rollPitch; }), stepSet ([] (tg::BreakStep& x, float v) { x.rollPitch = v; }),
+                                    [] (double v) { return std::abs (v) < 0.05 ? juce::String ("0 st") : (v > 0 ? "+" : "") + juce::String (v, 1) + " st"; });
+        stRp->setTooltip ("Roll Pitch: the repeats rise (or fall) by this much across the step");
         stepSec->add (toggles[0], 56, 40);
         stepSec->add (brkKnob, 70, 84);
         for (auto* k : stepKnobs) stepSec->add (k, 70, 84);
         for (auto* k : { stStretch, stCycle, stLate }) stepSec->add (k, 70, 84);
         stepSec->newRow();
-        for (int i = 1; i < toggles.size(); ++i) stepSec->add (toggles[i], 80, 40);
-        stepSec->add (layerT, 72, 40);
-        for (auto* k : { lb, ls, ll }) stepSec->add (k, 70, 84);
+        for (int i = 1; i < toggles.size(); ++i) stepSec->add (toggles[i], 72, 40);
+        stepSec->add (layerT, 64, 40);
+        for (auto* k : { lb, ls, ll }) stepSec->add (k, 62, 84);
+        for (auto* k : { stLevel, stRamp, stTight, stRp }) stepSec->add (k, 56, 84);
         for (auto* k : stepKnobs) knobs.add (k);
         knobs.add (brkKnob); knobs.add (lb); knobs.add (ls); knobs.add (ll); toggles.add (layerT);
         knobs.add (stStretch); knobs.add (stCycle); knobs.add (stLate);
+        for (auto* k : { stLevel, stRamp, stTight, stRp }) knobs.add (k);
         auto* stepName = page->own (new juce::Label());
         stepName->setColour (juce::Label::textColourId, col::text);
         stepName->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
@@ -3279,8 +3406,8 @@ void MegaSynthEditor::buildPages()
                           "1 beat, 2 beats or 1 bar. Mode: Trigger plays it once; Hold plays while you hold the pad. Calling it while the Fill "
                           "Pattern itself is playing does nothing. The Fill pad: press Learn, then hit a pad (or move a CC) on your controller; "
                           "that note isn't played, and the pad is saved with the project. Auto Fill plays the Fill Pattern every 4, 8 or 16 bars, "
-                          "by Chance, ending with the phrase. The layer can keep going under a fill, or play its own pattern of the Fill Pattern's "
-                          "letter. Fill Active is a Mod Matrix source.");
+                          "by Chance, ending with the phrase. The layer can keep going under a fill, or play the layer pattern paired with the "
+                          "Fill Pattern. Fill Active is a Mod Matrix source.");
         auto* padLabel = new juce::Label();
         padLabel->setColour (juce::Label::textColourId, col::text);
         padLabel->setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
@@ -3315,11 +3442,37 @@ void MegaSynthEditor::buildPages()
             grid->refresh(); grid->repaint();
         };
         breakEditLayerFn (false);
-        ticker->tick = [this, grid, knobs, toggles, chains, stepName, padLabel, learnB, editLayer, patFor]
+        auto lastMainPat = std::make_shared<int> (-1);
+        ticker->tick = [this, grid, knobs, toggles, chains, stepName, padLabel, learnB, editLayer, patFor, storeChoices, withChoices, patButtons, lastMainPat, plainOf]
         {
+            // Edit pair: the layer's A-H follow the main pattern's pair when the main pattern changes
+            {
+                const int mp = patFor (false);
+                if (mp != *lastMainPat)
+                {
+                    if (*lastMainPat >= 0 && plainOf (P_bsLEditPair) > 0.5f && plainOf (P_bsLFollow) < 0.5f)
+                    {
+                        const int pr = proc.breakStore.get().lpair[mp];
+                        if (pr > 0) { auto* prm = proc.param (P_bsLPattern); prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (pr - 1))); prm->endChangeGesture(); }
+                    }
+                    *lastMainPat = mp;
+                }
+            }
             breakKeyEntry (*grid);
             grid->refresh();
             for (auto* k : knobs) k->refresh();
+            for (auto* sc : storeChoices) sc->refresh();
+            for (int w = 0; w < withChoices.size(); ++w)
+            {
+                const auto c = breakColour (juce::jlimit (0, 3, juce::roundToInt (plainOf (w == 0 ? P_bsAltBreak : P_bsLAltBreak))));
+                if (withChoices[w]->box.findColour (juce::ComboBox::outlineColourId) != c) { withChoices[w]->box.setColour (juce::ComboBox::outlineColourId, c); withChoices[w]->box.setColour (juce::ComboBox::arrowColourId, c); }
+            }
+            {
+                // the pads under the letters, the pairs in the corners: repaint when they change
+                juce::String key; for (int i = 0; i < MegaSynthProcessor::kPatPads; ++i) key << proc.patPadText (i) << ",";
+                const auto d0 = proc.breakStore.get(); for (int p : d0.lpair) key << p; key << (int) plainOf (P_bsLFollow);
+                if (key != padKeyShown) { padKeyShown = key; for (auto* b : patButtons) b->repaint(); }
+            }
             for (auto* t : toggles) t->refresh();
             const auto d = proc.breakStore.get();
             for (auto& ce : chains)
@@ -3340,11 +3493,12 @@ void MegaSynthEditor::buildPages()
         };
         ticker->tick();
         breakGridForTests = grid;
-        page->onResize = [page, tops, grid, stepSec, stepName, fillSec]
+        page->onResize = [page, tops, grid, stepSec, stepName, fillSec, rollSec]
         {
             const int g = 10, W = page->getWidth();
-            for (auto* t : tops) t->setBounds (g, g, W - 2 * g, 210);
-            grid->setBounds (g + 4, g + 216, W - 2 * g - 8, 140);
+            for (auto* t : tops) t->setBounds (g, g, W - 2 * g, 214);
+            grid->setBounds (g + 4, g + 218, W - 2 * g - 8, 138);
+            rollSec->setBounds (g, g + 218, W - 2 * g, 138);
             stepSec->setBounds (g, g + 362, 772, 226);
             stepName->setBounds (g + 470, g + 368, 292, 20);
             fillSec->setBounds (g + 780, g + 362, W - 2 * g - 780, 226);

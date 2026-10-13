@@ -27,7 +27,7 @@ struct BreakSlice
 struct BreakStep
 {
     bool on = false, accent = false, reverse = false, tie = false;
-    int slice = 0, roll = 1;   // roll: 1 = once, 2 / 3 / 4 = retriggered within the step
+    int slice = 0, roll = 1;   // roll: 1 = once, 2 / 3 / 4 / 6 / 8 = retriggered within the step
     float vel = 0.8f, pitch = 0.0f, prob = 1.0f;
     int brk = 0;               // 0: the Active Break; 1-3: always that break
     bool layer = false;        // a second hit stacked on this one ...
@@ -36,7 +36,12 @@ struct BreakStep
     int stretch = 0;           // 0: Default (the slice's, then the break's); 1 Repitch, 2 Akai Cyclic, 3 Clean
     float cycleMs = 0.0f;      // 0: no override; else the Akai Cyclic cycle length for this hit
     float nudge = 0.0f;        // played this much of a step late (Humanise), 0 .. 0.5
-    bool hasExtras() const { return stretch != 0 || cycleMs != 0.0f || nudge != 0.0f; }
+    // (v0.1.71) the roll's shape and the step's own level (none of them change a step that doesn't set them)
+    float rollRamp = 0.0f;     // the repeats climb from (1 - ramp) to full level across the step
+    float rollTight = 0.0f;    // each hit (and repeat) is cut short: 0 off, 1 = as long as the gap to the next
+    float rollPitch = 0.0f;    // semitones the repeats rise by across the step
+    float level = 1.0f;        // the step's level, 0..1 (on top of its velocity; the Snare Roll's crescendo)
+    bool hasExtras() const { return stretch != 0 || cycleMs != 0.0f || nudge != 0.0f || rollRamp != 0.0f || rollTight != 0.0f || rollPitch != 0.0f || level != 1.0f; }
 };
 
 // one break's own settings and its analysis
@@ -87,6 +92,9 @@ struct BreakData
     int lpatBreak[kPatterns] {};
     char lchain[17] {};
     int lseed = 1;
+    // (v0.1.71) the layer bank paired with each main pattern: 0 none, 1-8 Layer A-H (A-H to A-H: as Follow main was)
+    int lpair[kPatterns] { 1, 2, 3, 4, 5, 6, 7, 8 };
+    bool pairsIdentity() const { for (int p = 0; p < kPatterns; ++p) if (lpair[p] != p + 1) return false; return true; }
     // ---- derived (not saved): each pattern's Auto fill, made from the pattern on the message thread
     BreakStep autoFill[kPatterns][kSteps];
     int autoFillTool[kPatterns] {};
@@ -193,6 +201,10 @@ public:
                 if (s.reverse) x->setProperty ("rev", true);
                 if (s.tie) x->setProperty ("tie", true);
                 if (s.roll > 1) x->setProperty ("roll", s.roll);
+                if (s.rollRamp != 0.0f) x->setProperty ("rr", s.rollRamp);
+                if (s.rollTight != 0.0f) x->setProperty ("rt", s.rollTight);
+                if (s.rollPitch != 0.0f) x->setProperty ("rp", s.rollPitch);
+                if (s.level != 1.0f) x->setProperty ("lvl", s.level);
                 if (s.pitch != 0.0f) x->setProperty ("pitch", s.pitch);
                 if (s.prob < 1.0f) x->setProperty ("prob", s.prob);
                 if (s.brk != 0) x->setProperty ("brk", s.brk);
@@ -228,7 +240,7 @@ public:
         if (anyPatBreak) { juce::Array<juce::var> pb; for (int p : d.patBreak) pb.add (p); o->setProperty ("patBreak", pb); }
         {
             // the layer sequencer (only once it has something, so older plug-ins and tests read the rest unchanged)
-            bool anyLayer = d.lseed != 1 || d.lchain[0] != 0;
+            bool anyLayer = d.lseed != 1 || d.lchain[0] != 0 || ! d.pairsIdentity();
             for (int p = 0; p < BreakData::kPatterns; ++p) { anyLayer = anyLayer || d.lpatBreak[p] != 0; for (int i = 0; i < BreakData::kSteps; ++i) { const auto& x = d.lstep[p][i]; anyLayer = anyLayer || x.on || x.tie || x.slice != 0 || x.brk != 0 || x.layer || x.hasExtras(); } }
             if (anyLayer)
             {
@@ -237,6 +249,7 @@ public:
                 lo->setProperty ("chain", juce::String (d.lchain));
                 lo->setProperty ("seed", d.lseed);
                 juce::Array<juce::var> pb; for (int p : d.lpatBreak) pb.add (p); lo->setProperty ("patBreak", pb);
+                if (! d.pairsIdentity()) { juce::Array<juce::var> pr; for (int p : d.lpair) pr.add (p); lo->setProperty ("pairs", pr); }
                 o->setProperty ("layer", juce::var (lo));
             }
         }
@@ -266,7 +279,11 @@ public:
                             s.accent = (bool) x.getProperty ("acc", false);
                             s.reverse = (bool) x.getProperty ("rev", false);
                             s.tie = (bool) x.getProperty ("tie", false);
-                            s.roll = juce::jlimit (1, 4, (int) x.getProperty ("roll", 1));
+                            s.roll = juce::jlimit (1, 8, (int) x.getProperty ("roll", 1));
+                            s.rollRamp = juce::jlimit (0.0f, 1.0f, (float) x.getProperty ("rr", 0.0));
+                            s.rollTight = juce::jlimit (0.0f, 1.0f, (float) x.getProperty ("rt", 0.0));
+                            s.rollPitch = juce::jlimit (-12.0f, 12.0f, (float) x.getProperty ("rp", 0.0));
+                            s.level = juce::jlimit (0.0f, 1.0f, (float) x.getProperty ("lvl", 1.0));
                             s.pitch = juce::jlimit (-24.0f, 24.0f, (float) x.getProperty ("pitch", 0.0));
                             s.prob = juce::jlimit (0.0f, 1.0f, (float) x.getProperty ("prob", 1.0));
                             s.brk = juce::jlimit (0, BreakData::kBreaks, (int) x.getProperty ("brk", 0));
@@ -314,6 +331,8 @@ public:
                 d.lseed = juce::jmax (1, (int) lv.getProperty ("seed", 1));
                 if (auto* pb = lv["patBreak"].getArray())
                     for (int p = 0; p < juce::jmin (BreakData::kPatterns, pb->size()); ++p) d.lpatBreak[p] = juce::jlimit (0, BreakData::kBreaks, (int) (*pb)[p]);
+                if (auto* pr = lv["pairs"].getArray())
+                    for (int p = 0; p < juce::jmin (BreakData::kPatterns, pr->size()); ++p) d.lpair[p] = juce::jlimit (0, BreakData::kPatterns, (int) (*pr)[p]);
             }
         });
     }

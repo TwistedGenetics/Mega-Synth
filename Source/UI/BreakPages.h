@@ -30,13 +30,62 @@ public:
         slider.onValueChange = [this] { if (! updating) setter ((float) slider.getValue()); };
         addAndMakeVisible (slider);
     }
-    void refresh() { updating = true; slider.setValue (getter(), juce::dontSendNotification); slider.updateText(); updating = false; }
+    void refresh()
+    {
+        updating = true; slider.setValue (getter(), juce::dontSendNotification); slider.updateText(); updating = false;
+        // (v0.1.71) a break dial in its break's colour; following (Active / Pattern): the colour of the break it follows, ringed
+        if (colourFor)
+        {
+            const auto c = colourFor();
+            const bool f = isFollowing != nullptr && isFollowing();
+            if (c != shownColour || f != following) { shownColour = c; following = f; slider.setColour (juce::Slider::rotarySliderFillColourId, c); repaint(); }
+        }
+    }
     void resized() override { caption.setBounds (0, 0, getWidth(), 16); slider.setBounds (0, 16, getWidth(), getHeight() - 16); }
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (! following) return;
+        auto r = slider.getBounds().withTrimmedBottom (18).toFloat();
+        const float d = std::min (r.getWidth(), r.getHeight()) - 2.0f;
+        const auto c = juce::Rectangle<float> (d, d).withCentre (r.getCentre());
+        juce::Path p; p.addEllipse (c);
+        const float dashes[] = { 3.0f, 3.0f };
+        juce::Path dp; juce::PathStrokeType (1.2f).createDashedStroke (dp, p, dashes, 2);
+        g.setColour (shownColour.withAlpha (0.9f)); g.fillPath (dp);
+    }
+    std::function<juce::Colour()> colourFor;   // (break dials) the colour now
+    std::function<bool()> isFollowing;         // ... and whether it's following another setting (drawn with a dashed ring)
     juce::Slider slider;
 private:
     juce::Label caption;
     std::function<float()> getter;
     std::function<void (float)> setter;
+    bool updating = false, following = false;
+    juce::Colour shownColour;
+};
+
+// A drop-down for a value in the BreakStore, with a caption above it (as the parameter drop-downs)
+class StoreChoice : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    StoreChoice (const juce::String& cap, juce::StringArray items, std::function<int()> get, std::function<void (int)> set)
+        : getter (std::move (get)), setter (std::move (set))
+    {
+        caption.setText (cap, juce::dontSendNotification);
+        caption.setFont (juce::Font (juce::FontOptions (11.5f)));
+        caption.setColour (juce::Label::textColourId, col::muted);
+        addAndMakeVisible (caption);
+        box.addItemList (items, 1);
+        box.onChange = [this] { if (! updating && box.getSelectedItemIndex() >= 0) setter (box.getSelectedItemIndex()); };
+        addAndMakeVisible (box);
+    }
+    void refresh() { const int v = getter(); if (v != box.getSelectedItemIndex()) { updating = true; box.setSelectedItemIndex (v, juce::dontSendNotification); updating = false; } }
+    void resized() override { auto r = getLocalBounds(); caption.setBounds (r.removeFromTop (16)); box.setBounds (r.removeFromTop (24)); }
+    juce::ComboBox box;
+private:
+    juce::Label caption;
+    std::function<int()> getter;
+    std::function<void (int)> setter;
     bool updating = false;
 };
 
@@ -172,8 +221,8 @@ public:
     // the pattern being edited: the main's selected one; the layer's own selected one (or, when it follows the main, the main's letter)
     int editedPattern() const
     {
-        const bool own = layer && proc.param (tg::P_bsLFollow)->getValue() > 0.5f;
-        return juce::jlimit (0, 7, juce::roundToInt (plain (own ? tg::P_bsLPattern : tg::P_bsPattern)));
+        // the main's selected pattern, or the layer bank's own selected one (v0.1.71: never moved by the main)
+        return juce::jlimit (0, 7, juce::roundToInt (plain (layer ? tg::P_bsLPattern : tg::P_bsPattern)));
     }
     int editedMainPattern() const { return juce::jlimit (0, 7, juce::roundToInt (plain (tg::P_bsPattern))); }
     int numSteps() const { return proc.param (layer ? tg::P_bsLSteps : tg::P_bsSteps)->getValue() > 0.5f ? 32 : 16; }

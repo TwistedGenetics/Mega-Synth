@@ -86,7 +86,7 @@ void FxBus::updateImpulse (double seconds)
 }
 
 // The 90s reverb's tail: recorded while it plays; while frozen, played back from the recording as two overlapping grains
-// (0.3 s, sine windows, from random places in the last 1.9 s), crossfaded with the live reverb
+// (0.3 s, sine windows, from random places in the last 0.8 s), crossfaded with the live reverb
 void FxBus::freezeTail (float* cl, float* cr, int n, bool freezing)
 {
     const int size = (int) frzBuf[0].size();
@@ -96,7 +96,7 @@ void FxBus::freezeTail (float* cl, float* cr, int n, bool freezing)
         return;
     }
     const int G = (int) (0.3 * sr);
-    const double span = 1.9 * sr;
+    const double span = 0.8 * sr;   // (from the last 0.8 s: close to the level it had when frozen)
     for (int i = 0; i < n; ++i)
     {
         float a = 0.0f, b = 0.0f;

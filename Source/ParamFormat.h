@@ -179,7 +179,9 @@ inline juce::String formatParam (int idx, float v)
     if (id == "rxDecay") return v >= 1000.0f ? fixed (v / 1000.0f, 2) + " s" : juce::String (juce::roundToInt (v)) + " ms";
     if (id == "rxOffset") return (v > 0.05f ? "+" : "") + fixed (v, 1) + " ms";
     if (id == "rxNote") { const int n = juce::roundToInt (v); return juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")"; }
-    if (id == "bcLevel1" || id == "bcLevel2" || id == "bcLevel3" || id == "bcLevel4" || id == "bsAmount" || id == "bsVarAmount" || id == "bsAutoFillProb" || id == "bsKeyVel" || id == "bsLLevel") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    if (id == "bcLevel1" || id == "bcLevel2" || id == "bcLevel3" || id == "bcLevel4" || id == "bsAmount" || id == "bsVarAmount" || id == "bsAutoFillProb" || id == "bsKeyVel" || id == "bsLLevel" || id == "bsRollCresc" || id == "bsRollTight" || id == "bsRollVar") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    if (id == "bsRollPitch") return juce::String (v, 1) + " st";
+    if (id == "bsRollSnare") { const int n = juce::roundToInt (v); return n < 0 ? juce::String ("Auto") : "Slice " + juce::String (n + 1); }
     if (id == "bsFillKey") { const int n = juce::roundToInt (v); return n < 0 ? juce::String ("Off") : juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")"; }
     if (id == "bcKeyBase") { const int n = juce::roundToInt (v); return juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")"; }
     if (id == "bcCycle") return fixed (v, v < 100 ? 1 : 0) + " ms";
@@ -263,9 +265,10 @@ inline float parseParam (int idx, const juce::String& text)
     if (id == "gsScan" && text.containsIgnoreCase ("frozen")) return 0.0f;
     if ((id == "bcTempo" || id == "bcTempo2" || id == "bcTempo3" || id == "bcTempo4") && text.containsIgnoreCase ("auto")) return 0.0f;
     if (id == "bsFillKey" && text.containsIgnoreCase ("off")) return -1.0f;
-    if (id == "bcActive") return juce::jlimit (1.0f, 3.0f, (float) text.retainCharacters ("0123456789").getIntValue());
+    if (id == "bcActive") return juce::jlimit (1.0f, 4.0f, (float) text.retainCharacters ("0123456789").getIntValue());
     if (id.startsWith ("rx") && text.contains ("%")) return v / 100.0f;
-    if ((id == "bcLevel1" || id == "bcLevel2" || id == "bcLevel3" || id == "bcLevel4" || id == "bsAmount" || id == "bsVarAmount" || id == "bsAutoFillProb" || id == "bsKeyVel" || id == "bsLLevel") && text.contains ("%")) return v / 100.0f;
+    if ((id == "bcLevel1" || id == "bcLevel2" || id == "bcLevel3" || id == "bcLevel4" || id == "bsAmount" || id == "bsVarAmount" || id == "bsAutoFillProb" || id == "bsKeyVel" || id == "bsLLevel" || id == "bsRollCresc" || id == "bsRollTight" || id == "bsRollVar") && text.contains ("%")) return v / 100.0f;
+    if (id == "bsRollSnare") { if (text.containsIgnoreCase ("auto")) return -1.0f; return (float) (text.retainCharacters ("0123456789").getIntValue() - 1); }
     if ((id == "bcXfade" || id == "bcVelSens" || id == "bcLevel" || id == "bcSens" || id == "bcSens2" || id == "bcSens3" || id == "bcSens4" || id == "bsSwing" || id == "bsLSwing") && text.contains ("%")) return v / 100.0f;
     if (id == "pfDjPos") { const float n = text.retainCharacters ("-0123456789.").getFloatValue(); const float a = text.contains ("%") ? n / 100.0f : n; return text.containsIgnoreCase ("lp") ? -std::abs (a) : (text.containsIgnoreCase ("centre") ? 0.0f : a); }
     if ((id == "pfGateDepth" || id == "pfDjRes" || id == "pfVinylAmt" || id == "pfEchoFb" || id == "pfEchoMix" || id == "pfVerbSize" || id == "pfVerbMix" || id == "pfAkaiXfade" || id == "pfAkaiMix") && text.contains ("%")) return v / 100.0f;

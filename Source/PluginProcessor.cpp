@@ -444,16 +444,37 @@ void MegaSynthProcessor::bsPlayStep (const tg::BreakStep& s, int64_t k, double s
     // Humanise: the hit can be played a little late (a fraction of a step), from the rolls queue
     const double late = s.nudge > 0.0f ? 0.25 * juce::jlimit (0.0, 0.5, (double) s.nudge) : 0.0;
     const double sb = stepBeat + late;
-    if (late > 0.0 && numRolls < 15) rolls[numRolls++] = { sb, t };
-    else ch.trigger (t, st);
+    // (v0.1.71) the step's level, and the roll's shape: the repeats' climb (Ramp) and rise (Pitch), each hit cut short (Tight)
+    const int R = juce::jlimit (1, 8, s.roll);
+    t.level *= juce::jlimit (0.0f, 1.0f, s.level);
+    if (s.rollTight > 0.0f)
+    {
+        const double beatsPerSec = fxBeatInc > 0.0 ? fxBeatInc * getSampleRate() : 172.0 / 60.0;
+        const double gapSec = 0.25 / R / beatsPerSec;
+        t.gateSec = gapSec * (1.0 + 3.0 * (1.0 - juce::jlimit (0.0, 1.0, (double) s.rollTight)));
+    }
+    auto rollHit = [&] (int rr)
+    {
+        tg::BreakChopper::Trigger h = t;
+        if (R > 1 && (s.rollRamp != 0.0f || s.rollPitch != 0.0f))
+        {
+            const float f = (float) rr / (float) (R - 1);
+            h.level *= (1.0f - s.rollRamp) + s.rollRamp * f;
+            h.pitch += s.rollPitch * f;
+        }
+        return h;
+    };
+    const tg::BreakChopper::Trigger first = rollHit (0);
+    if (late > 0.0 && numRolls < kMaxRolls - 1) rolls[numRolls++] = { sb, first };
+    else ch.trigger (first, st);
     fired = true; firedBrk = brk;
-    for (int rr = 1; rr < s.roll && numRolls < 15; ++rr) rolls[numRolls++] = { sb + 0.25 * rr / s.roll, t };
+    for (int rr = 1; rr < R && numRolls < kMaxRolls - 1; ++rr) rolls[numRolls++] = { sb + 0.25 * rr / R, rollHit (rr) };
     if (s.layer)
     {
         // a second hit stacked on it, from another break (it doesn't choke the first)
         tg::BreakChopper::Trigger l = t;
         l.brk = juce::jlimit (0, tg::BreakData::kBreaks - 1, s.layerBrk - 1); l.slice = s.layerSlice; l.level = s.layerLevel; l.noChoke = true;
-        if (late > 0.0 && numRolls < 15) rolls[numRolls++] = { sb, l };
+        if (late > 0.0 && numRolls < kMaxRolls - 1) rolls[numRolls++] = { sb, l };
         else ch.trigger (l, st);
     }
 }
@@ -588,8 +609,10 @@ void MegaSynthProcessor::lsTick (double beat)
         int idx;
         if (follow)
         {
-            // the main's pattern letter (or the selected one when the main isn't running), restarting with it
-            lay.playing = bsRunning ? bsPlaying : juce::jlimit (0, 7, snap.i (P_bsPattern));
+            // Paired: the layer pattern paired with the main's pattern (or the selected one when the main isn't running),
+            // restarting with it (A-H paired to A-H, the default, is what Follow main was)
+            const int mainPat = bsRunning ? bsPlaying : juce::jlimit (0, 7, snap.i (P_bsPattern));
+            lay.playing = d.lpair[juce::jlimit (0, 7, mainPat)] - 1;   // (-1: none)
             idx = (int) posMod (k - (bsRunning ? bsOffset : 0), steps);
         }
         else
@@ -612,19 +635,21 @@ void MegaSynthProcessor::lsTick (double beat)
         const bool mainFill = bsRunning && bsFillState == 2 && k >= bsFillStart && k < bsFillEnd;
         const bool inFill = mainFill && snap.i (P_bsLFill) == 1;
         int pat = lay.playing;
-        const tg::BreakStep* sp = &d.lstep[pat][idx];
+        static const tg::BreakStep silent {};
+        const tg::BreakStep* sp = pat >= 0 ? &d.lstep[pat][idx] : &silent;
         if (inFill)
         {
+            // the Fill Pattern's paired layer pattern (with A-H to A-H, its own letter, as before)
             const int fj = (int) posMod (k - bsFillStart, bsFillLen);
             const int srcIdx = (int) posMod (fj - std::min (bsFillLen, steps), steps);
-            pat = juce::jlimit (0, 7, bsFillPat);
-            sp = &d.lstep[pat][srcIdx];
+            pat = d.lpair[juce::jlimit (0, 7, bsFillPat)] - 1;
+            sp = pat >= 0 ? &d.lstep[pat][srcIdx] : &silent;
         }
         bool fired = false; int firedBrk = -1;
-        bsPlayStep (*sp, k, bsStepBeat (k, swing), pat, inFill, true, lay.rolls, lay.numRolls, lay.rng, firedBrk, fired);
+        bsPlayStep (*sp, k, bsStepBeat (k, swing), std::max (0, pat), inFill, true, lay.rolls, lay.numRolls, lay.rng, firedBrk, fired);
         if (bsLog != nullptr) bsLog->push_back ({ beat, k, pat, sp->slice, fired, firedBrk, inFill, true });
         modInputs.lsStep = (float) idx / (float) (steps - 1);
-        modInputs.lsPattern = (float) lay.playing / 7.0f;
+        modInputs.lsPattern = (float) std::max (0, lay.playing) / 7.0f;
         lsStepShown.store (idx, std::memory_order_relaxed);
         lsPatternShown.store (lay.playing, std::memory_order_relaxed);
     }
@@ -771,7 +796,7 @@ void MegaSynthProcessor::refreshAutoFills (bool force)
             if (pick == 4 && loaded < 2) continue;
             chosen = pick;
             *tmp = d;
-            if (kAuto[pick] >= 0) tg::breaktools::applyTool (kAuto[pick], *tmp, p, steps, seed, amount, gb, false);
+            if (kAuto[pick] >= 0) tg::breaktools::applyTool (kAuto[pick], *tmp, p, steps, seed, amount, gb, false, true);   // (as made before v0.1.71)
             else tg::breaktools::frankenbreak (*tmp, p, steps, seed, amount, gb);
             bool differs = false;
             for (int i = 0; i < steps && ! differs; ++i)
@@ -1012,6 +1037,20 @@ void MegaSynthProcessor::applyKeyEntry (int pattern, int step, const KeyEntry& k
     pushHistory ("Key Entry");
 }
 
+tg::breaktools::RollSettings MegaSynthProcessor::rollSettings() const
+{
+    auto plain = [this] (int i) { return params[(size_t) i]->convertFrom0to1 (params[(size_t) i]->getValue()); };
+    static const int lens[4] = { 4, 8, 16, 32 };
+    tg::breaktools::RollSettings rs;
+    rs.lenSteps = lens[juce::jlimit (0, 3, juce::roundToInt (plain (P_bsRollLen)))];
+    rs.curve = juce::jlimit (0, 2, juce::roundToInt (plain (P_bsRollCurve)));
+    rs.cresc = plain (P_bsRollCresc); rs.tight = plain (P_bsRollTight); rs.pitch = plain (P_bsRollPitch);
+    rs.snare = juce::roundToInt (plain (P_bsRollSnare));
+    rs.gap = juce::jlimit (0, 2, juce::roundToInt (plain (P_bsRollGap)));
+    rs.var = plain (P_bsRollVar);
+    return rs;
+}
+
 int MegaSynthProcessor::runBreakTool (int tool, bool layerSeq, int pattern)
 {
     auto plain = [this] (int i) { return params[(size_t) i]->convertFrom0to1 (params[(size_t) i]->getValue()); };
@@ -1038,7 +1077,14 @@ int MegaSynthProcessor::runBreakTool (int tool, bool layerSeq, int pattern)
             case BtSwap:     tg::breaktools::swapBreak (d, pat, steps, brk); break;
             case BtClear:    tg::breaktools::clear (d, pat); break;
             default:
-                if (tool >= 0 && tool < tg::breaktools::kNumTools)
+                if (tool == tg::breaktools::ToolSnareBuild)
+                {
+                    // (v0.1.71) the Snare Roll, from its own settings (an empty pattern gets the break as it was first)
+                    bool any = false; for (int i = 0; i < steps; ++i) any = any || d.step[pat][i].on;
+                    if (! any) tg::breaktools::original (d, pat, steps, brk, pin);
+                    tg::breaktools::snareRoll (d, pat, steps, d.seed++, rollSettings(), brk);
+                }
+                else if (tool >= 0 && tool < tg::breaktools::kNumTools)
                     tg::breaktools::applyTool (tool, d, pat, steps, d.seed++, tool == tg::breaktools::ToolVariation ? varAmount : amount, brk, all);
                 break;
         }
@@ -1165,6 +1211,41 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
         const int num = throwPadNum.load();
         if (kind == 1 && m.isNoteOnOrOff() && m.getNoteNumber() == num) { engine.fx().setThrowPad (m.isNoteOn()); return; }
         if (kind == 2 && m.isController() && m.getControllerNumber() == num) { engine.fx().setThrowPad (m.getControllerValue() >= 64); return; }
+    }
+    // (v0.1.71) the pattern pads: Learn takes the next note or CC for the waiting button (and, learning A-H in a row, moves on
+    // to the next); a press then selects that pattern exactly as clicking its button does (Switch decides when it starts)
+    if (const int li = patPadLearn.load(); li >= 0 && (m.isNoteOn() || m.isController()))
+    {
+        patPadKind[li] = m.isNoteOn() ? 1 : 2;
+        patPadNum[li] = m.isNoteOn() ? m.getNoteNumber() : m.getControllerNumber();
+        patPadCcDown[li] = m.isController() && m.getControllerValue() >= 64;
+        patPadLearn = (patPadLearnRun.load() && (li % 8) < 7) ? li + 1 : -1;
+        if (patPadLearn.load() < 0) patPadLearnRun = false;
+        return;
+    }
+    if (m.isNoteOnOrOff() || m.isController())
+    {
+        bool used = false;
+        for (int i = 0; i < kPatPads; ++i)
+        {
+            const int kind = patPadKind[i].load();
+            if (kind == 0 || patPadNum[i].load() < 0) continue;
+            bool press = false;
+            if (kind == 1 && m.isNoteOnOrOff() && m.getNoteNumber() == patPadNum[i].load()) { used = true; press = m.isNoteOn(); }
+            else if (kind == 2 && m.isController() && m.getControllerNumber() == patPadNum[i].load())
+            {
+                used = true;
+                const bool down = m.getControllerValue() >= 64;
+                press = down && ! patPadCcDown[i];
+                patPadCcDown[i] = down;
+            }
+            if (press)
+            {
+                const int prm = i < 8 ? P_bsPattern : P_bsLPattern;
+                setParamFromAudio (prm, (float) (i % 8)); snap.v[prm] = (float) (i % 8);
+            }
+        }
+        if (used) return;
     }
     // the Duck note: a hit for the Space ducks (and isn't played)
     if (m.isNoteOnOrOff() && snap.f (P_sxDuckNote) >= 0.0f && m.getNoteNumber() == juce::roundToInt (snap.f (P_sxDuckNote)))
@@ -1986,6 +2067,11 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("fillPadNum", fillPadNum.load(), nullptr);
     state.setProperty ("throwPadKind", throwPadKind.load(), nullptr);
     state.setProperty ("throwPadNum", throwPadNum.load(), nullptr);
+    {
+        juce::StringArray pads;
+        for (int i = 0; i < kPatPads; ++i) pads.add (juce::String (patPadKind[i].load()) + ":" + juce::String (patPadNum[i].load()));
+        state.setProperty ("patPads", pads.joinIntoString (","), nullptr);
+    }
     state.setProperty ("patchMeta", juce::JSON::toString (getPatchMeta().toVar(), true), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
@@ -2039,6 +2125,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 28) setV28DefaultsForOldPatch();
     if (version < 29) setV29DefaultsForOldPatch();
     if (version < 30) setV30DefaultsForOldPatch();
+    if (version < 31) setV31DefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -2084,6 +2171,15 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     fillPadKind = juce::jlimit (0, 2, (int) tree.getProperty ("fillPadKind", 0));
     fillPadNum = (int) tree.getProperty ("fillPadNum", -1);
     throwPadKind = juce::jlimit (0, 2, (int) tree.getProperty ("throwPadKind", 0));
+    {
+        clearPatPads (0, kPatPads - 1);
+        const auto pads = juce::StringArray::fromTokens (tree.getProperty ("patPads").toString(), ",", "");
+        for (int i = 0; i < juce::jmin (kPatPads, pads.size()); ++i)
+        {
+            patPadKind[i] = juce::jlimit (0, 2, pads[i].upToFirstOccurrenceOf (":", false, false).getIntValue());
+            patPadNum[i] = juce::jlimit (-1, 127, pads[i].fromFirstOccurrenceOf (":", false, false).getIntValue());
+        }
+    }
     throwPadNum = (int) tree.getProperty ("throwPadNum", -1);
     if (version < 29) { const auto r = convertOldFills (false); if (r.isNotEmpty()) lastFillConversion = "Older project: " + r; }
     lastEuclid[0] = -1;   // don't re-flow the restored sequence
@@ -2288,6 +2384,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("bcSliceKeys")) setV28DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bcSliceMode4")) { setV29DefaultsForOldPatch(); importLegacyFills = true; }
         if (extra == nullptr || ! extra->hasProperty ("sxOnDub")) setV30DefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("bsRollLen")) setV31DefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2737,6 +2834,22 @@ void MegaSynthProcessor::applyReesePreset (int k)
         default: break;
     }
     pushHistory (juce::String ("Reese: ") + reesePresetName (k));
+}
+
+void MegaSynthProcessor::setV31DefaultsForOldPatch()
+{
+    for (int i = P_bsRollLen; i <= P_bsLEditPair; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+juce::String MegaSynthProcessor::patPadText (int i) const
+{
+    if (i < 0 || i >= kPatPads) return {};
+    const int k = patPadKind[i].load(), n = patPadNum[i].load();
+    return k == 1 ? "N" + juce::String (n) : (k == 2 ? "CC" + juce::String (n) : juce::String());
 }
 
 void MegaSynthProcessor::setV30DefaultsForOldPatch()

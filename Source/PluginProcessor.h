@@ -82,7 +82,8 @@ public:
     // it has its own; the Active Break, unpinned, when it's set to Active). tool: one of the BreakTool values below, or a
     // breaktools tool (0..kNumTools-1). Returns the break it used (0-3)
     enum BreakTool { BtOriginal = -1, BtReverse = -2, BtShuffle = -3, BtJungle = -4, BtFranken = -5, BtSwap = -6, BtClear = -7 };
-    int runBreakTool (int tool, bool layerSeq, int pattern);   // layer: as the step's Layer hit; layerSeq: into the layer sequencer
+    int runBreakTool (int tool, bool layerSeq, int pattern);
+    tg::breaktools::RollSettings rollSettings() const;   // (v0.1.71) the Snare Roll's settings, from its parameters   // layer: as the step's Layer hit; layerSeq: into the layer sequencer
     double snapChopFrame (int brk, double frame);
     double snapMarkerFrame (int brk, double frame);  // dragging a marker: Marker Snap
     static constexpr double kMarkerGap = 64.0;       // samples a marker keeps from its neighbours
@@ -107,6 +108,15 @@ public:
     std::atomic<int> throwPadKind { 0 }, throwPadNum { -1 };
     std::atomic<bool> throwPadLearn { false };
     juce::String throwPadText() const;
+    // (v0.1.71) the pattern pads: a learned note or CC per A-H button, 0-7 the main sequencer's, 8-15 the layer's; a press
+    // selects that pattern as a click on its button does (saved with the project)
+    static constexpr int kPatPads = 16;
+    std::atomic<int> patPadKind[kPatPads] {}, patPadNum[kPatPads] {};   // kind: 0 none, 1 note, 2 CC
+    std::atomic<int> patPadLearn { -1 };                                   // the button waiting for a pad (-1: none)
+    std::atomic<bool> patPadLearnRun { false };                            // ... and then the next, up to H
+    bool patPadCcDown[kPatPads] {};
+    juce::String patPadText (int i) const;                                 // e.g. "N36", "CC20" ("" when none)
+    void clearPatPads (int from, int to) { for (int i = from; i <= to; ++i) { patPadKind[i] = 0; patPadNum[i] = -1; } }
     void updateIrImpulse (bool force);   // the IR Reverb's impulse, rebuilt when its settings change (message thread)
     juce::String lastIrKey;
     // the break a pattern plays (and its tools use): its own, or the Active Break when it's set to Active
@@ -307,7 +317,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 30;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows, 29: Break 4, layer sequencer, fill pattern; 30: the Space effects, the Reese additions
+    static constexpr int kStateVersion = 31;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows, 29: Break 4, layer sequencer, fill pattern; 30: the Space effects, the Reese additions; 31: snare roll, pattern pads, layer pairs
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -362,7 +372,8 @@ private:
     void setRandomReport (const juce::String& r) { { const juce::ScopedLock sl (rpLock); rpReport = r; } randomReportVersion.fetch_add (1); }
     void setV27DefaultsForOldPatch();
     void setV28DefaultsForOldPatch();
-    void setV30DefaultsForOldPatch();       // ... and from before the new Space effects / Reese additions
+    void setV30DefaultsForOldPatch();
+    void setV31DefaultsForOldPatch();       // ... and from before the Snare Roll's settings       // ... and from before the new Space effects / Reese additions
     void setV29DefaultsForOldPatch();       // ... and from before Break 4 / the layer sequencer / the fill pattern       // ... and from before Slice Keys / the Break React rows       // ... and from before the Core envelope mode / key entry
     void setCoreDefaultsForOldPatch();      // ... and from before the Core oscillator slots
     void setReeseDefaultsForOldPatch();     // ... and from before the Reese engine
@@ -447,7 +458,8 @@ private:
     uint8_t sliceKeyOwner[128] {};   // Slice Keys Off / Auto: 1 = this key's note-on went to the Break Chopper
     uint32_t bsRng = 0x9E3779B9u;
     struct BsRoll { double beat; tg::BreakChopper::Trigger t; };
-    BsRoll bsRolls[16]; int bsNumRolls = 0;
+    static constexpr int kMaxRolls = 64;
+    BsRoll bsRolls[kMaxRolls]; int bsNumRolls = 0;
     // fills (audio thread): 0 none, 1 waiting for its start, 2 playing; steps [start, end)
     int bsFillState = 0, bsFillPat = 0, bsFillLen = 16;   // bsFillPat: the fill pattern playing (or waiting)
     int64_t bsFillStart = 0, bsFillEnd = 0, bsOffset = 0;   // bsOffset: where the pattern restarted (Restart the pattern)
@@ -462,7 +474,7 @@ private:
     int fillLenSteps (int steps) const;   // the fill's length: the whole fill pattern, or its last 1 beat, 2 beats or 1 bar
     // the layer sequencer (audio thread): its own patterns, steps, chain and rolls; Follow main takes the main's pattern
     struct LayerRun { bool running = false; int64_t lastStep = INT64_MIN; int playing = 0, chainIdx = -1; uint32_t rng = 0x85EBCA6Bu;
-                      BsRoll rolls[16]; int numRolls = 0; int64_t offset = 0; bool skipChain = false; };
+                      BsRoll rolls[kMaxRolls]; int numRolls = 0; int64_t offset = 0; bool skipChain = false; };
     LayerRun lay;
     void lsStart (double beat);
     double lsDue() const;

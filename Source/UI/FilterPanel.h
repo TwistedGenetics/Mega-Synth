@@ -32,6 +32,8 @@ public:
     int getParam() const { return param; }
     void setLocal (int k) { if (k != local) { local = k; repaint(); } }
     std::function<void (int)> onSelect;   // local mode
+    std::function<void (int)> onRightClick;                 // (v0.1.71) right-click on a segment (e.g. the pattern pads' menu)
+    std::function<juce::String (int)> cornerText, footText; // small text in a segment's top-right corner / along its bottom
 private:
     int segmentAt (juce::Point<int>) const;
     MegaSynthProcessor& proc;

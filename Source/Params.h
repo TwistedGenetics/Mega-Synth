@@ -229,9 +229,16 @@ inline const char* const kBsFillPatLabels[]  = { "Off","Pattern A","Pattern B","
 inline const char* const kBsFillSizeKeys[]   = { "whole","beat","2beats","bar" };
 inline const char* const kBsFillSizeLabels[] = { "Whole pattern","Last 1 beat","Last 2 beats","Last 1 bar" };
 inline const char* const kBsLFollowKeys[]    = { "follow","own" };
-inline const char* const kBsLFollowLabels[]  = { "Follow main","Own" };
+inline const char* const kBsLFollowLabels[]  = { "Paired","Own" };
 inline const char* const kBsLFillKeys[]      = { "keep","fill" };
-inline const char* const kBsLFillLabels[]    = { "Keep going","Play its own fill" };
+inline const char* const kBsLFillLabels[]    = { "Keep going","Play the Fill Pattern's pair" };
+// (v0.1.71) the Snare Roll tool
+inline const char* const kBsRollLenKeys[]    = { "beat","2beats","bar","2bars" };
+inline const char* const kBsRollLenLabels[]  = { "1 beat","2 beats","1 bar","2 bars" };
+inline const char* const kBsRollCurveKeys[]  = { "straight","accel","buzz" };
+inline const char* const kBsRollCurveLabels[]= { "Straight (16 > 32)","Accelerate (16 > 32 > 64)","Buzz finish" };
+inline const char* const kBsRollGapKeys[]    = { "none","16th","reverse" };
+inline const char* const kBsRollGapLabels[]  = { "No gap","1/16 gap","Reverse snare" };
 inline const char* const kRxFromKeys[]       = { "main","layer","both" };
 inline const char* const kRxFromLabels[]     = { "Main sequencer","Layer sequencer","Both" };
 // ---- v0.1.70: the Space effects and the Reese additions
@@ -485,6 +492,9 @@ inline const ChoiceList kListBsFillPat  = TG_LIST(kBsFillPat);
 inline const ChoiceList kListBsFillSize = TG_LIST(kBsFillSize);
 inline const ChoiceList kListBsLFollow  = TG_LIST(kBsLFollow);
 inline const ChoiceList kListBsLFill    = TG_LIST(kBsLFill);
+inline const ChoiceList kListBsRollLen  = TG_LIST(kBsRollLen);
+inline const ChoiceList kListBsRollCurve= TG_LIST(kBsRollCurve);
+inline const ChoiceList kListBsRollGap  = TG_LIST(kBsRollGap);
 inline const ChoiceList kListRxFrom     = TG_LIST(kRxFrom);
 inline const ChoiceList kListSxDuckSrc = TG_LIST(kSxDuckSrc);
 inline const ChoiceList kListSxThrow = TG_LIST(kSxThrow);
@@ -1843,7 +1853,16 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(rsFmEnvSrc,"Reese FM / Sync Envelope", kListRsEnvSrc, 0) \
     F(rsFmEnvAmt,"Reese FM / Sync Envelope Amount", -1, 1, 0, 0.01, 0) \
     F(rsDrift,   "Reese Analog Drift", 0, 1, 0, 0.01, 0) \
-    F(rsDriftRate,"Reese Drift Rate", 0.05, 5, 0.5, 0.01, 0.5)
+    F(rsDriftRate,"Reese Drift Rate", 0.05, 5, 0.5, 0.01, 0.5) \
+    C(bsRollLen,   "Snare Roll Length", kListBsRollLen, 2) \
+    C(bsRollCurve, "Snare Roll Rate Curve", kListBsRollCurve, 1) \
+    F(bsRollCresc, "Snare Roll Crescendo", 0, 1, 0.8, 0.01, 0) \
+    F(bsRollTight, "Snare Roll Tightness", 0, 1, 0.6, 0.01, 0) \
+    F(bsRollPitch, "Snare Roll Pitch Rise", 0, 7, 2, 0.1, 0) \
+    F(bsRollSnare, "Snare Roll Snare", -1, 31, -1, 1, 0) \
+    C(bsRollGap,   "Snare Roll Gap", kListBsRollGap, 0) \
+    F(bsRollVar,   "Snare Roll Variation", 0, 1, 0.3, 0.01, 0) \
+    B(bsLEditPair, "Break Layer Edit The Pair", false)
 
 enum ParamIndex
 {

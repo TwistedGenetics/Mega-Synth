@@ -70,7 +70,8 @@ public:
     // cycleMs: 0 = no override (then the slice's, then Cycle Length)
     // layerSeq: from the layer sequencer (its own choke groups and its own Mixer strip)
     struct Trigger { int slice = 0; float vel = 1.0f, pitch = 0.0f; bool reverse = false; bool fromKey = false; int brk = 0, key = -1; float level = 1.0f; bool noChoke = false;
-                     int stretch = -1; float cycleMs = 0.0f; bool layerSeq = false; };
+                     int stretch = -1; float cycleMs = 0.0f; bool layerSeq = false;
+                     double gateSec = 0.0; };   // (v0.1.71) > 0: the hit fades out (3 ms) after this long (a roll's tightness)
     void trigger (const Trigger& t, const Settings& s)
     {
         const int bi = std::clamp (t.brk, 0, kBreaks - 1);
@@ -102,6 +103,7 @@ public:
         v.stretch = t.stretch >= 0 ? std::clamp (t.stretch, 0, 2) : (sl.stretch > 0 ? std::clamp (sl.stretch - 1, 0, 2) : -1);
         v.cycleMs = t.cycleMs > 0.0f ? t.cycleMs : sl.cycleMs;
         v.startHead();
+        v.gate = t.gateSec > 0.0 ? std::max<int64_t> (1, (int64_t) (t.gateSec * sr)) : 0;
     }
     // a key let go: looping slices stop, one-shots play on (the slice that key started, whichever
     // break is active now)
@@ -256,6 +258,7 @@ private:
         double s0 = 0, s1 = 0;            // the (trimmed) slice in sample frames
         float gain = 1.0f, pl = 1.0f, pr = 1.0f, attack = 0.002f, decay = 0.0f, semis = 0.0f;
         int64_t age = 0;                  // output samples since the start
+        int64_t gate = 0;                 // (> 0) fade out once this old
         double progress = 0;              // where in the slice the tempo says we should be (frames)
         // cyclic: the current and the previous cycle's heads
         double cycStart = 0, prevStart = 0; int64_t cycIndex = -1; int64_t cycAge = 0;
@@ -307,6 +310,7 @@ private:
                 else { v.on = false; break; }
             }
             if (! v.loop && remain < fadeOut) v.stop (sr);   // a quick fade at the end of the slice
+            if (v.gate > 0 && v.age >= v.gate) v.stop (sr);
             float yl = 0.0f, yr = 0.0f;
             switch (stretch)
             {

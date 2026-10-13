@@ -436,6 +436,7 @@ public:
     int breakSelectedStepForTests() const;
     void setBreakSelectedStepForTests (int step);
     void setBreakEditLayerForTests (bool layer) { if (breakEditLayerFn) breakEditLayerFn (layer); }
+    void showRollPanelForTests (bool show) { if (breakRollPanel != nullptr) { breakRollPanel->setVisible (show); breakRollPanel->toFront (false); } }
     tgui::PatchBrowser* browserForTests() { return browser.get(); }
     void showBrowserForTests (bool b) { showBrowser (b); }
 private:
@@ -543,6 +544,8 @@ public:
     juce::Component* breakWaveForTests = nullptr;
     juce::Component* breakGridForTests = nullptr;
     juce::Component* breakSeqPage = nullptr;
+    juce::Component* breakRollPanel = nullptr;   // the Snare Roll's settings (over the step grid)
+    juce::String padKeyShown;
     std::function<void (bool)> breakEditLayerFn;   // the Break Sequencer page: edit the main (false) or the layer sequencer (true)
 private:
 

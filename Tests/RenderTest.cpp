@@ -8487,6 +8487,24 @@ int main()
         juce::File (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_COREREF", {})).replaceWithData (all.getData(), all.getSize());
         return 0;
     }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_SXDIAG", {}).isNotEmpty())
+    {
+        auto rmsTail = [&] (std::function<void (MegaSynthProcessor&)> setup)
+        {
+            auto p = make(); if (setup) setup (*p);
+            juce::AudioBuffer<float> cap; tg::resetVoiceRandom();
+            render (*p, 3.0, chord (0.0, 0.3, { 60 }), &cap);
+            double e = 0, d = 0; for (int i = (int) (0.5 * sr); i < cap.getNumSamples(); ++i) e += (double) cap.getSample (0, i) * cap.getSample (0, i);
+            return std::sqrt (e);
+        };
+        const double base = rmsTail (nullptr);
+        for (int k = FS_Dub; k < FS_COUNT; ++k)
+        {
+            const double v = rmsTail ([k] (MegaSynthProcessor& p) { setP (p, fxOnParam (k), 1.0f); setP (p, fxMixParam (k), 1.0f); });
+            std::cout << "SXDIAG slot " << k << " " << kParamIds[fxOnParam (k)] << ": tail energy " << v << " (off " << base << ")" << std::endl;
+        }
+        return 0;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_ROLLDEMO", {}).isNotEmpty())
     {
         // v0.1.71 roll comparison: at 160, 165 and 172 BPM, a bar of the break then a bar ending in a roll: the old Snare Build,

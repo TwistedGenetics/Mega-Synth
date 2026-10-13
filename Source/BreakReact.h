@@ -47,6 +47,7 @@ public:
         hit.assign (env.size(), 0);
         for (int r = 1; r < kRows; ++r) { renv[r].assign (env.size(), 0.0f); rhit[r].assign (env.size(), 0); }
         dl[0].assign ((size_t) (0.03 * sr) + 8, 0.0f); dl[1].assign (dl[0].size(), 0.0f);
+        for (auto& b : dlB) for (auto& c : b) c.assign (dl[0].size(), 0.0f);
         reset();
     }
     void reset()
@@ -59,6 +60,8 @@ public:
         for (int r = 1; r < kRows; ++r) { std::fill (renv[r].begin(), renv[r].end(), 0.0f); std::fill (rhit[r].begin(), rhit[r].end(), (uint8_t) 0); liveRow[r] = false; }
         std::fill (env.begin(), env.end(), 0.0f); std::fill (hit.begin(), hit.end(), (uint8_t) 0);
         for (auto& d : dl) std::fill (d.begin(), d.end(), 0.0f);
+        for (auto& b : dlB) for (auto& c : b) std::fill (c.begin(), c.end(), 0.0f);
+        for (auto& p : dposB) p = 0;
         dpos = 0; scFast = scSlow = scLp = scHp = 0.0f; scHold = scWin = 0;
     }
 
@@ -344,6 +347,23 @@ private:
     uint32_t rnd = 0x2545F491u;
     std::vector<float> dl[2];
     int dpos = 0;
+    std::vector<float> dlB[4][2];   // (v0.1.72) one delay per break, for breaks routed apart (Break FX)
+    int dposB[4] {};
+public:
+    void delayBreak (int b, float* l, float* r, int n, int delay)
+    {
+        b = std::clamp (b, 0, 3);
+        const int N = (int) dlB[b][0].size();
+        if (N < 8) return;
+        int& p = dposB[b];
+        for (int i = 0; i < n; ++i)
+        {
+            dlB[b][0][(size_t) p] = l[i]; dlB[b][1][(size_t) p] = r[i];
+            const int rp = (p - delay + N) % N;
+            l[i] = dlB[b][0][(size_t) rp]; r[i] = dlB[b][1][(size_t) rp];
+            p = (p + 1) % N;
+        }
+    }
     float scFast = 0.0f, scSlow = 0.0f, scLp = 0.0f, scHp = 0.0f, scVel = 0.0f;
     double eLo = 0.0, eHi = 0.0, eAll = 0.0;
     int scHold = 0, scWin = 0;

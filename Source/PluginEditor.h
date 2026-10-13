@@ -397,6 +397,12 @@ private:
     juce::Array<tgui::EngineChip*> engineChips;
     tgui::LevelMeter* outMeters[2] { nullptr, nullptr };
     void updateMixerView();
+    tgui::Page* scrollPage (tgui::Page* outer, int innerH, const juce::String& name);
+public:
+    std::vector<std::pair<juce::String, tgui::Page*>> scrollInners;
+    juce::Component* breakFxGridForTests = nullptr;
+    std::unique_ptr<juce::Component> keysSwitch;   // (v0.1.72) Synth / Breaks / Auto, under Oct - / +   // (the scrolling pages' content, for the tests' snapshots)
+private:
     tgui::Page* pageFor (const juce::String& name) const { auto it = pageIndex.find (name); return it != pageIndex.end() ? it->second.page : nullptr; }
     void setStatus (const juce::String&);
     void breakKeyEntry (tgui::BreakStepGrid& grid);   // Break Sequencer Key Entry (from the page's ticker)

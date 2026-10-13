@@ -2327,6 +2327,15 @@ int main()
             juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
             std::cout << "SHOT " << name << std::endl;
         }
+        for (auto& [name, inner] : e->scrollInners)
+        {
+            // (v0.1.72) the scrolling pages, whole
+            e->showPage (name); e->timerCallbackForTests();
+            auto img = inner->createComponentSnapshot (inner->getLocalBounds(), true, 1.0f);
+            auto f = dir.getChildFile ("page_" + name.retainCharacters ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") + "_full.png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+            std::cout << "SHOT " << name << " (whole)" << std::endl;
+        }
         {
             // the Break Chopper zoomed in on a slice, in Manual markers mode (the trim handles and the overview frame show)
             p->markersFromSlices (1);
@@ -2645,6 +2654,58 @@ int main()
             std::cout << "  VST3 Init + mod wheel: " << juce::String (cents, 1) << " cents of vibrato" << std::endl;
             CHECK (cents > 25.0 && cents < 90.0, "VST3: the mod wheel adds vibrato on Init");
             h2->releaseResources();
+        }
+        {
+            // (v0.1.72) every Space effect, switched on through the host as a DAW does, at its default settings, changes the sound
+            juce::String line = "  VST3 Space effects on (default settings), output change vs off:";
+            for (int k = FS_Dub; k < FS_COUNT; ++k)
+            {
+                double diffDb = -300.0;
+                std::vector<float> offL, offR;
+                for (int on = 0; on < 2; ++on)
+                {
+                    auto h3 = fmt.createInstanceFromDescription (*descs[0], sr, 512, err);
+                    if (h3 == nullptr) break;
+                    h3->setPlayConfigDetails (0, 2, sr, 512); h3->prepareToPlay (sr, 512);
+                    auto hs = [&] (int idx, float plain) { const auto name = ref->param (idx)->getName (200); for (auto* hp : h3->getParameters()) if (hp->getName (200) == name) { hp->setValueNotifyingHost (ref->param (idx)->convertTo0to1 (plain)); return; } };
+                    for (int i : { P_reverbMix, P_shimmerMix, P_reverseMix, P_delayMix, P_chorusMix }) hs (i, 0.0f);   // (no other tails, no other width)
+                    if (on) hs (fxOnParam (k), 1.0f);
+                    const int total = (int) (2.5 * sr);
+                    std::vector<float> L ((size_t) total), R ((size_t) total);
+                    for (int pos = 0; pos < total; pos += 512)
+                    {
+                        const int n = std::min (512, total - pos);
+                        buf.setSize (2, n, false, false, true); buf.clear();
+                        juce::MidiBuffer m;
+                        if (pos == 512 * 20) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                        if (pos == 512 * 40) m.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                        if (pos == 0 || pos == 512 * 10) juce::Thread::sleep (300);   // (the IR's impulse is built and loaded in the background)
+                        h3->processBlock (buf, m);
+                        for (int i = 0; i < n; ++i) { L[(size_t) (pos + i)] = buf.getSample (0, i); R[(size_t) (pos + i)] = buf.getSample (1, i); }
+                    }
+                    h3->releaseResources();
+                    // what the effect adds: its tail after the note (from 0.5 s after the release) and its width while the note plays,
+                    // each next to the note's own level (an instance's voices aren't sample-identical, so no off / on subtraction)
+                    auto measure = [&] (const std::vector<float>& l, const std::vector<float>& r, double& tailDb, double& sideDb)
+                    {
+                        const int n0 = 512 * 22, n1 = 512 * 40, t0 = 512 * 40 + (int) (0.5 * sr);
+                        double note = 0, side = 0, mid = 0, tail = 0;
+                        for (int i = n0; i < n1; ++i) { note += (double) l[(size_t) i] * l[(size_t) i]; const double m = 0.5 * (l[(size_t) i] + r[(size_t) i]), sd = 0.5 * (l[(size_t) i] - r[(size_t) i]); mid += m * m; side += sd * sd; }
+                        for (int i = t0; i < (int) l.size(); ++i) tail += (double) l[(size_t) i] * l[(size_t) i];
+                        note /= (n1 - n0); tail /= std::max (1, (int) l.size() - t0); side /= (n1 - n0); mid /= (n1 - n0);
+                        tailDb = 10.0 * std::log10 (std::max (1.0e-30, tail) / std::max (1.0e-30, note));
+                        sideDb = 10.0 * std::log10 (std::max (1.0e-30, side) / std::max (1.0e-30, mid));
+                    };
+                    if (on == 0) { offL = L; offR = R; continue; }
+                    double t0f, s0f, t1f, s1f;
+                    measure (offL, offR, t0f, s0f); measure (L, R, t1f, s1f);
+                    // (how far it lifts the tail, when that tail is clearly there, or the width)
+                    diffDb = std::max (t1f > -60.0 ? t1f - t0f : -300.0, 2.5 * (s1f - s0f));
+                    line << " [" << kParamIds[fxOnParam (k)] << ": tail " << juce::String (t0f, 0) << " > " << juce::String (t1f, 0) << " dB, side " << juce::String (s0f, 0) << " > " << juce::String (s1f, 0) << " dB]";
+                }
+                CHECK (diffDb > 20.0, juce::String ("VST3: ") + kParamIds[fxOnParam (k)] + " switched on at its defaults is clearly heard (score " + juce::String (diffDb, 1) + ": tail lift, or 2.5 x side lift, in dB)");
+            }
+            std::cout << line << std::endl;
         }
         std::cout << (failures == 0 ? "VST3 HOST TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
         return failures == 0 ? 0 : 1;

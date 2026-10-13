@@ -48,6 +48,7 @@ set(MEGASYNTH_SOURCES
     Source/Filter/Filter.cpp
     Source/Fx/RackFx.cpp
     Source/Fx/SpaceFx.cpp
+    Source/Fx/ModFx.cpp
     Source/Fx/FxBus.cpp)
 
 set(MEGASYNTH_DEFINES

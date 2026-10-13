@@ -32,6 +32,7 @@ void FxBus::prepare (double sampleRate, int block)
     for (int c = 0; c < 2; ++c) { dryBuf[c].assign ((size_t) maxBlock + 16, 0.0f); runBuf[c].assign ((size_t) maxBlock + 16, 0.0f); }
     multiband.prepare (sr); sampler.prepare (sr); stutter.prepare (sr); flanger.prepare (sr); stereo.prepare (sr);
     dub.prepare (sr); spring.prepare (sr); gated.prepare (sr); plate.prepare (sr); widen.prepare (sr); dim.prepare (sr); irRev.prepare (sr, maxBlock);
+    ens.prepare (sr); bbd.prepare (sr); multi.prepare (sr); script.prepare (sr); colour.prepare (sr); dual.prepare (sr); barber.prepare (sr); vibe.prepare (sr);
     for (auto& d : duckBuf) d.assign ((size_t) maxBlock + 16, 1.0f);
     scHitBuf.assign ((size_t) maxBlock + 16, 0); hitBuf.assign ((size_t) maxBlock + 16, 0);
     for (auto& b : frzBuf) b.assign ((size_t) (sr * 2.0) + 16, 0.0f);
@@ -48,6 +49,8 @@ void FxBus::reset()
     conv.reset();
     multiband.reset(); sampler.reset(); stutter.reset(); flanger.reset(); shaper.reset(); stereo.reset();
     dub.reset(); spring.reset(); gated.reset(); plate.reset(); widen.reset(); dim.reset(); irRev.reset();
+    ens.reset(); bbd.reset(); multi.reset(); script.reset(); colour.reset(); dual.reset(); barber.reset(); vibe.reset();
+    for (auto& a : slotActivity) a.store (0.0f);
     for (auto& d : duckers) d.reset();
     duckSc.reset(); pendingHits = 0;
     for (auto& b : frzBuf) std::fill (b.begin(), b.end(), 0.0f);
@@ -59,6 +62,7 @@ void FxBus::reset()
 
 void FxBus::updateImpulse (double seconds)
 {
+    for (auto* f : followers) if (f) f->updateImpulse (seconds);
     if (std::abs (seconds - irSeconds.load()) < 0.001) return;
     const int len = std::max (1, (int) std::floor (sr * seconds));
     juce::AudioBuffer<float> ir (2, len);
@@ -335,7 +339,7 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
     const float blockK = 1.0f - std::pow (1.0f - cs, (float) n);
     for (int k = 0; k < FS_COUNT; ++k)
     {
-        const float t = s.f (fxOnParam (k)) > 0.5f ? clampv (s.f (fxMixParam (k)), 0.0f, 1.0f) : 0.0f;
+        const float t = s.f (fxOnParam (k)) > 0.5f && ((slotMask >> k) & 1u) != 0 ? clampv (s.f (fxMixParam (k)), 0.0f, 1.0f) : 0.0f;
         if (! slotsReady) slotS[k] = t;   // first block: start where the settings are
         g0[k] = slotS[k];
         slotS[k] = std::abs (t - slotS[k]) < 1.0e-4f ? t : slotS[k] + (t - slotS[k]) * blockK;
@@ -366,7 +370,7 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
         }
         ++pos;
         const bool needed = gain[slot] > 0.0f || g0[slot] > 0.0f || (slot == FS_Stutter && stutterHeld && gain[slot] > 0.0f);
-        if (! needed) continue;
+        if (! needed) { slotActivity[slot].store (0.0f, std::memory_order_relaxed); continue; }
         if (g0[slot] <= 0.0f)   // switched on: start from a clean state
             switch (slot)
             {
@@ -383,6 +387,14 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
                 case FS_Widen: widen.reset(); break;
                 case FS_Dim: dim.reset(); break;
                 case FS_Ir: irRev.reset(); break;
+                case FS_Ens: ens.reset(); break;
+                case FS_Bbd: bbd.reset(); break;
+                case FS_Multi: multi.reset(); break;
+                case FS_Script: script.reset(); break;
+                case FS_Colour: colour.reset(); break;
+                case FS_Dual: dual.reset(); break;
+                case FS_Barber: barber.reset(); break;
+                case FS_Vibe: vibe.reset(); break;
                 default: break;
             }
         // insert effect: process a copy, then blend by the (ramped) slot gain
@@ -402,7 +414,23 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
             case FS_Widen:     widen.process (L, R, n, s.v, ctx); break;
             case FS_Dim:       dim.process (L, R, n, s.v, ctx); break;
             case FS_Ir:        irRev.process (L, R, n, s.v, ctx, duckFor (SD_Ir)); break;
+            case FS_Ens:       ens.process (L, R, n, s.v, ctx); break;
+            case FS_Bbd:       bbd.process (L, R, n, s.v, ctx); break;
+            case FS_Multi:     multi.process (L, R, n, s.v, ctx); break;
+            case FS_Script:    script.process (L, R, n, s.v, ctx); break;
+            case FS_Colour:    colour.process (L, R, n, s.v, ctx); break;
+            case FS_Dual:      dual.process (L, R, n, s.v, ctx); break;
+            case FS_Barber:    barber.process (L, R, n, s.v, ctx); break;
+            case FS_Vibe:      vibe.process (L, R, n, s.v, ctx); break;
             default: break;
+        }
+        // (v0.1.72) how much the effect is adding (its wet level, for the pages' activity lights)
+        {
+            double e = 0.0;
+            for (int i = 0; i < n; ++i) { const float dl = L[i] - dryBuf[0][(size_t) i], dr = R[i] - dryBuf[1][(size_t) i]; e += (double) dl * dl + (double) dr * dr; }
+            const float rms = (float) std::sqrt (e / (2.0 * n)) * std::max (gain[slot], g0[slot]);
+            const float prev = slotActivity[slot].load (std::memory_order_relaxed);
+            slotActivity[slot].store (std::max (rms, prev * 0.9f), std::memory_order_relaxed);
         }
         const float a = g0[slot], b = gain[slot];
         if (a == 1.0f && b == 1.0f) continue;
@@ -417,7 +445,7 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
 
     // ---- safety: with the new effects in use, absurd levels (above +12 dBFS) are rounded off
     bool anyNew = false;
-    for (int k : { FS_Stutter, FS_Sampler, FS_Flanger, FS_Shaper, FS_Multiband, FS_Stereo, FS_Dub, FS_Spring, FS_Gated, FS_Plate, FS_Widen, FS_Dim, FS_Ir }) anyNew |= gain[k] > 0.0f || g0[k] > 0.0f;
+    for (int k = 0; k < FS_COUNT; ++k) if (! fxSlotIsSend (k)) anyNew |= gain[k] > 0.0f || g0[k] > 0.0f;   // (every insert)
     if (anyNew)
         for (int i = 0; i < n; ++i) { L[i] = softKnee (L[i], 4.0f); R[i] = softKnee (R[i], 4.0f); }
 

@@ -112,7 +112,7 @@ void SpringReverb::process (float* L, float* R, int n, const float* v, const FxC
     const double lfoInc = 0.7 / sr;
     float g[kSprings];
     for (int j = 0; j < ns; ++j) g[j] = (float) std::pow (10.0, -3.0 * (spr[0][j].baseDelay / sr) / decay);
-    const float outScale = 0.55f / std::sqrt ((float) ns);
+    const float outScale = 1.4f / std::sqrt ((float) ns);   // (v0.1.72: about 8 dB up, so its tail is as loud as the Plate's at the same Return)
     for (int i = 0; i < n; ++i)
     {
         freezeS += ((freeze ? 1.0f : 0.0f) - freezeS) * fc;

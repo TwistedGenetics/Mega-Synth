@@ -47,14 +47,14 @@ public:
         for (auto& b : bus) b.assign ((size_t) std::max (64, maxBlock) + 16, 0.0f);
         for (auto& b : sub) b.assign ((size_t) std::max (64, maxBlock) + 16, 0.0f);
         for (auto& g : colourFx) for (auto& c : g) c.prepare (sr);
-        for (auto& f : filter) f.reset();
+        for (auto& fa : filter) for (auto& f : fa) f.reset();
         reset();
     }
     void reset()
     {
         for (auto& v : voices) v.on = false;
         for (auto& g : colourFx) for (auto& c : g) c.reset();
-        for (auto& f : filter) f.reset();
+        for (auto& fa : filter) for (auto& f : fa) f.reset();
         for (auto& g : tail) for (auto& t : g) t = 0;
         peakShown = peakLayer = 0.0f;
     }
@@ -143,21 +143,34 @@ public:
     void process (float* L, float* R, int n, const Settings& s, const float* snapV) { processGroup (0, L, R, n, s, snapV); }
     // the layer sequencer's slices: the same colour and filter, its own level and strip, added into L / R
     void processLayer (float* L, float* R, int n, const Settings& s, const float* snapV) { processGroup (1, L, R, n, s, snapV); }
+    // (v0.1.72) one break alone (main and layer sequencer both), for Break FX routing it apart: its own copy of the
+    // through-the-synth-filter, so its state isn't shared with the other breaks
+    void processBreak (int b, float* L, float* R, int n, const Settings& s, const float* snapV)
+    {
+        processGroup (0, L, R, n, s, snapV, 1u << b, 1 + b);
+        processGroup (1, L, R, n, s, snapV, 1u << b, 1 + b);
+    }
+    bool breakSounding (int b) const
+    {
+        if (pv.on && pv.brk == b) return true;
+        for (auto& v : voices) if (v.on && v.brk == b) return true;
+        return tail[0][b] > 0 || tail[1][b] > 0;
+    }
 private:
-    void processGroup (const int grp, float* L, float* R, int n, const Settings& s, const float* snapV)
+    void processGroup (const int grp, float* L, float* R, int n, const Settings& s, const float* snapV, uint32_t mask = 0xFu, int fi = 0)
     {
         const bool lay = grp == 1;
         auto& tail = this->tail[grp];
         auto& colourFx = this->colourFx[grp];
-        auto& filter = this->filter[grp];
-        int &fModel = this->fModel[grp], &fType = this->fType[grp], &fSlope = this->fSlope[grp], &fChar = this->fChar[grp];
+        auto& filter = this->filter[fi][grp];
+        int &fModel = this->fModel[fi][grp], &fType = this->fType[fi][grp], &fSlope = this->fSlope[fi][grp], &fChar = this->fChar[fi][grp];
         float& peakShown = lay ? peakLayer : this->peakShown;
         bool anyVoice[kBreaks] {};
         for (auto& v : voices) if (v.on && v.lay == lay) anyVoice[v.brk] = true;
         if (pv.on && ! lay) anyVoice[pv.brk] = true;
         bool runs[kBreaks] {}, any = false;
-        for (int k = 0; k < kBreaks; ++k) { runs[k] = anyVoice[k] || tail[k] > 0; any = any || runs[k]; }
-        if (! any) { peakShown = 0.0f; return; }
+        for (int k = 0; k < kBreaks; ++k) { runs[k] = (anyVoice[k] || tail[k] > 0) && (mask >> k & 1u) != 0; any = any || runs[k]; }
+        if (! any) { if (mask == 0xFu) peakShown = 0.0f; return; }
         if ((int) bus[0].size() < n) return;
         float* bl = bus[0].data(); float* br = bus[1].data();
         bool first = true;
@@ -421,8 +434,8 @@ private:
     std::vector<float> bus[2], sub[2];
     VintageSampler colourFx[2][kBreaks];   // [0] the main sequencer and the keys, [1] the layer sequencer
     std::array<float, P_COUNT> colourV {};
-    FilterUnit filter[2];
-    int fModel[2] { -1, -1 }, fType[2] { -1, -1 }, fSlope[2] { -1, -1 }, fChar[2] { -1, -1 };
+    FilterUnit filter[1 + kBreaks][2];   // [0] all the breaks together (as always); [1 + b] break b routed apart (v0.1.72)
+    int fModel[1 + kBreaks][2] { { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 } }, fType[1 + kBreaks][2] {}, fSlope[1 + kBreaks][2] {}, fChar[1 + kBreaks][2] {};
     int tail[2][kBreaks] {}, lastSlice = 0, lastBreak = 0;
     HitLogEntry hitLog[kHitLog] {};
     int nHitLog = 0;

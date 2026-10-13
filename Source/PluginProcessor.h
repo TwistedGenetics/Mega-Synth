@@ -117,8 +117,23 @@ public:
     bool patPadCcDown[kPatPads] {};
     juce::String patPadText (int i) const;                                 // e.g. "N36", "CC20" ("" when none)
     void clearPatPads (int from, int to) { for (int i = from; i <= to; ++i) { patPadKind[i] = 0; patPadNum[i] = -1; } }
-    void updateIrImpulse (bool force);   // the IR Reverb's impulse, rebuilt when its settings change (message thread)
+    // (v0.1.72) the Keys pad: a learned note or CC that flips the Keys switch (Slice Keys) between Synth and Breaks (isn't played; saved)
+    std::atomic<int> keysPadKind { 0 }, keysPadNum { -1 };
+    std::atomic<bool> keysPadLearn { false };
+    bool keysPadCcDown = false;
+    juce::String keysPadText() const;
+    void updateIrImpulse (bool force);   // the IR Reverb's impulse, rebuilt when its settings change
     juce::String lastIrKey;
+    juce::CriticalSection irLock;
+    // (v0.1.72) the IR Reverb's impulse is built on its own thread, so it loads with the editor closed and in hosts that
+    // don't run the message thread's timers while rendering
+    struct IrWorker : juce::Thread
+    {
+        explicit IrWorker (MegaSynthProcessor& p) : juce::Thread ("Mega Synth IR"), owner (p) {}
+        void run() override { while (! threadShouldExit()) { owner.updateIrImpulse (false); wait (100); } }
+        MegaSynthProcessor& owner;
+    };
+    std::unique_ptr<IrWorker> irWorker;
     // the break a pattern plays (and its tools use): its own, or the Active Break when it's set to Active
     int patternBreak (const tg::BreakData& d, int pattern, bool layer) const;
     // the editor's Key Entry / sequencer page: the slice keys play this break (-1: the Active Break)
@@ -207,8 +222,10 @@ public:
     // Break React's starting points (0 Off, 1 Lock bass to kicks, 2 Snare stabs, 3 Rolling Reese, 4 Duck on kick): set only
     // the Break React controls, as one undo step
     static constexpr int kNumReactPresets = 5;
-    static constexpr int kNumSpacePresets = 6, kNumReesePresets = 6;
+    static constexpr int kNumSpacePresets = 6, kNumReesePresets = 6, kNumChorusPresets = 9;
     static const char* spacePresetName (int k);
+    static const char* chorusPresetName (int k);
+    void applyChorusPreset (int k);   // (v0.1.72) the Chorus & Phase presets: they set only the new choruses and phasers
     static const char* reesePresetName (int k);
     void applySpacePreset (int k);
     void applyReesePreset (int k);
@@ -317,7 +334,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 31;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows, 29: Break 4, layer sequencer, fill pattern; 30: the Space effects, the Reese additions; 31: snare roll, pattern pads, layer pairs
+    static constexpr int kStateVersion = 32;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows, 29: Break 4, layer sequencer, fill pattern; 30: the Space effects, the Reese additions; 31: snare roll, pattern pads, layer pairs; 32: choruses and phasers, Glide Mode, Break FX, Keys pad
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -373,6 +390,7 @@ private:
     void setV27DefaultsForOldPatch();
     void setV28DefaultsForOldPatch();
     void setV30DefaultsForOldPatch();
+    void setV32DefaultsForOldPatch();       // (v0.1.72) choruses / phasers, Glide Mode
     void setV31DefaultsForOldPatch();       // ... and from before the Snare Roll's settings       // ... and from before the new Space effects / Reese additions
     void setV29DefaultsForOldPatch();       // ... and from before Break 4 / the layer sequencer / the fill pattern       // ... and from before Slice Keys / the Break React rows       // ... and from before the Core envelope mode / key entry
     void setCoreDefaultsForOldPatch();      // ... and from before the Core oscillator slots

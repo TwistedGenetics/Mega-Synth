@@ -119,6 +119,7 @@ private:
     // smoothed values (Web Audio setTargetAtTime emulation)
     struct S { float v = 0, target = 0; inline void step (float c) { v += (target - v) * c; } };
     S f1, f2, f3, fSub, cBase, cRatio, ssBase;
+    S gHz;   // (v0.1.72) the note's pitch with the Portamento glide, for the engines that read the note directly (Reese, Core, Granular, Audio-Rate)
     S l1, l2, l3, lSub, lC, lSS;
     // Mixer strips (Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, Ring): balance pan and mute / solo.
     // Only while one is away from centre / unmuted does the mix use them (otherwise it is exactly as before).
@@ -341,7 +342,11 @@ public:
     // (Swing, Start Offset, Free Rate) use the Mod Matrix offset from the previous block. 0 when unmodulated.
     enum DnaClockMod { DCM_Swing, DCM_Offset, DCM_FreeHz };
     float dnaClockModOffset (int which) const { return dsClockMod[juce::jlimit (0, 2, which)]; }
-    void loadGranular (const float* l, const float* r, int n) { gran.load (l, r, n); }
+    void loadGranular (const float* l, const float* r, int n) { gran.load (l, r, n); if (lanes != nullptr) for (int i = 0; i < kLanes; ++i) lanes[i].gran.load (l, r, n); }
+    // (v0.1.72) Break FX: which stages each break plays through (BreakFxUnit bits; all set is everything, as always)
+    void setBreakFx (const std::atomic<uint32_t>* masks) { breakFxMasks = masks; }
+    std::atomic<int> breakLanesShown { 0 };   // the Break FX lanes running now (each its own copies of its effects)
+    std::atomic<int> breakDestShown[4] {};    // each break's destination: 0 with the synth, 1-3 the dry buses, 4+ a lane
     // the bus signal just before the effects, for Capture ("before effects")
     bool keepPreFx = false;
     const float* preFx (int ch) const { return preFxBuf[ch].data(); }
@@ -398,6 +403,22 @@ private:
     std::vector<float> dryDelay[3][2];
     int dryDelayPos = 0, dryTail = 0;
     float brkRG[4] { 1.0f, 0.0f, 0.0f, 0.0f }, dryMasterS = -1.0f;
+    // (v0.1.72) Break FX lanes: a break sent through only some of the effects plays through its own copies of them, with the
+    // same settings (lanes matching the synth's path, or the old Break Effects routes, share the synth's instead)
+    static constexpr int kLanes = 4, kDests = 4 + kLanes;   // destinations: 0 with the synth, 1-3 the dry buses, 4+ the lanes
+    struct BreakLane
+    {
+        Granular gran; Spectral spec; FeedbackMatrix fbm; FxBus fx; PerfFx perf; MasterFilter mf;
+        std::vector<float> in[2], fbIn[2], fbOut[2], dly[2];
+        int dlyPos = 0, quiet = 0;
+        uint32_t key = 0;
+        bool running = false;
+    };
+    std::unique_ptr<BreakLane[]> lanes;
+    const std::atomic<uint32_t>* breakFxMasks = nullptr;
+    float brkDG[4][kDests] {};     // each break's gain into each destination (ramped over 10 ms)
+    bool brkCustom = false;        // the per-break path is running (custom routing, or ramping back from it)
+    bool laneTargeted[kLanes] {};
     // Sub Mono: the dry sub's side signal high-passed at 120 Hz (a 4-pole Butterworth: two state-variable stages per bus)
     float monoIc[2][2][2] {};   // [bus][stage][state]
     static constexpr int kDryDelayLen = 8192;

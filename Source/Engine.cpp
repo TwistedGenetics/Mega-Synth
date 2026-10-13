@@ -624,6 +624,8 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     f3.target = (float) oscF (P_osc3Oct, semi (P_osc3Semi) + s.f (P_osc3Detune) + pitch + driftCents[2]);
     fSub.target = (float) oscF (P_subOct, semi (P_subSemi) + pitch + driftCents[3]);
     f1.step (cPort); f2.step (cPort); f3.step (cPort); fSub.step (cPort);
+    gHz.target = (float) baseFreq; gHz.step (cPort);   // (v0.1.72: glides exactly as Osc 1 does)
+    const double glHz = gHz.v;
 
     wave1 = kWaveChoiceToId[clampv (s.i (P_osc1Wave), 0, 9)];
     wave2 = kWaveChoiceToId[clampv (s.i (P_osc2Wave), 0, 9)];
@@ -658,7 +660,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
             gsP.maxGrains = s.i (P_quality) == 0 ? 8 : (s.i (P_quality) == 2 ? 48 : 24);
             const double rootHz = 440.0 * pow2 ((clampv (s.f (P_gsRoot), 0.0f, 127.0f) - 69.0) / 12.0);
             const double pe = s.i (P_pEnvTarget) == 0 ? (double) peRatio[0] : 1.0;   // the pitch envelope when it targets all oscillators
-            gsP.ratio = (s.v[P_gsKeyTrack] > 0.5f ? baseFreq / rootHz : 1.0) * pow2 (pitch / 1200.0) * pe;   // (pitch: bend and the LFO pitch slots)
+            gsP.ratio = (s.v[P_gsKeyTrack] > 0.5f ? glHz / rootHz : 1.0) * pow2 (pitch / 1200.0) * pe;   // (pitch: bend and the LFO pitch slots)
         }
     }
 
@@ -705,7 +707,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
             rs.drift = clampv (s.f (P_rsDrift), 0.0f, 1.0f); rs.driftRate = s.f (P_rsDriftRate);
         }
         const double pe = s.i (P_pEnvTarget) == 0 ? (double) peRatio[0] : 1.0;   // the pitch envelope when it targets all oscillators
-        const double fr = baseFreq * pow2 (std::round (s.f (P_rsOct))) * pow2 ((100.0 * std::round (s.f (P_rsSemi)) + pitch) / 1200.0) * pe;
+        const double fr = glHz * pow2 (std::round (s.f (P_rsOct))) * pow2 ((100.0 * std::round (s.f (P_rsSemi)) + pitch) / 1200.0) * pe;
         reese.setFrequency (fr, s.fxTempo > 0.0 ? s.fxTempo : (double) s.f (P_seqTempo), rs);
     }
 
@@ -741,7 +743,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
             o.out = clampv (op (CO_Out), 0.0f, 1.0f);
         }
         const double pe = s.i (P_pEnvTarget) == 0 ? (double) peRatio[0] : 1.0;
-        coreHz[c] = baseFreq * pow2 (std::round (s.f (coreParam (c, CS_Oct)))) * pow2 ((100.0 * std::round (s.f (coreParam (c, CS_Semi))) + s.f (coreParam (c, CS_Fine)) + pitch) / 1200.0) * pe;
+        coreHz[c] = glHz * pow2 (std::round (s.f (coreParam (c, CS_Oct)))) * pow2 ((100.0 * std::round (s.f (coreParam (c, CS_Semi))) + s.f (coreParam (c, CS_Fine)) + pitch) / 1200.0) * pe;
         if (on && ! core[c].isStarted())
         {
             core[c].start (cs, clampv (s.i (coreParam (c, CS_Retrig)), 0, 2), (uint32_t) (order * 131u + (uint64_t) key + 977u * (uint64_t) c), key, velocity);
@@ -1083,7 +1085,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         arp.fm = ps.f (P_arFm); arp.fmTarget = clampv (ps.i (P_arFmTarget), 0, 4); arp.am = ps.f (P_arAm); arp.ring = ps.f (P_arRing);
         arp.shiftHz = ps.f (P_arShift); arp.shiftMix = ps.f (P_arShiftMix);
         const bool arFmOn = arp.fmActive(), arFxOn = arp.fxActive(), needMod = arFmOn || arFxOn;
-        const double modHz = baseFreq * pow2 (ps.bendSemis / 12.0) * arp.ratio + arp.offsetHz;
+        const double modHz = gHz.v * pow2 (ps.bendSemis / 12.0) * arp.ratio + arp.offsetHz;   // (v0.1.72: glides with the note)
         const float fmIndex = arp.fm * 8.0f;
         bool fmT[AD_COUNT] = {};
         if (arFmOn)
@@ -1796,6 +1798,21 @@ void Engine::prepare (double sampleRate, int maxBlock)
     gran.prepare (sr);
     spec.prepare (sr);
     fbm.prepare (sr, maxBlock);
+    if (lanes == nullptr) lanes.reset (new BreakLane[kLanes]);
+    for (int i = 0; i < kLanes; ++i)
+    {
+        auto& ln = lanes[i];
+        ln.gran.prepare (sr); ln.spec.prepare (sr); ln.fbm.prepare (sr, maxBlock); ln.fx.prepare (sr, maxBlock); ln.perf.prepare (sr); ln.mf.prepare (sr);
+        for (int c = 0; c < 2; ++c)
+        {
+            ln.in[c].assign ((size_t) maxBlock + 16, 0.0f); ln.fbIn[c].assign ((size_t) maxBlock + 16, 0.0f); ln.fbOut[c].assign ((size_t) maxBlock + 16, 0.0f);
+            ln.dly[c].assign ((size_t) kDryDelayLen, 0.0f);
+        }
+        ln.dlyPos = 0; ln.quiet = 0; ln.key = 0; ln.running = false;
+    }
+    fxBus.setFollowers ({ &lanes[0].fx, &lanes[1].fx, &lanes[2].fx, &lanes[3].fx });
+    brkCustom = false;
+    for (auto& b : brkDG) for (auto& g : b) g = 0.0f;
     for (int c = 0; c < 2; ++c) { fbIn[c].assign ((size_t) maxBlock + 16, 0.0f); fbOut[c].assign ((size_t) maxBlock + 16, 0.0f); preFxBuf[c].assign ((size_t) maxBlock + 16, 0.0f); }
     for (int c = 0; c < 2; ++c)
     {
@@ -1820,6 +1837,15 @@ void Engine::reset()
     gran.reset();
     spec.reset();
     fbm.clear();
+    if (lanes != nullptr)
+        for (int i = 0; i < kLanes; ++i)
+        {
+            auto& ln = lanes[i];
+            ln.gran.reset(); ln.spec.reset(); ln.fbm.clear(); ln.fx.reset(); ln.perf.reset(); ln.mf.reset();
+            for (auto& d : ln.dly) std::fill (d.begin(), d.end(), 0.0f);
+            ln.running = false; ln.quiet = 0;
+        }
+    brkCustom = false;
     globalMod.clear();
     for (int b = 0; b < 3; ++b) for (int c = 0; c < 2; ++c) std::fill (dryDelay[b][c].begin(), dryDelay[b][c].end(), 0.0f);
     dryTail = 0; dryMasterS = -1.0f;
@@ -1843,6 +1869,8 @@ void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const S
 {
     if (findActive (key) != nullptr) return;   // the browser ignores a repeated note-on
     fxBus.addSpaceHits (SH_Notes);   // (the Space ducks: Synth notes)
+    bool legatoHeld = false;          // (a key is still held as this one starts)
+    for (auto& v : voices) if (v.active && ! v.released) legatoHeld = true;
 
     // polyphony: release the oldest held voices (they keep their release tail)
     const int poly = std::max (clampv (s.i (P_polyphony), 1, 16), std::min (polyFloor, 16));
@@ -1866,7 +1894,8 @@ void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const S
         if (! slot) slot = &voices[0];
     }
 
-    const double glide = (s.f (P_porta) > 0.0005f && lastFreq > 0) ? lastFreq : freq;
+    const bool glideOk = s.i (P_portaMode) == 0 || legatoHeld;   // (v0.1.72) Glide Mode Legato: only from a note still held
+    const double glide = (s.f (P_porta) > 0.0005f && lastFreq > 0 && glideOk) ? lastFreq : freq;
     ModContext mc;
     mc.lfoShapes = lfoShapes; mc.lfoFree = lfoFreePh; mc.msegs = msegStore; mc.meters = mixerMeters.load (std::memory_order_relaxed);
     if (routeStore != nullptr)
@@ -2206,7 +2235,77 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         if (! breakWasRunning) for (int k = 0; k < 4; ++k) brkRG[k] = k == route ? 1.0f : 0.0f;   // (nothing playing: start on the route)
         // Break-Reactive mode with a negative Offset: the breaks play that much later (the synth reacts first)
         const int rxDelay = react.breakDelay (rxs);
-        if (route == 0 && brkRG[0] == 1.0f && rxDelay == 0) { chopper.process (L, R, numSamples, st, fs->v); chopper.processLayer (L, R, numSamples, st, fs->v); }
+        // (v0.1.72) Break FX: a break ticked for only some of the effects (Breaks > Break FX) goes its own way
+        bool custom = false;
+        if (dryReady && lanes != nullptr && breakFxMasks != nullptr)
+            for (int b = 0; b < BreakChopper::kBreaks; ++b) custom = custom || (breakFxMasks[b].load (std::memory_order_relaxed) & kBxAll) != kBxAll;
+        if (custom || brkCustom)
+        {
+            if (! brkCustom)   // (into the per-break path: each break starts where the old route had it)
+                for (int b = 0; b < 4; ++b) { for (int d = 0; d < kDests; ++d) brkDG[b][d] = 0.0f; for (int k = 0; k < 4; ++k) brkDG[b][k] = brkRG[k]; }
+            brkCustom = true;
+            const uint32_t rmask = bxRouteMask (route);
+            int target[4];
+            for (int l = 0; l < kLanes; ++l) laneTargeted[l] = false;
+            for (int b = 0; b < 4; ++b)
+            {
+                const uint32_t grid = custom ? (breakFxMasks[b].load (std::memory_order_relaxed) & kBxAll) : kBxAll;
+                const uint32_t e = grid & rmask;
+                if (e == kBxAll) target[b] = 0;
+                else if (e == bxRouteMask (1)) target[b] = 1;
+                else if (e == bxRouteMask (2)) target[b] = 2;
+                else if (e == 0u) target[b] = 3;
+                else
+                {
+                    int li = -1;
+                    for (int l = 0; l < kLanes && li < 0; ++l) if (lanes[l].running && lanes[l].key == e) li = l;
+                    for (int l = 0; l < kLanes && li < 0; ++l) if (! lanes[l].running) li = l;
+                    for (int l = 0; l < kLanes && li < 0; ++l) if (! laneTargeted[l]) li = l;   // (all busy with tails: the first one no break wants)
+                    if (li < 0) li = 0;
+                    auto& ln = lanes[li];
+                    if (! ln.running || ln.key != e)
+                    {
+                        // a fresh lane: its own copies of the effects, from silence
+                        ln.gran.reset(); ln.spec.reset(); ln.fbm.clear(); ln.fx.reset(); ln.perf.reset(); ln.mf.reset();
+                        for (auto& d : ln.dly) std::fill (d.begin(), d.end(), 0.0f);
+                        ln.key = e; ln.running = true;
+                    }
+                    ln.quiet = 0;
+                    laneTargeted[li] = true;
+                    target[b] = 4 + li;
+                }
+                breakDestShown[b].store (target[b], std::memory_order_relaxed);
+            }
+            const float rc = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
+            bool settled = true;
+            for (int b = 0; b < 4; ++b)
+            {
+                std::fill (brkTmp[0].begin(), brkTmp[0].begin() + numSamples, 0.0f); std::fill (brkTmp[1].begin(), brkTmp[1].begin() + numSamples, 0.0f);
+                chopper.processBreak (b, brkTmp[0].data(), brkTmp[1].data(), numSamples, st, fs->v);
+                if (rxDelay > 0) react.delayBreak (b, brkTmp[0].data(), brkTmp[1].data(), numSamples, rxDelay);
+                for (int d = 0; d < kDests; ++d)
+                {
+                    float* dl = d == 0 ? L : d < 4 ? dryBus[d - 1][0].data() : lanes[d - 4].in[0].data();
+                    float* dr = d == 0 ? R : d < 4 ? dryBus[d - 1][1].data() : lanes[d - 4].in[1].data();
+                    if (d >= 4 && ! lanes[d - 4].running) { brkDG[b][d] = 0.0f; continue; }
+                    const float tg = d == target[b] ? 1.0f : 0.0f;
+                    float g = brkDG[b][d];
+                    if (g == tg && g == 0.0f) continue;
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        g += (tg - g) * rc;
+                        if (std::abs (tg - g) < 1.0e-5f) g = tg;
+                        dl[i] += brkTmp[0][(size_t) i] * g; dr[i] += brkTmp[1][(size_t) i] * g;
+                    }
+                    brkDG[b][d] = g;
+                    if (g != tg) settled = false;
+                    if (d >= 1 && d < 4 && g > 0.0f) anyDry = true;
+                }
+            }
+            // back to everything through the old route: the old path takes over once the ramps have finished
+            if (! custom && settled) { brkCustom = false; for (int k = 0; k < 4; ++k) brkRG[k] = k == route ? 1.0f : 0.0f; }
+        }
+        else if (route == 0 && brkRG[0] == 1.0f && rxDelay == 0) { chopper.process (L, R, numSamples, st, fs->v); chopper.processLayer (L, R, numSamples, st, fs->v); }
         else
         {
             std::fill (brkTmp[0].begin(), brkTmp[0].begin() + numSamples, 0.0f); std::fill (brkTmp[1].begin(), brkTmp[1].begin() + numSamples, 0.0f);
@@ -2303,8 +2402,9 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         }
 
         // ---- Performance FX (bypassed, untouched, while no pad is engaged)
+        PerfFx::Settings pf;
+        PerfFx::Clock ck;
         {
-            PerfFx::Settings pf;
             for (int k = 0; k < PerfFx::kPads; ++k) pf.pad[k] = fs->v[pfPadParam (k)] > 0.5f;
             pf.akaiMode = clampv (fs->i (P_pfAkaiMode), 0, 3); pf.akaiHard = fs->i (P_pfAkaiSpeed) == 1; pf.akaiSync = clampv (fs->i (P_pfAkaiSync), 0, 2);
             pf.akaiCycleMs = fs->f (P_pfAkaiCycle); pf.akaiXfade = fs->f (P_pfAkaiXfade); pf.akaiPitch = fs->f (P_pfAkaiPitch); pf.akaiMix = fs->f (P_pfAkaiMix);
@@ -2316,7 +2416,6 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             pf.crushBits = fs->f (P_pfCrushBits); pf.crushRate = fs->f (P_pfCrushRate); pf.vinyl = fs->f (P_pfVinylAmt);
             pf.echoFb = fs->f (P_pfEchoFb); pf.echoMix = fs->f (P_pfEchoMix); pf.verbSize = fs->f (P_pfVerbSize); pf.verbMix = fs->f (P_pfVerbMix);
             pf.verbFreeze = fs->f (P_pfVerbFreeze) > 0.5f;
-            PerfFx::Clock ck;
             ck.beat = s.fxBeat; ck.beatInc = s.fxBeatInc; ck.barOrigin = s.fxBarOrigin; ck.beatsPerBar = s.fxBeatsPerBar; ck.tempo = s.fxTempo;
             perfFx.process (L, R, numSamples, pf, ck);
         }
@@ -2329,6 +2428,63 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         mf.charModel = fs->i (P_mfChar); mf.charAmt = fs->f (P_mfCharAmt); mf.model = fs->i (P_mfModel);
         masterFilter.process (L, R, numSamples, mf);
         if (dryOn) for (int i = 0; i < numSamples; ++i) { L[i] += dryBus[2][0][(size_t) i]; R[i] += dryBus[2][1][(size_t) i]; }   // after it: only Output
+
+        // ---- (v0.1.72) the Break FX lanes: each break routed apart, through its own copies of the stages it's ticked for
+        int lanesRunning = 0;
+        if (lanes != nullptr)
+            for (int li = 0; li < kLanes; ++li)
+            {
+                auto& ln = lanes[li];
+                if (! ln.running) continue;
+                ++lanesRunning;
+                float* x0 = ln.in[0].data(); float* x1 = ln.in[1].data();
+                const uint32_t k = ln.key;
+                const bool lfb = fbOn && (k >> BX_Fb & 1u) != 0;
+                const bool lfbOn = lfb && ln.fbm.begin (fp, numSamples);
+                auto lGran = [&] { if (lfbOn) ln.fbm.inject (FD_Granular, x0, x1); if (k >> BX_Gran & 1u) ln.gran.process (x0, x1, numSamples, gp); if (lfbOn) ln.fbm.write (FT_Granular, x0, x1); };
+                auto lSpec = [&]
+                {
+                    if (lfbOn) ln.fbm.inject (FD_Spectral, x0, x1);
+                    if (k >> BX_Spec & 1u) ln.spec.process (x0, x1, numSamples, sp);
+                    else if (sp.on)
+                    {
+                        // past the Spectral stage: delayed by its latency, so the lane stays in time with the rest
+                        const int lat = clampv (spec.latency (sp), 0, kDryDelayLen - 1);
+                        for (int i = 0; i < numSamples; ++i)
+                        {
+                            const int w = (ln.dlyPos + i) & (kDryDelayLen - 1), rd = (ln.dlyPos + i - lat) & (kDryDelayLen - 1);
+                            ln.dly[0][(size_t) w] = x0[i]; ln.dly[1][(size_t) w] = x1[i];
+                            x0[i] = ln.dly[0][(size_t) rd]; x1[i] = ln.dly[1][(size_t) rd];
+                        }
+                        ln.dlyPos = (ln.dlyPos + numSamples) & (kDryDelayLen - 1);
+                    }
+                    if (lfbOn) ln.fbm.write (FT_Spectral, x0, x1);
+                };
+                if (fs->i (P_busOrder) == 1) { lSpec(); lGran(); }
+                else                         { lGran(); lSpec(); }
+                ln.fx.setSlotMask ((k >> BX_Rack0) & ((1u << FS_COUNT) - 1u));
+                float* lx[2] = { x0, x1 };
+                if (lfbOn)
+                {
+                    float* din[2] = { ln.fbIn[0].data(), ln.fbIn[1].data() };
+                    float* dout[2] = { ln.fbOut[0].data(), ln.fbOut[1].data() };
+                    std::fill (din[0], din[0] + numSamples, 0.0f); std::fill (din[1], din[1] + numSamples, 0.0f);
+                    ln.fbm.inject (FD_Delay, din[0], din[1]);
+                    ln.fx.process (lx[0], lx[1], numSamples, *fs, globalMod, din, dout);
+                    ln.fbm.write (FT_Delay, dout[0], dout[1]);
+                    ln.fbm.write (FT_Output, x0, x1);
+                    ln.fbm.end (x0, x1);
+                }
+                else ln.fx.process (lx[0], lx[1], numSamples, *fs, globalMod);
+                if (k >> BX_Perf & 1u) ln.perf.process (x0, x1, numSamples, pf, ck);
+                if (k >> BX_MF & 1u) ln.mf.process (x0, x1, numSamples, mf);
+                float pk = 0.0f;
+                for (int i = 0; i < numSamples; ++i) { L[i] += x0[i]; R[i] += x1[i]; pk = std::max (pk, std::max (std::abs (x0[i]), std::abs (x1[i]))); }
+                std::fill (x0, x0 + numSamples, 0.0f); std::fill (x1, x1 + numSamples, 0.0f);   // (ready for the next block's breaks)
+                // a lane no break plays through any more rings out, then stops (after half a second below -120 dB)
+                if (! laneTargeted[li] || ! brkCustom) { ln.quiet = pk < 1.0e-6f ? ln.quiet + numSamples : 0; if (ln.quiet > (int) (0.5 * sr)) ln.running = false; }
+            }
+        breakLanesShown.store (lanesRunning, std::memory_order_relaxed);
         outTrim.process (L, R, numSamples, fs->f (P_outGain));
     }
 

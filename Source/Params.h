@@ -241,6 +241,18 @@ inline const char* const kBsRollGapKeys[]    = { "none","16th","reverse" };
 inline const char* const kBsRollGapLabels[]  = { "No gap","1/16 gap","Reverse snare" };
 inline const char* const kRxFromKeys[]       = { "main","layer","both" };
 inline const char* const kRxFromLabels[]     = { "Main sequencer","Layer sequencer","Both" };
+// ---- v0.1.72: the choruses and phasers, and Glide Mode
+inline const char* const kCpVoicesKeys[]     = { "2","3","4","6","8" };
+inline const char* const kCpVoicesLabels[]   = { "2 voices","3 voices","4 voices","6 voices","8 voices" };
+inline constexpr int kCpVoicesN[]            = { 2, 3, 4, 6, 8 };
+inline const char* const kCpDualModeKeys[]   = { "par","ser" };
+inline const char* const kCpDualModeLabels[] = { "Parallel (stereo)","Series" };
+inline const char* const kCpDirKeys[]        = { "up","down" };
+inline const char* const kCpDirLabels[]      = { "Up","Down" };
+inline const char* const kCpVibeModeKeys[]   = { "chorus","vibrato" };
+inline const char* const kCpVibeModeLabels[] = { "Chorus","Vibrato" };
+inline const char* const kPortaModeKeys[]    = { "always","legato" };
+inline const char* const kPortaModeLabels[]  = { "Always","Legato (held keys only)" };
 // ---- v0.1.70: the Space effects and the Reese additions
 inline const char* const kSxDuckSrcKeys[]    = { "kick","snare","hits","main","layer","sc","notes","note" };
 inline const char* const kSxDuckSrcLabels[]  = { "Break kicks","Break snares","Break hits","Main sequencer","Layer sequencer","Sidechain","Synth notes","Duck note" };
@@ -497,6 +509,11 @@ inline const ChoiceList kListBsRollCurve= TG_LIST(kBsRollCurve);
 inline const ChoiceList kListBsRollGap  = TG_LIST(kBsRollGap);
 inline const ChoiceList kListRxFrom     = TG_LIST(kRxFrom);
 inline const ChoiceList kListSxDuckSrc = TG_LIST(kSxDuckSrc);
+inline const ChoiceList kListCpVoices = TG_LIST(kCpVoices);
+inline const ChoiceList kListCpDualMode = TG_LIST(kCpDualMode);
+inline const ChoiceList kListCpDir = TG_LIST(kCpDir);
+inline const ChoiceList kListCpVibeMode = TG_LIST(kCpVibeMode);
+inline const ChoiceList kListPortaMode = TG_LIST(kPortaMode);
 inline const ChoiceList kListSxThrow = TG_LIST(kSxThrow);
 inline const ChoiceList kListSxSprings = TG_LIST(kSxSprings);
 inline const ChoiceList kListSxGateTrig = TG_LIST(kSxGateTrig);
@@ -541,11 +558,32 @@ constexpr int kMxStrips = 15;   // ... 11 = Reese, 12 = Core A, 13 = Core B, 14 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
 enum FxSlot { FS_Stutter, FS_Sampler, FS_Flanger, FS_Delay, FS_Chorus, FS_Reverb, FS_Shaper, FS_Multiband, FS_Stereo,
-              FS_Dub, FS_Spring, FS_Gated, FS_Plate, FS_Widen, FS_Dim, FS_Ir, FS_COUNT };   // (v0.1.70: Dub..Ir; older racks list 9)
-constexpr int kFxSlotsBefore70 = 9;
+              FS_Dub, FS_Spring, FS_Gated, FS_Plate, FS_Widen, FS_Dim, FS_Ir,
+              FS_Ens, FS_Bbd, FS_Multi, FS_Script, FS_Colour, FS_Dual, FS_Barber, FS_Vibe, FS_COUNT };   // (v0.1.70: Dub..Ir; v0.1.72: Ens..Vibe; older racks list 9 / 16)
+constexpr int kFxSlotsBefore70 = 9, kFxSlotsBefore72 = 16;
 inline const char* const kFxSlotNames[FS_COUNT] = { "Beat Repeat", "Vintage Sampler", "Flanger / Phaser", "Tape Delay", "Juno Chorus",
                                                     "Reverbs", "Volume Shaper", "Multiband", "Stereo Tools",
-                                                    "Dub Delay", "Spring Reverb", "Gated Reverb", "Plate Reverb", "Micro-pitch Widener", "Dimension Chorus", "IR Reverb" };
+                                                    "Dub Delay", "Spring Reverb", "Gated Reverb", "Plate Reverb", "Micro-pitch Widener", "Dimension Chorus", "IR Reverb",
+                                                    "Ensemble", "BBD Chorus", "Multi-Chorus", "Script Phase", "Colour Phase", "Dual Phaser", "Barber-pole Phaser", "Vibe" };
+// (v0.1.72) Break FX: the stages a break can be sent through or past, one bit each
+enum BreakFxUnit { BX_Gran = 0, BX_Spec = 1, BX_Fb = 2, BX_Rack0 = 3, BX_Perf = BX_Rack0 + FS_COUNT, BX_MF, BX_COUNT };
+constexpr uint32_t kBxAll = (1u << BX_COUNT) - 1u;
+// what the old Break Effects choice (Mixer > Routing) leaves on: Through the effects, into Performance FX, into the Master Filter, after everything
+inline uint32_t bxRouteMask (int route)
+{
+    return route <= 0 ? kBxAll : route == 1 ? ((1u << BX_Perf) | (1u << BX_MF)) : route == 2 ? (1u << BX_MF) : 0u;
+}
+// (v0.1.72) the groups the FX tab is sorted into (the Rack shows each effect's group)
+enum FxGroup { FG_Delays, FG_Reverbs, FG_Chorus, FG_Phase, FG_Width, FG_Dirt, FG_Motion, FG_COUNT };
+inline const char* const kFxGroupNames[FG_COUNT] = { "Delays", "Reverbs", "Chorus", "Phase", "Width", "Dirt", "Motion" };
+inline int fxSlotGroup (int s)
+{
+    static const int g[] = { FG_Motion, FG_Dirt, FG_Phase, FG_Delays, FG_Chorus, FG_Reverbs, FG_Motion, FG_Dirt, FG_Width,
+                             FG_Delays, FG_Reverbs, FG_Reverbs, FG_Reverbs, FG_Width, FG_Chorus, FG_Reverbs,
+                             FG_Chorus, FG_Chorus, FG_Chorus, FG_Phase, FG_Phase, FG_Phase, FG_Phase, FG_Phase };
+    static_assert (sizeof (g) / sizeof (g[0]) == FS_COUNT, "a group per slot");
+    return s >= 0 && s < FS_COUNT ? g[s] : FG_Motion;
+}
 // The effects that are sends (they add their output to what they hear); next to each other they share one input.
 inline bool fxSlotIsSend (int s) { return s == FS_Delay || s == FS_Chorus || s == FS_Reverb; }
 // The effects whose knob is a Return (they add what they make to what they hear): the sends, and the new delay and reverbs
@@ -1729,7 +1767,7 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(sxOnPlate, "Plate Reverb On", false) \
     F(sxMixPlate,"Plate Reverb Return", 0, 1, 0.4, 0.01, 0) \
     B(sxOnWiden, "Micro-pitch Widener On", false) \
-    F(sxMixWiden,"Micro-pitch Widener Mix", 0, 1, 0.5, 0.01, 0) \
+    F(sxMixWiden,"Micro-pitch Widener Mix", 0, 1, 1, 0.01, 0) \
     B(sxOnDim,   "Dimension Chorus On", false) \
     F(sxMixDim,  "Dimension Chorus Mix", 0, 1, 1, 0.01, 0) \
     B(sxOnIr,    "IR Reverb On", false) \
@@ -1757,7 +1795,7 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     C(sxGateSync,"Gated Reverb Length Sync", kListSxGateSync, 0) \
     C(sxGateShape,"Gated Reverb Gate Shape", kListSxGateShape, 0) \
     C(sxGateTrig,"Gated Reverb Trigger", kListSxGateTrig, 0) \
-    F(sxGateThr, "Gated Reverb Threshold", -60, 0, -24, 0.1, 0) \
+    F(sxGateThr, "Gated Reverb Threshold", -60, 0, -40, 0.1, 0) \
     B(sxGateFreeze,"Gated Reverb Freeze", false) \
     F(sxPlDecay, "Plate Decay", 0.2, 10, 2.5, 0.01, 2.5) \
     F(sxPlDamp,  "Plate Damping", 0, 1, 0.4, 0.01, 0) \
@@ -1862,7 +1900,59 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(bsRollSnare, "Snare Roll Snare", -1, 31, -1, 1, 0) \
     C(bsRollGap,   "Snare Roll Gap", kListBsRollGap, 0) \
     F(bsRollVar,   "Snare Roll Variation", 0, 1, 0.3, 0.01, 0) \
-    B(bsLEditPair, "Break Layer Edit The Pair", false)
+    B(bsLEditPair, "Break Layer Edit The Pair", false) \
+    B(cpOnEns,   "Ensemble On", false) \
+    F(cpMixEns,  "Ensemble Mix", 0, 1, 0.6, 0.01, 0) \
+    B(cpOnBbd,   "BBD Chorus On", false) \
+    F(cpMixBbd,  "BBD Chorus Mix", 0, 1, 0.5, 0.01, 0) \
+    B(cpOnMulti, "Multi-Chorus On", false) \
+    F(cpMixMulti,"Multi-Chorus Mix", 0, 1, 0.5, 0.01, 0) \
+    B(cpOnScript,"Script Phase On", false) \
+    F(cpMixScript,"Script Phase Mix", 0, 1, 1, 0.01, 0) \
+    B(cpOnColour,"Colour Phase On", false) \
+    F(cpMixColour,"Colour Phase Mix", 0, 1, 1, 0.01, 0) \
+    B(cpOnDual,  "Dual Phaser On", false) \
+    F(cpMixDual, "Dual Phaser Mix", 0, 1, 1, 0.01, 0) \
+    B(cpOnBarber,"Barber-pole Phaser On", false) \
+    F(cpMixBarber,"Barber-pole Phaser Mix", 0, 1, 1, 0.01, 0) \
+    B(cpOnVibe,  "Vibe On", false) \
+    F(cpMixVibe, "Vibe Mix", 0, 1, 1, 0.01, 0) \
+    F(cpEnsDepth,"Ensemble Depth", 0, 1, 0.6, 0.01, 0) \
+    F(cpEnsSpeed,"Ensemble Speed Mix", 0, 1, 0.5, 0.01, 0) \
+    F(cpEnsTone, "Ensemble Tone", 2000, 12000, 7000, 1, 5000) \
+    F(cpBbdRate, "BBD Chorus Rate", 0.1, 8, 0.8, 0.01, 1) \
+    F(cpBbdDepth,"BBD Chorus Depth", 0, 1, 0.5, 0.01, 0) \
+    F(cpBbdStereo,"BBD Chorus Stereo", 0, 1, 0.8, 0.01, 0) \
+    B(cpBbdBright,"BBD Chorus Bright", false) \
+    C(cpBbdSync, "BBD Chorus Sync", kListModSync, 0) \
+    C(cpMulVoices,"Multi-Chorus Voices", kListCpVoices, 2) \
+    F(cpMulSpread,"Multi-Chorus Spread", 0, 1, 0.7, 0.01, 0) \
+    F(cpMulRate, "Multi-Chorus Rate", 0.05, 5, 0.4, 0.01, 0.6) \
+    F(cpMulDepth,"Multi-Chorus Depth", 0, 1, 0.5, 0.01, 0) \
+    F(cpMulFb,   "Multi-Chorus Feedback", -0.9, 0.9, 0, 0.01, 0) \
+    C(cpMulSync, "Multi-Chorus Sync", kListModSync, 0) \
+    F(cpScrSpeed,"Script Phase Speed", 0.05, 10, 0.5, 0.01, 1) \
+    B(cpScrFb,   "Script Phase Feedback", false) \
+    C(cpScrSync, "Script Phase Sync", kListModSync, 0) \
+    F(cpColRate, "Colour Phase Rate", 0.05, 10, 0.4, 0.01, 1) \
+    B(cpColColour,"Colour Phase Colour", false) \
+    C(cpColSync, "Colour Phase Sync", kListModSync, 0) \
+    F(cpDualRateA,"Dual Phaser Rate A", 0.05, 10, 0.3, 0.01, 1) \
+    F(cpDualRateB,"Dual Phaser Rate B", 0.05, 10, 0.7, 0.01, 1) \
+    F(cpDualDepth,"Dual Phaser Depth", 0, 1, 0.8, 0.01, 0) \
+    F(cpDualFb,  "Dual Phaser Feedback", 0, 0.95, 0.4, 0.01, 0) \
+    C(cpDualMode,"Dual Phaser Routing", kListCpDualMode, 0) \
+    B(cpDualLink,"Dual Phaser Link", false) \
+    C(cpDualSync,"Dual Phaser Sync", kListModSync, 0) \
+    F(cpBarSpeed,"Barber-pole Speed", 0.02, 2, 0.1, 0.001, 0.3) \
+    C(cpBarDir,  "Barber-pole Direction", kListCpDir, 0) \
+    F(cpBarFb,   "Barber-pole Feedback", 0, 0.9, 0.5, 0.01, 0) \
+    C(cpBarSync, "Barber-pole Sync", kListModSync, 0) \
+    F(cpVibeSpeed,"Vibe Speed", 0.1, 10, 1.5, 0.01, 1.5) \
+    F(cpVibeInt, "Vibe Intensity", 0, 1, 0.7, 0.01, 0) \
+    C(cpVibeMode,"Vibe Mode", kListCpVibeMode, 0) \
+    C(cpVibeSync,"Vibe Sync", kListModSync, 0) \
+    C(portaMode, "Glide Mode", kListPortaMode, 0)
 
 enum ParamIndex
 {
@@ -1899,8 +1989,9 @@ constexpr int kMxCoreStrip = kMxSources + 3;   // Core A; Core B is the next
 constexpr int kMxLayerStrip = kMxSources + 5;  // the Break Layer
 
 // v0.1.70: the Space effects' rack slots (On, Mix / Return) and their Duck sections
-inline constexpr int fxOnParam (int slot)  { return slot < FS_Dub ? P_fxOnStutter + 2 * slot : P_sxOnDub + 2 * (slot - FS_Dub); }
-inline constexpr int fxMixParam (int slot) { return slot < FS_Dub ? P_fxMixStutter + 2 * slot : P_sxMixDub + 2 * (slot - FS_Dub); }
+inline constexpr int fxOnParam (int slot)  { return slot < FS_Dub ? P_fxOnStutter + 2 * slot : slot < FS_Ens ? P_sxOnDub + 2 * (slot - FS_Dub) : P_cpOnEns + 2 * (slot - FS_Ens); }
+inline constexpr int fxMixParam (int slot) { return slot < FS_Dub ? P_fxMixStutter + 2 * slot : slot < FS_Ens ? P_sxMixDub + 2 * (slot - FS_Dub) : P_cpMixEns + 2 * (slot - FS_Ens); }
+static_assert (fxOnParam (FS_Vibe) == P_cpOnVibe && fxMixParam (FS_Vibe) == P_cpMixVibe && fxMixParam (FS_Ir) == P_sxMixIr, "chorus / phaser parameter layout");
 enum SxDucker { SD_Delay, SD_Reverb, SD_Dub, SD_Spring, SD_Gated, SD_Plate, SD_Ir, SD_COUNT };
 enum SxDuckField { SDF_Amt, SDF_Att, SDF_Rel, SDF_Src };
 inline constexpr int sxDuckParam (int d, int field) { return P_sxDlyDuckAmt + 4 * d + field; }

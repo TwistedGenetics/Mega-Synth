@@ -56,18 +56,23 @@ public:
         uint32_t seen = 0; for (int s : o) if (s >= 0 && s < FS_COUNT) seen |= 1u << s;
         std::array<int, FS_COUNT> use = o;
         if (seen != (1u << FS_COUNT) - 1) for (int i = 0; i < FS_COUNT; ++i) use[(size_t) i] = i;
-        uint64_t p = 0;
-        for (int i = 0; i < FS_COUNT; ++i) p |= (uint64_t) use[(size_t) i] << (4 * i);
-        packed.store (p);
+        uint64_t p[2] = { 0, 0 };   // (v0.1.72: 24 slots, 5 bits each, 12 to a word)
+        for (int i = 0; i < FS_COUNT; ++i) p[i / 12] |= (uint64_t) use[(size_t) i] << (5 * (i % 12));
+        const juce::SpinLock::ScopedLockType sl (writeLock);
+        seq.fetch_add (1);   // (odd: being written)
+        packed[0].store (p[0]); packed[1].store (p[1]);
+        seq.fetch_add (1);
         version.fetch_add (1);
     }
     std::array<int, FS_COUNT> getOrder() const
     {
-        std::array<int, FS_COUNT> o; const uint64_t p = packed.load (std::memory_order_relaxed);
-        for (int i = 0; i < FS_COUNT; ++i) o[(size_t) i] = (int) ((p >> (4 * i)) & 15u);
+        uint64_t p[2];
+        read (p);
+        std::array<int, FS_COUNT> o;
+        for (int i = 0; i < FS_COUNT; ++i) o[(size_t) i] = (int) ((p[i / 12] >> (5 * (i % 12))) & 31u);
         return o;
     }
-    uint64_t orderKey() const { return packed.load (std::memory_order_relaxed); }
+    uint64_t orderKey() const { uint64_t p[2]; read (p); return (p[0] ^ (p[1] * 0x9E3779B97F4A7C15ull)) | 1u; }
     void move (int from, int to)   // positions in the order
     {
         auto o = getOrder();
@@ -116,14 +121,25 @@ public:
         o->setProperty ("order", ord.joinIntoString (","));
         juce::StringArray c; for (int i = 0; i < kCurve; ++i) c.add (juce::String (curve (i), 3));
         o->setProperty ("shaperCurve", c.joinIntoString (","));
+        if (! breakFxDefault())   // (v0.1.72: only when a break is routed apart, so older states read the same)
+        {
+            juce::StringArray m; for (auto& b : brkFx) m.add (juce::String::toHexString ((int) b.load()));
+            o->setProperty ("breakFx", m.joinIntoString (","));
+        }
         return juce::var (o);
     }
     void fromVar (const juce::var& v)   // missing or invalid parts get their defaults
     {
         setDefaultOrder(); setCurvePreset (0);
+        for (auto& b : brkFx) b.store (kBxAll);
         if (! v.isObject()) return;
+        {
+            juce::StringArray m; m.addTokens (v["breakFx"].toString(), ",", {});
+            if (m.size() == 4) for (int i = 0; i < 4; ++i) brkFx[(size_t) i].store ((uint32_t) m[i].getHexValue32() & kBxAll);
+        }
         juce::StringArray ord; ord.addTokens (v["order"].toString(), ",", {});
-        if (ord.size() == kFxSlotsBefore70) for (int k = kFxSlotsBefore70; k < FS_COUNT; ++k) ord.add (juce::String (k));   // (before v0.1.70: the new slots after it)
+        if (ord.size() == kFxSlotsBefore70 || ord.size() == kFxSlotsBefore72)
+            for (int k = ord.size(); k < FS_COUNT; ++k) ord.add (juce::String (k));   // (an order from before v0.1.70 / v0.1.72: the new slots after it)
         if (ord.size() == FS_COUNT) { std::array<int, FS_COUNT> o; for (int i = 0; i < FS_COUNT; ++i) o[(size_t) i] = ord[i].getIntValue(); setOrder (o); }
         juce::StringArray c; c.addTokens (v["shaperCurve"].toString(), ",", {});
         if (c.size() == kCurve) for (int i = 0; i < kCurve; ++i) pts[(size_t) i].store (juce::jlimit (0.0f, 1.0f, c[i].getFloatValue()));
@@ -131,9 +147,26 @@ public:
     }
     uint32_t getVersion() const { return version.load(); }
 
+    // (v0.1.72) Break FX: the stages each break plays through (BreakFxUnit bits; all set, the default, is everything)
+    uint32_t breakFx (int b) const { return brkFx[(size_t) juce::jlimit (0, 3, b)].load(); }
+    void setBreakFx (int b, uint32_t m) { brkFx[(size_t) juce::jlimit (0, 3, b)].store (m & kBxAll); version.fetch_add (1); }
+    bool breakFxDefault() const { for (auto& b : brkFx) if (b.load() != kBxAll) return false; return true; }
+    const std::atomic<uint32_t>* breakFxMasks() const { return brkFx.data(); }
+
 private:
-    std::atomic<uint64_t> packed { 0 };
+    std::atomic<uint64_t> packed[2] { { 0 }, { 0 } };
+    std::atomic<uint32_t> seq { 0 };
+    juce::SpinLock writeLock;
+    void read (uint64_t* p) const   // (a consistent pair: retried if a write was under way)
+    {
+        for (;;)
+        {
+            const uint32_t s0 = seq.load();
+            if ((s0 & 1u) == 0) { p[0] = packed[0].load(); p[1] = packed[1].load(); if (seq.load() == s0) return; }
+        }
+    }
     std::array<std::atomic<float>, kCurve> pts;
+    std::array<std::atomic<uint32_t>, 4> brkFx { { { kBxAll }, { kBxAll }, { kBxAll }, { kBxAll } } };
     std::atomic<uint32_t> version { 0 };
 };
 

@@ -5,6 +5,7 @@
 #include "../EngineTypes.h"
 #include "RackFx.h"
 #include "SpaceFx.h"
+#include "ModFx.h"
 
 namespace tg
 {
@@ -14,7 +15,11 @@ namespace tg
 class FxBus
 {
 public:
-    void setSidechain (const float* l, const float* r) { scL = l; scR = r; }   // for the next process call (null: none)
+    void setSidechain (const float* l, const float* r) { scL = l; scR = r; for (auto* f : followers) if (f) f->setSidechain (l, r); }   // for the next process call (null: none)
+    // (v0.1.72) Break FX lanes: copies of this bus that a break routed apart plays through. They follow this one: the same
+    // rack order, hits, pads, impulses and sidechain. slotMask: the rack slots a lane runs (bit per FxSlot; the rest stay off)
+    void setFollowers (std::initializer_list<FxBus*> f) { int i = 0; for (auto* b : f) if (i < 4) { followers[(size_t) i++] = b; b->setRack (rack); } }
+    void setSlotMask (uint32_t m) { slotMask = m; }
 
     void prepare (double sr, int maxBlock);
     void reset();
@@ -24,26 +29,31 @@ public:
                   const float* const* delayIn = nullptr, float* const* delayOut = nullptr);
 
     // Called from the message thread: rebuilds the reverb impulse when the size changes.
-    void updateImpulse (double seconds);
+    void updateImpulse (double seconds);   // (and the followers')
     double impulseSeconds() const { return irSeconds.load(); }
 
     // ---- the rack
-    void setRack (const FxRackStore* st) { rack = st; }
-    void setDnaGate (float g) { dnaGate = g; }
-    void setStutterHeld (bool h) { stutterMidi = h; }
-    void shaperNoteOn (double beat) { shaper.noteOn (beat); }
+    void setRack (const FxRackStore* st) { rack = st; for (auto* f : followers) if (f) f->setRack (st); }
+    void setDnaGate (float g) { dnaGate = g; for (auto* f : followers) if (f) f->setDnaGate (g); }
+    void setStutterHeld (bool h) { stutterMidi = h; for (auto* f : followers) if (f) f->setStutterHeld (h); }
+    void shaperNoteOn (double beat) { shaper.noteOn (beat); for (auto* f : followers) if (f) f->shaperNoteOn (beat); }
     MultibandComp multiband;
     BeatRepeat stutter;
     VolumeShaper shaper;
 
     // ---- v0.1.70: the Space effects
-    void addSpaceHits (uint32_t bits) { pendingHits |= bits; }   // (SxHitBit) hits at the start of the next block
-    void setThrowPad (bool held) { throwPad = held; }            // the Dub Delay's Throw from its learned pad
-    void loadIr (juce::AudioBuffer<float>&& ir, double irRate) { irRev.load (std::move (ir), irRate); }
+    void addSpaceHits (uint32_t bits) { pendingHits |= bits; for (auto* f : followers) if (f) f->addSpaceHits (bits); }   // (SxHitBit) hits at the start of the next block
+    void setThrowPad (bool held) { throwPad = held; for (auto* f : followers) if (f) f->setThrowPad (held); }            // the Dub Delay's Throw from its learned pad
+    void loadIr (juce::AudioBuffer<float>&& ir, double irRate)
+    {
+        for (auto* f : followers) if (f) { juce::AudioBuffer<float> c (ir); f->loadIr (std::move (c), irRate); }
+        irRev.load (std::move (ir), irRate);
+    }
     bool irReady() const { return irRev.ready(); }
     float gatedGateShown() const { return gated.gateShown(); }
     bool dubSending() const { return dub.sending(); }
     std::atomic<float> duckShown[SD_COUNT] {};   // each duck's gain at the end of the last block (for the page)
+    std::atomic<float> slotActivity[FS_COUNT] {};   // (v0.1.72) what each insert slot adds (RMS of wet - dry), held with a short fall
 
 private:
     // Delay, chorus and the reverbs (the send effects) for one run of adjacent send slots:
@@ -53,6 +63,8 @@ private:
     void freezeTail (float* cl, float* cr, int n, bool freezing);
     void prepareSpace (int n, const Snapshot&);
     const FxRackStore* rack = nullptr;
+    std::array<FxBus*, 4> followers {};
+    uint32_t slotMask = ~0u;
     VintageSampler sampler;
     FlangerPhaser flanger;
     StereoTools stereo;
@@ -95,6 +107,7 @@ private:
     const float* scL = nullptr; const float* scR = nullptr;
 
     DubDelay dub; SpringReverb spring; GatedReverb gated; PlateReverb plate; MicroWidener widen; DimensionChorus dim; IrReverb irRev;
+    EnsembleChorus ens; BbdChorus bbd; MultiChorus multi; ScriptPhase script; ColourPhase colour; DualPhaser dual; BarberPhaser barber; VibeFx vibe;   // (v0.1.72)
     SpaceDucker duckers[SD_COUNT];
     std::vector<float> duckBuf[SD_COUNT];
     std::vector<char> scHitBuf, hitBuf;

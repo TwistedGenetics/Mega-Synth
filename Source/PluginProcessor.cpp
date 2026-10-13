@@ -147,6 +147,7 @@ MegaSynthProcessor::MegaSynthProcessor()
     engine.setModulation (&routes, &modInputs, &scenes);
     engine.setDnaSequencer (&dnaSteps);
     engine.fx().setRack (&fxRack);
+    engine.setBreakFx (fxRack.breakFxMasks());
     engine.setLfoShapes (&lfoShapes);
     engine.setMsegs (&msegs);
     engine.setBreakStore (&breakStore);
@@ -158,10 +159,13 @@ MegaSynthProcessor::MegaSynthProcessor()
     pushHistory ("Init");
     markOriginal();
     startTimerHz (20);
+    irWorker = std::make_unique<IrWorker> (*this);
+    irWorker->startThread (juce::Thread::Priority::low);
 }
 
 MegaSynthProcessor::~MegaSynthProcessor()
 {
+    if (irWorker != nullptr) irWorker->stopThread (4000);
     rpAlive->store (false);
     if (rpThread != nullptr) rpThread->stopThread (6000);
     stopTimer();
@@ -725,6 +729,7 @@ juce::String MegaSynthProcessor::throwPadText() const
 void MegaSynthProcessor::updateIrImpulse (bool force)
 {
     if (raw[P_sxOnIr]->load() < 0.5f) return;
+    const juce::ScopedLock sl (irLock);
     const int type = juce::jlimit (0, 4, juce::roundToInt (raw[P_sxIrType]->load()));
     const float lenS = juce::jlimit (0.1f, 10.0f, raw[P_sxIrLen]->load());
     const bool rev = raw[P_sxIrReverse]->load() > 0.5f;
@@ -1212,6 +1217,35 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
         if (kind == 1 && m.isNoteOnOrOff() && m.getNoteNumber() == num) { engine.fx().setThrowPad (m.isNoteOn()); return; }
         if (kind == 2 && m.isController() && m.getControllerNumber() == num) { engine.fx().setThrowPad (m.getControllerValue() >= 64); return; }
     }
+    // (v0.1.72) the Keys pad: Learn takes the next note or CC; then each press flips the Keys switch between Synth and Breaks
+    if (keysPadLearn.load() && (m.isNoteOn() || m.isController()))
+    {
+        keysPadKind = m.isNoteOn() ? 1 : 2;
+        keysPadNum = m.isNoteOn() ? m.getNoteNumber() : m.getControllerNumber();
+        keysPadCcDown = m.isController() && m.getControllerValue() >= 64;
+        keysPadLearn = false;
+        return;
+    }
+    if (const int kind = keysPadKind.load(); kind != 0)
+    {
+        const int num = keysPadNum.load();
+        bool press = false, used = false;
+        if (kind == 1 && m.isNoteOnOrOff() && m.getNoteNumber() == num) { used = true; press = m.isNoteOn(); }
+        else if (kind == 2 && m.isController() && m.getControllerNumber() == num)
+        {
+            used = true;
+            const bool down = m.getControllerValue() >= 64;
+            press = down && ! keysPadCcDown;
+            keysPadCcDown = down;
+        }
+        if (press)
+        {
+            const int cur = juce::roundToInt (snap.f (P_bcSliceKeys));
+            const float next = cur == 0 ? 1.0f : 0.0f;   // (Breaks -> Synth; Synth or Auto -> Breaks)
+            setParamFromAudio (P_bcSliceKeys, next); snap.v[P_bcSliceKeys] = next;
+        }
+        if (used) return;
+    }
     // (v0.1.71) the pattern pads: Learn takes the next note or CC for the waiting button (and, learning A-H in a row, moves on
     // to the next); a press then selects that pattern exactly as clicking its button does (Switch decides when it starts)
     if (const int li = patPadLearn.load(); li >= 0 && (m.isNoteOn() || m.isController()))
@@ -1334,7 +1368,8 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
         const int skMode = juce::jlimit (0, 2, snap.i (P_bcSliceKeys));
         if (skMode != 0)
         {
-            const bool keysOn = skMode == 2 && (! bsRunning || snap.v[P_bsKeyEntry] > 0.5f);
+            // (v0.1.72: Key Entry takes the slice zone whatever the Keys switch says, while it's on)
+            const bool keysOn = (skMode == 2 && ! bsRunning) || snap.v[P_bsKeyEntry] > 0.5f;
             const bool inZone = nn >= kb - 4 && nn < kb + tg::BreakData::kSlices;
             if (m.isNoteOn()) sliceKeyOwner[(size_t) nn] = (uint8_t) (keysOn && inZone ? 1 : (inZone ? 2 : 0));
             else if (sliceKeyOwner[(size_t) nn] != 1 && inZone) { sliceKeyOwner[(size_t) nn] = 0; goto playAsNote; }
@@ -1711,7 +1746,7 @@ void MegaSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (! run && bsRunning) { bsRunning = false; bsNumRolls = 0; bsStepShown.store (-1); bsFillState = 0; bsFillCountdown.store (-1); bsFillPosShown.store (-1); bsFillFirstIdx.store (-1); modInputs.bsFill = 0.0f; }
         {
             const int sk = juce::jlimit (0, 2, snap.i (P_bcSliceKeys));
-            sliceKeysActive.store (bcOn && (sk == 0 || (sk == 2 && (! run || snap.v[P_bsKeyEntry] > 0.5f))), std::memory_order_relaxed);
+            sliceKeysActive.store (bcOn && (sk == 0 || (sk == 2 && ! run) || snap.v[P_bsKeyEntry] > 0.5f), std::memory_order_relaxed);
         }
         if (run)
         {
@@ -1932,7 +1967,6 @@ void MegaSynthProcessor::timerCallback()
     const double tempo = ht > 0 ? ht : (double) raw[P_seqTempo]->load();
     const int syncIdx = (int) raw[P_reverbSync]->load();
     engine.fx().updateImpulse (juce::jlimit (0.5, 4.5, syncSeconds (kListReverbSync, syncIdx, tempo, raw[P_reverbSize]->load())));
-    updateIrImpulse (false);
 
     // Euclidean mode: re-flow the existing notes onto the new pattern when pulses/rotate/length change
     const int cur[4] = { (int) raw[P_seqGenMode]->load(), juce::roundToInt (raw[P_seqEuclidPulses]->load()),
@@ -2067,6 +2101,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("fillPadNum", fillPadNum.load(), nullptr);
     state.setProperty ("throwPadKind", throwPadKind.load(), nullptr);
     state.setProperty ("throwPadNum", throwPadNum.load(), nullptr);
+    if (keysPadKind.load() != 0) { state.setProperty ("keysPadKind", keysPadKind.load(), nullptr); state.setProperty ("keysPadNum", keysPadNum.load(), nullptr); }
     {
         juce::StringArray pads;
         for (int i = 0; i < kPatPads; ++i) pads.add (juce::String (patPadKind[i].load()) + ":" + juce::String (patPadNum[i].load()));
@@ -2126,6 +2161,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 29) setV29DefaultsForOldPatch();
     if (version < 30) setV30DefaultsForOldPatch();
     if (version < 31) setV31DefaultsForOldPatch();
+    if (version < 32) setV32DefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -2181,6 +2217,8 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
         }
     }
     throwPadNum = (int) tree.getProperty ("throwPadNum", -1);
+    keysPadKind = juce::jlimit (0, 2, (int) tree.getProperty ("keysPadKind", 0));
+    keysPadNum = (int) tree.getProperty ("keysPadNum", -1);
     if (version < 29) { const auto r = convertOldFills (false); if (r.isNotEmpty()) lastFillConversion = "Older project: " + r; }
     lastEuclid[0] = -1;   // don't re-flow the restored sequence
     if (! restoring)
@@ -2385,6 +2423,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("bcSliceMode4")) { setV29DefaultsForOldPatch(); importLegacyFills = true; }
         if (extra == nullptr || ! extra->hasProperty ("sxOnDub")) setV30DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bsRollLen")) setV31DefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("cpOnEns")) setV32DefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2796,6 +2835,33 @@ void MegaSynthProcessor::applySpacePreset (int k)
     pushHistory (juce::String ("Space: ") + spacePresetName (k));
 }
 
+const char* MegaSynthProcessor::chorusPresetName (int k)
+{
+    static const char* n[kNumChorusPresets] = { "All off", "String Ensemble", "BBD Bass Chorus", "Wide 8-Voice", "Phase 90 Breaks",
+                                                "Small Stone Colour", "Bi-Phase Stereo", "Endless Rise", "Throbbing Vibe" };
+    return n[juce::jlimit (0, kNumChorusPresets - 1, k)];
+}
+
+void MegaSynthProcessor::applyChorusPreset (int k)
+{
+    using namespace tg;
+    auto set = [this] (int i, float plain) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (plain)); prm->endChangeGesture(); };
+    for (int i = P_cpOnEns; i <= P_cpVibeSync; ++i) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture(); }
+    switch (k)
+    {
+        case 1: set (P_cpOnEns, 1); set (P_cpMixEns, 0.7f); set (P_cpEnsDepth, 0.75f); set (P_cpEnsSpeed, 0.4f); set (P_cpEnsTone, 6000.0f); break;
+        case 2: set (P_cpOnBbd, 1); set (P_cpMixBbd, 0.5f); set (P_cpBbdRate, 0.55f); set (P_cpBbdDepth, 0.6f); set (P_cpBbdStereo, 0.0f); break;
+        case 3: set (P_cpOnMulti, 1); set (P_cpMixMulti, 0.5f); set (P_cpMulVoices, 4); set (P_cpMulSpread, 1.0f); set (P_cpMulRate, 0.3f); set (P_cpMulDepth, 0.6f); set (P_cpMulFb, 0.2f); break;
+        case 4: set (P_cpOnScript, 1); set (P_cpScrSync, 2); break;   // (a sweep every half bar)
+        case 5: set (P_cpOnColour, 1); set (P_cpColRate, 0.25f); set (P_cpColColour, 1); break;
+        case 6: set (P_cpOnDual, 1); set (P_cpDualRateA, 0.2f); set (P_cpDualRateB, 0.33f); set (P_cpDualDepth, 0.9f); set (P_cpDualFb, 0.5f); break;
+        case 7: set (P_cpOnBarber, 1); set (P_cpBarSpeed, 0.08f); set (P_cpBarFb, 0.6f); break;
+        case 8: set (P_cpOnVibe, 1); set (P_cpVibeSpeed, 5.5f); set (P_cpVibeInt, 0.8f); break;
+        default: break;
+    }
+    pushHistory (juce::String ("Chorus & Phase: ") + chorusPresetName (k));
+}
+
 const char* MegaSynthProcessor::reesePresetName (int k)
 {
     static const char* n[kNumReesePresets] = { "Plain Reese", "Talking Neuro", "Bloom Reese", "Split Distort", "Hoover", "Sync Growl" };
@@ -2843,6 +2909,23 @@ void MegaSynthProcessor::setV31DefaultsForOldPatch()
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
     }
+}
+
+void MegaSynthProcessor::setV32DefaultsForOldPatch()
+{
+    for (int i = P_cpOnEns; i <= P_portaMode; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+juce::String MegaSynthProcessor::keysPadText() const
+{
+    const int k = keysPadKind.load(), n = keysPadNum.load();
+    if (k == 1) return "Note " + juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")";
+    if (k == 2) return "CC " + juce::String (n);
+    return "none";
 }
 
 juce::String MegaSynthProcessor::patPadText (int i) const

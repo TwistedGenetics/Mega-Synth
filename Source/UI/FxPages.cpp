@@ -144,6 +144,98 @@ void SidechainMeter::paint (juce::Graphics& g)
 }
 
 //==============================================================================
+juce::String FxLight::stateText() const
+{
+    const bool on = proc.param (fxOnParam (slot))->getValue() > 0.5f;
+    const float mix = proc.param (fxMixParam (slot))->getValue();
+    const juce::String word = fxSlotIsReturn (slot) && ! fxSlotIsSend (slot) ? "Return" : "Mix";
+    if (! on) return "Off: tick On to hear it";
+    if (fxSlotIsSend (slot)) return mix > 0.0f ? juce::String ("On (a send: Return sets its level)") : juce::String ("On, but its Rack Mix is 0");
+    if (mix <= 0.0f) return "On, but " + word + " is 0";
+    const float a = proc.getEngine().fx().slotActivity[slot].load();
+    if (a < 1.0e-4f) return "On: waiting for sound";
+    const juce::String what = fxSlotGroup (slot) == FG_Width || slot == FS_Dim ? " of width" : "";
+    return "On: adding " + juce::String (juce::jlimit (-80.0f, 12.0f, 20.0f * std::log10 (a)), 0) + " dB" + what;
+}
+
+void FxLight::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    const bool on = proc.param (fxOnParam (slot))->getValue() > 0.5f;
+    const float a = on ? proc.getEngine().fx().slotActivity[slot].load() : 0.0f;
+    shown = std::max (a, shown * 0.8f);
+    const float lit = on ? juce::jlimit (0.25f, 1.0f, 0.25f + (20.0f * std::log10 (shown + 1.0e-6f) + 60.0f) / 60.0f) : 0.0f;
+    const auto c = fxGroupColour (fxSlotGroup (slot));
+    const float d = std::min (14.0f, r.getHeight() - 4.0f);
+    auto dot = juce::Rectangle<float> (r.getX() + 2.0f, r.getCentreY() - d * 0.5f, d, d);
+    g.setColour (on ? c.withAlpha (lit) : col::panel3);
+    g.fillEllipse (dot);
+    g.setColour (on ? c : col::border);
+    g.drawEllipse (dot, 1.2f);
+    float x = dot.getRight() + 6.0f;
+    if (slot == FS_Gated && on)
+    {
+        const float gate = proc.getEngine().fx().gatedGateShown();
+        auto gr = juce::Rectangle<float> (x, r.getCentreY() - 7.0f, 40.0f, 14.0f);
+        g.setColour (gate > 0.05f ? c.withAlpha (0.35f + 0.65f * gate) : col::panel3);
+        g.fillRoundedRectangle (gr, 3.0f);
+        g.setColour (gate > 0.05f ? col::bg : col::muted);
+        g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+        g.drawText ("GATE", gr, juce::Justification::centred);
+        x = gr.getRight() + 6.0f;
+    }
+    g.setColour (on ? col::text : col::muted);
+    g.setFont (juce::Font (juce::FontOptions (11.5f)));
+    g.drawText (stateText(), r.withLeft (x), juce::Justification::centredLeft);
+}
+
+void FxLight::mouseDown (const juce::MouseEvent&)
+{
+    auto* p = proc.param (fxOnParam (slot));
+    p->beginChangeGesture(); p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.0f : 1.0f); p->endChangeGesture();
+}
+
+//==============================================================================
+ReturnCell::ReturnCell (MegaSynthProcessor& p, int s, int lp, const juce::String& n, juce::Colour c)
+    : slot (s), levelParam (lp), proc (p), name (n), colour (c)
+{
+    level.setSliderStyle (juce::Slider::LinearBar);
+    level.setColour (juce::Slider::trackColourId, c.withAlpha (0.55f));
+    level.setColour (juce::Slider::backgroundColourId, col::panel3);
+    level.setColour (juce::Slider::textBoxTextColourId, col::text);
+    att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, kParamIds[lp], level);
+    level.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; };
+    level.updateText();
+    level.setTooltip (juce::String (proc.param (lp)->getName (100)) + (fxSlotIsReturn (s) ? "  (how much of it is added)" : "  (dry / wet)"));
+    addAndMakeVisible (level);
+    startTimerHz (8);
+}
+
+void ReturnCell::resized() { level.setBounds (getLocalBounds().withTrimmedTop (15)); }
+
+void ReturnCell::paint (juce::Graphics& g)
+{
+    const bool on = proc.param (fxOnParam (slot))->getValue() > 0.5f;
+    auto top = getLocalBounds().toFloat().withHeight (14.0f);
+    auto dot = juce::Rectangle<float> (top.getX() + 1.0f, top.getY() + 2.0f, 10.0f, 10.0f);
+    g.setColour (on ? colour : col::panel3);
+    g.fillEllipse (dot);
+    g.setColour (on ? colour.brighter (0.3f) : col::border);
+    g.drawEllipse (dot, 1.0f);
+    g.setColour (on ? col::text : col::muted);
+    g.setFont (juce::Font (juce::FontOptions (11.0f, on ? juce::Font::bold : juce::Font::plain)));
+    g.drawText (name, top.withTrimmedLeft (15.0f), juce::Justification::centredLeft);
+}
+
+void ReturnCell::mouseDown (const juce::MouseEvent& e)
+{
+    if (e.y > 15) return;
+    auto* p = proc.param (fxOnParam (slot));
+    p->beginChangeGesture(); p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.0f : 1.0f); p->endChangeGesture();
+    repaint();
+}
+
+//==============================================================================
 RackList::RackList (MegaSynthProcessor& p) : proc (p)
 {
     for (int s = 0; s < FS_COUNT; ++s)
@@ -165,12 +257,27 @@ RackList::RackList (MegaSynthProcessor& p) : proc (p)
         addAndMakeVisible (m);
     }
     order = proc.fxRack.getOrder();
+    sortBtn.setTooltip ("Put the effects in group order: Delays, Reverbs, Chorus, Phase, Width, Dirt, Motion (keeping their order inside each group). "
+                        "The order is the signal's path, so this can change the sound; Undo puts it back.");
+    sortBtn.onClick = [this] { sortByGroup(); };
+    addAndMakeVisible (sortBtn);
     startTimerHz (10);
+}
+
+void RackList::sortByGroup()
+{
+    auto o = proc.fxRack.getOrder();
+    std::stable_sort (o.begin(), o.end(), [] (int a, int b) { return fxSlotGroup (a) < fxSlotGroup (b); });
+    proc.fxRack.setOrder (o);
+    proc.pushHistory ("Sort effects by group");
+    timerCallback();
+    repaint();
 }
 
 void RackList::timerCallback()
 {
-    if (proc.fxRack.orderKey() != lastKey) { lastKey = proc.fxRack.orderKey(); order = proc.fxRack.getOrder(); layoutRows(); repaint(); }
+    if (proc.fxRack.orderKey() != lastKey) { lastKey = proc.fxRack.orderKey(); order = proc.fxRack.getOrder(); layoutRows(); }
+    if (isShowing()) repaint();
 }
 
 void RackList::resized() { layoutRows(); }
@@ -182,9 +289,10 @@ void RackList::layoutRows()
     {
         const int s = order[(size_t) i];
         const int y = kTop + i * kRowH;
-        on[s]->setBounds (W - 330, y + 4, 60, 24);
-        mix[s]->setBounds (W - 260, y + 4, 240, 24);
+        on[s]->setBounds (W - 330, y + 1, 60, kRowH - 4);
+        mix[s]->setBounds (W - 260, y + 2, 240, kRowH - 6);
     }
+    sortBtn.setBounds (W - 130, 1, 126, 22);
 }
 
 int RackList::rowAt (int y) const { return juce::jlimit (0, FS_COUNT - 1, (y - kTop) / kRowH); }
@@ -193,34 +301,48 @@ void RackList::paint (juce::Graphics& g)
 {
     g.setColour (col::muted);
     g.setFont (juce::Font (juce::FontOptions (12.0f)));
-    g.drawText ("Signal flows top to bottom. Drag a row to move it. Tape Delay, Juno Chorus and the Reverbs are send effects: next to each other they all hear the same signal (as they always have).",
-                0, 0, getWidth(), 24, juce::Justification::centredLeft);
+    g.drawText ("Signal flows top to bottom; drag a row to move it. Tape Delay, Juno Chorus and the Reverbs are sends: next to each other they hear the same signal. The tags show each effect's group.",
+                0, 0, getWidth() - 136, 24, juce::Justification::centredLeft);
     for (int i = 0; i < FS_COUNT; ++i)
     {
         const int s = order[(size_t) i];
-        auto r = juce::Rectangle<float> (0.0f, (float) (kTop + i * kRowH), (float) getWidth(), (float) kRowH - 4.0f);
+        auto r = juce::Rectangle<float> (0.0f, (float) (kTop + i * kRowH), (float) getWidth(), (float) kRowH - 2.0f);
         const bool dragging = dragFrom == i;
         g.setColour (dragging ? col::panel3 : col::panel2);
-        g.fillRoundedRectangle (r, 8.0f);
+        g.fillRoundedRectangle (r, 6.0f);
         g.setColour (dragOver == i && dragFrom >= 0 && dragOver != dragFrom ? col::fx : col::border);
-        g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, dragOver == i && dragFrom >= 0 ? 2.0f : 1.0f);
+        g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, dragOver == i && dragFrom >= 0 ? 2.0f : 1.0f);
         g.setColour (col::muted);
-        for (int k = 0; k < 3; ++k) g.fillRect (r.getX() + 12.0f, r.getCentreY() - 5.0f + k * 4.0f, 14.0f, 2.0f);   // grip
+        for (int k = 0; k < 3; ++k) g.fillRect (r.getX() + 12.0f, r.getCentreY() - 4.0f + k * 3.0f, 14.0f, 1.5f);   // grip
+        // the group tag
+        const auto gc = fxGroupColour (fxSlotGroup (s));
+        auto tag = juce::Rectangle<float> (r.getX() + 34.0f, r.getY() + 3.0f, 66.0f, r.getHeight() - 6.0f);
+        g.setColour (gc.withAlpha (0.25f));
+        g.fillRoundedRectangle (tag, 4.0f);
+        g.setColour (gc);
+        g.setFont (juce::Font (juce::FontOptions (10.5f, juce::Font::bold)));
+        g.drawText (kFxGroupNames[fxSlotGroup (s)], tag, juce::Justification::centred);
         g.setColour (fxSlotIsSend (s) ? col::text.withAlpha (0.85f) : col::text);
-        g.setFont (juce::Font (juce::FontOptions (13.5f, juce::Font::bold)));
-        g.drawText (juce::String (i + 1) + ".  " + kFxSlotNames[s], r.withTrimmedLeft (36.0f), juce::Justification::centredLeft);
+        g.setFont (juce::Font (juce::FontOptions (12.5f, juce::Font::bold)));
+        g.drawText (juce::String (i + 1) + ".  " + kFxSlotNames[s], r.withTrimmedLeft (110.0f), juce::Justification::centredLeft);
+        // its state: lit when on, brighter while it adds something
+        const bool onNow = proc.param (fxOnParam (s))->getValue() > 0.5f;
+        const float act = onNow && ! fxSlotIsSend (s) ? proc.getEngine().fx().slotActivity[s].load() : 0.0f;
+        auto dot = juce::Rectangle<float> ((float) getWidth() - 350.0f, r.getCentreY() - 5.0f, 10.0f, 10.0f);
+        g.setColour (onNow ? gc.withAlpha (act > 1.0e-4f ? 1.0f : 0.45f) : col::panel3);
+        g.fillEllipse (dot);
         if (fxSlotIsSend (s))
         {
             g.setColour (col::muted);
             g.setFont (juce::Font (juce::FontOptions (11.0f)));
-            g.drawText ("send", r.withTrimmedLeft (240.0f), juce::Justification::centredLeft);
+            g.drawText ("send", r.withTrimmedLeft (320.0f), juce::Justification::centredLeft);
         }
     }
 }
 
 void RackList::mouseDown (const juce::MouseEvent& e)
 {
-    if (e.x > getWidth() - 340) return;   // the On / Mix controls
+    if (e.x > getWidth() - 340 || e.y < kTop) return;   // the On / Mix controls, the heading
     dragFrom = rowAt (e.y); dragOver = dragFrom; dragY = e.y;
     repaint();
 }

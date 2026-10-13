@@ -167,6 +167,14 @@ inline juce::String formatParam (int idx, float v)
         if (id == "rsShpSym" || id == "rsCpFb" || id == "rsFmEnvAmt") return spct();
         return pct();
     }
+    // ---- v0.1.72: the choruses and phasers
+    if (id.startsWith ("cp"))
+    {
+        if (id == "cpEnsTone") return formatHz (v);
+        if (id == "cpMulFb") { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; }
+        if (id.endsWith ("Rate") || id.endsWith ("RateA") || id.endsWith ("RateB") || (id.endsWith ("Speed") && id != "cpEnsSpeed")) return fixed (v, v < 0.1f ? 3 : 2) + " Hz";
+        return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    }
     // ---- Break-Reactive mode
     if (id == "rxSens" || id == "rxScSens" || id == "rxDrive" || id == "rxDuck" || id == "rxNotch") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id.startsWith ("rx") && (id.endsWith ("Sens") || id.endsWith ("Drive") || id.endsWith ("Duck") || id.endsWith ("Notch") || id.endsWith ("Res")

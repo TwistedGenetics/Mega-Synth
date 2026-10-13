@@ -3,6 +3,7 @@
 #include "UI/FilterPanel.h"
 #include "UI/DnaSeqPage.h"
 #include "UI/FxPages.h"
+#include "UI/BreakFxPage.h"
 #include "UI/LfoPage.h"
 #include "UI/ArpPage.h"
 #include "ParamFormat.h"
@@ -1439,6 +1440,8 @@ MegaSynthEditor::MegaSynthEditor (MegaSynthProcessor& p)
     setMouseClickGrabsKeyboardFocus (standalone);
     midiMonitor = std::make_unique<tgui::MidiMonitor> (proc);
     content.addAndMakeVisible (*midiMonitor);
+    keysSwitch = std::make_unique<tgui::KeysSwitch> (proc);
+    content.addAndMakeVisible (*keysSwitch);
     midiMonitor->setBounds (kDesignW - 240, 764, 230, 120);
     content.addMouseListener (&learnClicks, true);
     startTimerHz (30);
@@ -1534,7 +1537,7 @@ bool MegaSynthEditor::showPage (const juce::String& nameIn)
 {
     // names from before the tabs were regrouped still work
     static const std::map<juce::String, juce::String> oldNames {
-        { "Effects", "Space" }, { "Filter & Env", "Filters" }, { "Env+", "Pitch Envelope" }, { "Mutation", "Note Mutation" },
+        { "Effects", "Reverbs" }, { "Space", "Reverbs" }, { "Dub & Spring", "Delays" }, { "Reese Shape", "Reese" }, { "Filter & Env", "Filters" }, { "Env+", "Pitch Envelope" }, { "Mutation", "Note Mutation" },
         { "Macros/Scenes", "Macros & Scenes" }, { "DNA Seq", "DNA Sequencer" }, { "Sequencer", "Step Sequencer" } };
     juce::String name = nameIn;
     if (auto o = oldNames.find (name); o != oldNames.end() && pageIndex.find (name) == pageIndex.end()) name = o->second;
@@ -1700,17 +1703,34 @@ namespace
     };
 }
 
+// (v0.1.72) a page whose content is taller than the window: it scrolls (the mouse wheel or the bar on the right)
+Page* MegaSynthEditor::scrollPage (Page* outer, int innerH, const juce::String& name)
+{
+    auto* vp = outer->own (new juce::Viewport());
+    auto* inner = new Page();
+    vp->setViewedComponent (inner, true);
+    vp->setScrollBarsShown (true, false);
+    vp->setScrollBarThickness (10);
+    outer->onResize = [outer, vp, inner, innerH]
+    {
+        vp->setBounds (outer->getLocalBounds());
+        inner->setSize (outer->getWidth() - vp->getScrollBarThickness(), juce::jmax (innerH, outer->getHeight()));
+    };
+    scrollInners.push_back ({ name, inner });
+    return inner;
+}
+
 void MegaSynthEditor::buildPages()
 {
     // The tabs, in signal-flow order. A tab with sub-tabs is a GroupPage; every page is found by its name.
     struct TabDef { const char* name; juce::StringArray subs; juce::Colour colour; };
     const TabDef layout[] = {
         { "Perform", { "Perform", "Performance FX" }, col::accent }, { "Overview", {}, col::accent },
-        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Reese", "Reese Shape", "Core A", "Core B" }, col::osc },
-        { "Breaks", { "Break Chopper", "Break Sequencer", "Break React" }, col::complex },
+        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Reese", "Core A", "Core B" }, col::osc },
+        { "Breaks", { "Break Chopper", "Break Sequencer", "Break React", "Break FX" }, col::complex },
         { "Mixer", {}, col::mixer }, { "Filters", {}, col::filter },
         { "Envelopes", { "Amp & Filter", "Mod Envelopes", "Pitch Envelope", "MSEG 1 & 2" }, col::env },
-        { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Space", "Dub & Spring", "Reverbs", "Width", "Ducking", "Dirt", "Motion", "Rack" }, col::fx },
+        { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Delays", "Reverbs", "Chorus & Phase", "Width", "Dirt", "Motion", "Ducking", "Rack" }, col::fx },
         { "Modulation", { "LFOs", "Mod Matrix", "Assignments", "Macros & Scenes", "Cell Instability" }, col::mod },
         { "Sequencers", { "Step Sequencer", "Arp / Chord", "DNA Sequencer" }, col::seq },
         { "Lab", { "Mutate / Lab", "Capture", "Random Patch" }, col::wavetable } };
@@ -2590,13 +2610,14 @@ void MegaSynthEditor::buildPages()
         };
     }
 
-    // ---------------------------------------------------------------- Oscillators > Reese
+    // ---------------------------------------------------------------- Oscillators > Reese (v0.1.72: with Reese Shape, on one page that scrolls)
+    tgui::Page* reesePage = scrollPage (addPage ("Reese"), 1050, "Reese");
     {
-        auto* page = addPage ("Reese");
+        auto* page = reesePage;
         reesePresetsChip = [this] (Section* s)
         {
             auto* b = new juce::TextButton ("Reese Presets...");
-            b->setTooltip ("Presets for the Reese engine only (the Reese and Reese Shape pages): they set just its controls, as one undo step");
+            b->setTooltip ("Presets for the Reese engine only (the whole Reese page): they set just its controls, as one undo step");
             b->onClick = [this, b]
             {
                 juce::PopupMenu m;
@@ -2659,6 +2680,14 @@ void MegaSynthEditor::buildPages()
         ch->knob (P_rsSub, "Sub", 60);
         ch->knob (P_rsDrive, "Drive", 60);
         ch->knob (P_rsTone, "Tone", 60);
+        auto* gl = sec (page, "Glide", c);
+        gl->addInfo ("Portamento, shared by every engine (the same knob as on the Perform page): each note glides from the last one - "
+                     "Osc 1-3, Sub, the wavetables, Complex, SuperSaw, the Reese, Core A / B, the Granular Synth and the Audio-Rate "
+                     "modulator, all along the same curve. Always: every note glides (with several notes, from the last one played). "
+                     "Legato: only when a key is still held. In Beats mode the Reese's beating stays locked to the tempo while it "
+                     "glides: the detune is worked out again from the gliding pitch as it moves.");
+        gl->knob (P_porta, "Glide", 60);
+        gl->choice (P_portaMode, "Glide Mode", 200);
         auto* ticker = page->own (new StoreTicker());
         ticker->tick = [this, kCents, kHz, cBeat, kNr, info]
         {
@@ -2684,7 +2713,7 @@ void MegaSynthEditor::buildPages()
             info->setText (t, juce::dontSendNotification);
         };
         ticker->tick();
-        page->onResize = [page, eng, det, info, mv, nt, ch]
+        page->onResize = [page, eng, det, info, mv, nt, ch, gl]
         {
             const int g = 10, W = page->getWidth();
             eng->setBounds (g, g, 560, 130);
@@ -2692,14 +2721,18 @@ void MegaSynthEditor::buildPages()
             info->setBounds (g + 590, g + 140, W - 2 * g - 600, 60);
             mv->setBounds (g, g + 140, 560, 130);
             nt->setBounds (g, g + 280, 560, 130);
-            ch->setBounds (g + 570, g + 210, W - 2 * g - 570, 130);
+            ch->setBounds (g + 570, g + 210, W - 2 * g - 570, 126);
+            gl->setBounds (g + 570, g + 344, W - 2 * g - 570, 126);
         };
     }
 
-    // ---------------------------------------------------------------- Oscillators > Reese Shape (v0.1.70)
+    // ---------------------------------------------------------------- Oscillators > Reese: the Shape group (v0.1.70; its own page until v0.1.72)
     {
-        auto* page = addPage ("Reese Shape");
+        auto* page = reesePage;
         const auto c = juce::Colour (0xffff7a59);
+        auto* shapeHead = page->own (new juce::Label ({}, "Reese Shape:  formant, bloom, Hoover, drive, comb / phaser, cross-FM"));
+        shapeHead->setColour (juce::Label::textColourId, c);
+        shapeHead->setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
         auto* fm = sec (page, "Formant  (Three band-pass filters at a vowel's formants: Vowel morphs A - E - I - O - U, Shift moves them all (+/-12 st), "
                               "Resonance sharpens them, Mix blends with the plain Reese. Movement: a synced LFO (Sine, Triangle, Saw or Random, "
                               "locked to the song from each note) or following the notch. Vowel is a Mod Matrix destination, so Break React, MSEGs "
@@ -2759,15 +2792,18 @@ void MegaSynthEditor::buildPages()
         xs->knob (P_rsFmEnvAmt, "Env Amt", 58);
         xs->knob (P_rsDrift, "Drift", 56);
         xs->knob (P_rsDriftRate, "Drift Rate", 62);
-        page->onResize = [page, fm, bl, hv, dr, cpS, xs]
+        auto top = page->onResize;
+        page->onResize = [top, page, shapeHead, fm, bl, hv, dr, cpS, xs]
         {
-            const int g = 10, W = page->getWidth(), lw = 560, rx = g + lw + 10, rw = W - rx - g;
-            fm->setBounds (g, g, lw, 176);
-            bl->setBounds (g, g + 186, lw, 130);
-            hv->setBounds (g, g + 326, lw, 176);
-            dr->setBounds (rx, g, rw, 130);
-            cpS->setBounds (rx, g + 140, rw, 176);
-            xs->setBounds (rx, g + 326, rw, 130);
+            if (top) top();
+            const int g = 10, W = page->getWidth(), lw = 560, rx = g + lw + 10, rw = W - rx - g, y0 = 520;
+            shapeHead->setBounds (g + 4, y0 - 32, W - 2 * g, 24);
+            fm->setBounds (g, y0, lw, 176);
+            bl->setBounds (g, y0 + 186, lw, 130);
+            hv->setBounds (g, y0 + 326, lw, 176);
+            dr->setBounds (rx, y0, rw, 130);
+            cpS->setBounds (rx, y0 + 140, rw, 176);
+            xs->setBounds (rx, y0 + 326, rw, 130);
         };
     }
 
@@ -2893,6 +2929,64 @@ void MegaSynthEditor::buildPages()
             resetBtn->setBounds (rt->getRight() - 86, rt->getY() + 64, 78, 24);
             algoBtn->toFront (false); resetBtn->toFront (false); view->toFront (false);
             ops->setBounds (g, g + 134, W - 2 * g, 432);
+        };
+    }
+
+    // ---------------------------------------------------------------- Breaks > Break FX (v0.1.72)
+    {
+        auto* page = addPage ("Break FX");
+        const auto c = col::complex;
+        auto* top = sec (page, "Break FX", c);
+        top->addInfo ("Which effects each break plays through: a tick sends it through that effect, no tick sends it past. The synth always goes "
+                      "through everything. A break ticked for everything shares the synth's effects, exactly as before (the default, and how "
+                      "older projects open). A break routed apart plays through its own copies of the effects it's ticked for, with the same "
+                      "settings - a lane - so it costs that much more CPU; breaks with the same ticks share a lane. The linear effects (delays, "
+                      "reverbs, choruses, filters at low drive) sound the same either way; the non-linear ones (Multiband, Vintage Sampler, "
+                      "drive, the Master Filter's drive, Performance FX) now work on the drums and the synth separately, so they no longer "
+                      "squash or dirty them together. It applies wherever the break plays (main and layer sequencer, the keys, fills). Saved "
+                      "with the project and in Undo / A-B; not automatable; a change crossfades over 10 ms. DNA Splice, Wave Mutation, "
+                      "Audio-Rate and the Resonator work inside the synth's voices, so the breaks never went through them. Mixer > Routing > "
+                      "Break Effects still works: when it's set past the effects it switches off what it skips, for every break (shown struck out).");
+        for (int k = 0; k < 4; ++k)
+        {
+            auto* b = new juce::TextButton (BreakFxGrid::presetName (k));
+            b->setTooltip (k == 0 ? "Every break through every effect (the default)"
+                         : k == 1 ? "Every break past every effect: dry, after the Master Filter"
+                         : k == 2 ? "The breaks through the delays, reverbs and width only (and Performance FX and the Master Filter)"
+                                  : "The breaks through the Vintage Sampler and Multiband only (and Performance FX and the Master Filter)");
+            top->add (b, k < 2 ? 110 : 150, 28);
+        }
+        auto* routeInfo = new juce::Label();
+        routeInfo->setColour (juce::Label::textColourId, col::muted);
+        routeInfo->setFont (juce::Font (juce::FontOptions (12.0f)));
+        top->add (routeInfo, 560, 28);
+        auto* grid = page->own (new BreakFxGrid (proc));
+        breakFxGridForTests = grid;
+        int bi = 0;
+        for (auto* ch : top->getChildren())
+            if (auto* b = dynamic_cast<juce::TextButton*> (ch)) { const int k = bi++; if (k < 4) b->onClick = [this, grid, k] { grid->applyPreset (k); setStatus (juce::String ("Break FX: ") + BreakFxGrid::presetName (k)); }; }
+        auto* status = page->own (new juce::Label());
+        status->setColour (juce::Label::textColourId, col::text);
+        status->setFont (juce::Font (juce::FontOptions (12.5f)));
+        status->setJustificationType (juce::Justification::topLeft);
+        auto* ticker = page->own (new StoreTicker());
+        ticker->tick = [this, grid, status, routeInfo]
+        {
+            const int route = juce::roundToInt (proc.param (P_bcFxRoute)->convertFrom0to1 (proc.param (P_bcFxRoute)->getValue()));
+            const juce::String ri = route == 0 ? juce::String ("Mixer > Break Effects: Through the effects (the ticks decide)")
+                                               : "Mixer > Break Effects: " + juce::String (tg::kListBcFxRoute.labels[juce::jlimit (0, 3, route)]) + " - it overrides the struck-out ticks";
+            if (routeInfo->getText() != ri) routeInfo->setText (ri, juce::dontSendNotification);
+            juce::String t = grid->routingText();
+            t << "\n\nLanes needed: " << grid->lanesNeededNow() << " (running now, with any tails ringing out: " << proc.getEngine().breakLanesShown.load() << ")."
+              << "  The synth always plays through every effect.";
+            if (status->getText() != t) status->setText (t, juce::dontSendNotification);
+        };
+        page->onResize = [page, top, grid, status]
+        {
+            const int g = 10, W = page->getWidth();
+            top->setBounds (g, g, W - 2 * g, 84);
+            grid->setBounds (g, g + 94, W - 2 * g, BreakFxGrid::kGroupH + BreakFxGrid::kNameH + 4 + 4 * BreakFxGrid::kRowH);
+            status->setBounds (g + 4, grid->getBottom() + 8, W - 2 * g, 110);
         };
     }
 
@@ -3176,7 +3270,33 @@ void MegaSynthEditor::buildPages()
             top->add (patSeg, 240, 36);
             top->choice (layer ? P_bsLSteps : P_bsSteps, "Length", 90);
             top->choice (layer ? P_bsLSwitch : P_bsSwitch, "Switch", 100);
-            top->choice (layer ? P_bsLKeys : P_bsKeys, "Pattern Keys", layer ? 130 : 150);
+            top->choice (layer ? P_bsLKeys : P_bsKeys, "Pattern Keys", layer ? 130 : 120)->box.setTooltip (
+                "Pattern Keys: eight notes that pick the pattern. While it's on, those notes don't play the synth or the slices; Off gives them back");
+            {
+                // (v0.1.72) Keys...: Pattern Keys off (they take eight notes from the keyboard while on), and the Keys pad (a note or CC
+                // that flips the Keys switch under Oct - / + between Synth and Breaks)
+                auto* kb = new juce::TextButton ("Keys...");
+                kb->setTooltip ("Pattern Keys take eight notes from the keyboard while on: turn them Off here. And the Keys pad: a pad (a note or a CC "
+                                "button) that flips the Keys switch (under Oct - / +) between Synth and Breaks, so you can jam with the synth over "
+                                "the slice zone and flip back. The pad isn't played; it's saved with the project.");
+                const int pkParam = layer ? P_bsLKeys : P_bsKeys;
+                kb->onClick = [this, kb, pkParam]
+                {
+                    juce::PopupMenu m;
+                    m.addItem (1, "Pattern Keys Off (give their notes back)", juce::roundToInt (proc.param (pkParam)->convertFrom0to1 (proc.param (pkParam)->getValue())) != 0);
+                    m.addSeparator();
+                    m.addSectionHeader ("Keys pad: " + proc.keysPadText());
+                    m.addItem (2, "Learn the Keys pad: hit a pad or press a CC button");
+                    m.addItem (3, "Clear the Keys pad", proc.keysPadKind.load() != 0);
+                    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (kb), [this, pkParam] (int r)
+                    {
+                        if (r == 1) { auto* prm = proc.param (pkParam); prm->beginChangeGesture(); prm->setValueNotifyingHost (0.0f); prm->endChangeGesture(); setStatus ("Pattern Keys off: those notes play again"); }
+                        if (r == 2) { proc.keysPadLearn = true; setStatus ("Keys pad: hit a pad or press a CC button..."); }
+                        if (r == 3) { proc.keysPadLearn = false; proc.keysPadKind = 0; proc.keysPadNum = -1; setStatus ("Keys pad cleared"); }
+                    });
+                };
+                top->add (kb, 58, 26);
+            }
             if (layer) top->choice (P_bsLFollow, "Plays", 112)->box.setTooltip ("Paired: the layer pattern paired with the playing main pattern (the main row's Layer setting), in step with it. Own: its own pattern, switching and chain");
             top->knob (layer ? P_bsLSwing : P_bsSwing, "Swing", 62);
             if (layer) top->knob (P_bsLLevel, "Level", 62);
@@ -3560,10 +3680,24 @@ void MegaSynthEditor::buildPages()
         engineChips = chipList;
 
         // ---- effect returns
+        // (v0.1.72) every space, chorus, phase and width effect: its On light (click to switch) and its Return or Mix, in the
+        // Rack's groups and colours
         auto* rt = sec (page, "Effect Returns", col::mixer);
-        for (auto [idx, n] : { std::pair<int, const char*> { P_delayMix, "Delay" }, { P_reverbMix, "Reverb" }, { P_shimmerMix, "Shimmer" },
-                               { P_chorusMix, "Chorus" }, { P_reverseMix, "Reverse" } })
-            rt->knob (idx, n, 54);
+        rt->addInfo ("Every delay, reverb, chorus, phaser and width effect, in the FX tab's groups and colours: the light is its On (click it), "
+                     "the bar its Return (how much is added) or Mix (dry / wet). Tape Delay, the 90s Reverb, Shimmer, Reverse and Juno Chorus "
+                     "are the send effects' own Returns, as before. Vintage Sampler, Multiband, Beat Repeat and Volume Shaper are on the FX tab.");
+        {
+            struct Ret { int slot, level; const char* name; };
+            const Ret rets[] = { { FS_Delay, P_delayMix, "Tape" }, { FS_Dub, P_sxMixDub, "Dub" },
+                                 { FS_Reverb, P_reverbMix, "90s Verb" }, { FS_Reverb, P_shimmerMix, "Shimmer" }, { FS_Reverb, P_reverseMix, "Reverse" },
+                                 { FS_Plate, P_sxMixPlate, "Plate" }, { FS_Gated, P_sxMixGated, "Gated" }, { FS_Spring, P_sxMixSpring, "Spring" }, { FS_Ir, P_sxMixIr, "IR" },
+                                 { FS_Chorus, P_chorusMix, "Juno" }, { FS_Dim, P_sxMixDim, "Dim" }, { FS_Ens, P_cpMixEns, "Ensemble" },
+                                 { FS_Bbd, P_cpMixBbd, "BBD" }, { FS_Multi, P_cpMixMulti, "Multi" },
+                                 { FS_Flanger, P_fxMixFlanger, "Flanger" }, { FS_Script, P_cpMixScript, "Script" }, { FS_Colour, P_cpMixColour, "Colour" },
+                                 { FS_Dual, P_cpMixDual, "Dual" }, { FS_Barber, P_cpMixBarber, "Barber" }, { FS_Vibe, P_cpMixVibe, "Vibe" },
+                                 { FS_Stereo, P_fxMixStereo, "Stereo" }, { FS_Widen, P_sxMixWiden, "Widener" } };
+            for (auto& e : rets) rt->add (new ReturnCell (proc, e.slot, e.level, e.name, fxGroupColour (fxSlotGroup (e.slot))), 66, 28);
+        }
         auto* pageFm = addPage ("FM & Ring");
         auto* fmS = sec (pageFm, "FM Matrix  (source -> destination, Hz of deviation)", col::fm);
         for (int i = 0; i < 4; ++i)
@@ -3617,9 +3751,10 @@ void MegaSynthEditor::buildPages()
             for (int k = 0; k < stripList.size(); ++k) { stripList[k]->setBounds (g + 4 + k * stripW, g + 32, stripW - 4, 360); stripList[k]->toFront (false); }
             // under the strips: Analog, Routing, Effect Returns; on the right: the engines and the output
             const int by = g + 410;
-            w->setBounds (g, by, 200, 136);
-            rtg->setBounds (g + 208, by, 318, 136);
-            rt->setBounds (g + 534, by, stripsW + 8 - 534, 136);
+            const int bh = juce::jmax (136, page->getHeight() - by - 6);   // (v0.1.72: the Effect Returns grid takes the height there is)
+            w->setBounds (g, by, 200, bh);
+            rtg->setBounds (g + 208, by, 318, bh);
+            rt->setBounds (g + 534, by, stripsW + 8 - 534, bh);
             const int rx = g + stripsW + 8 + g, rw = W - rx - g;
             engS->setBounds (rx, g, rw, 270);
             const int cw = (rw - 20) / 4;
@@ -4079,237 +4214,384 @@ void MegaSynthEditor::buildPages()
 
     // ---------------------------------------------------------------- Effects
     {
-        // four sub-tabs of FX & Mutation: Space (delay, reverbs, chorus, stereo), Dirt (sampler, multiband),
-        // Motion (beat repeat, flanger / phaser, volume shaper) and the Rack (order, On, Mix)
-        Page* sub[4] = { addPage ("Space"), addPage ("Dirt"), addPage ("Motion"), addPage ("Rack") };
+        // (v0.1.72) the FX tab in groups: Delays, Reverbs, Chorus & Phase, Width, Dirt, Motion, Ducking and the Rack
+        Page* pDel = addPage ("Delays");
+        Page* pRvOuter = addPage ("Reverbs");
+        Page* pCpOuter = addPage ("Chorus & Phase");
+        Page* pW = addPage ("Width");
+        Page* pDirt = addPage ("Dirt");
+        Page* pMot = addPage ("Motion");
+        Page* pRack = addPage ("Rack");
+        Page* pRv = scrollPage (pRvOuter, 890, "Reverbs");
+        Page* pCp = scrollPage (pCpOuter, 1060, "Chorus & Phase");
         auto keep = [] (Page* holder, auto* comp) { holder->children.add (comp); holder->addAndMakeVisible (comp); return comp; };
         auto own = [keep] (Page* holder, Section* s) { return keep (holder, s); };
+        auto mkG = [this] (int group, const juce::String& t) { return new Section (proc, t, fxGroupColour (group)); };
         auto mk = [this] (const juce::String& t) { return new Section (proc, t, col::fx); };
         auto toggle = [this] (Section* s, int param, const juce::String& text, int w = 110)
         {
             auto* t = new juce::ToggleButton (text);
-            t->setColour (juce::ToggleButton::tickColourId, col::fx);
+            t->setColour (juce::ToggleButton::tickColourId, s->colour);
             s->add (t, w, 40);
             fxAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[param], tagParam (*t, param)));
             return t;
         };
-        auto slotControls = [&] (Section* s, int slot)
+        // every effect's On, its state light (what it's doing now) and its Mix / Return
+        auto slotControls = [&] (Section* s, int slot, bool /*hasMix*/ = true, int lightW = 210)
         {
             toggle (s, fxOnParam (slot), "On", 56);
-            s->knob (fxMixParam (slot), fxSlotIsReturn (slot) ? "Return" : "Mix");
+            s->add (new FxLight (proc, slot), lightW, 40);
+        };
+        // its Mix / Return: the first knob of its row of knobs
+        auto mixKnob = [&] (Section* s, int slot) { s->knob (fxMixParam (slot), fxSlotIsReturn (slot) && ! fxSlotIsSend (slot) ? "Return" : "Mix", 66); };
+        const juce::Colour cDel = fxGroupColour (FG_Delays), cRev = fxGroupColour (FG_Reverbs), cCh = fxGroupColour (FG_Chorus),
+                           cPh = fxGroupColour (FG_Phase), cWid = fxGroupColour (FG_Width);
+        auto presetsChip = [this] (Section* s)
+        {
+            auto* b = new juce::TextButton ("Space Presets...");
+            b->setTooltip ("Presets for the Space effects (Dub Delay, Spring, Gated, Plate, Widener, Dimension, IR and the ducks): they set just those, as one undo step");
+            b->onClick = [this, b]
+            {
+                juce::PopupMenu m;
+                for (int k = 1; k < MegaSynthProcessor::kNumSpacePresets; ++k) m.addItem (k + 1, MegaSynthProcessor::spacePresetName (k));
+                m.addSeparator(); m.addItem (1, MegaSynthProcessor::spacePresetName (0));
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (b), [this] (int r)
+                {
+                    if (r <= 0) return;
+                    proc.applySpacePreset (r - 1);
+                    setStatus (juce::String ("Space: ") + MegaSynthProcessor::spacePresetName (r - 1));
+                });
+            };
+            s->addTitleChip (b, 118);
+        };
+        auto chorusChip = [this] (Section* s)
+        {
+            auto* b = new juce::TextButton ("Chorus & Phase Presets...");
+            b->setTooltip ("Presets for the new choruses and phasers (Ensemble, BBD, Multi-Chorus, Script, Colour, Dual, Barber-pole, Vibe): they set just those, as one undo step");
+            b->onClick = [this, b]
+            {
+                juce::PopupMenu m;
+                for (int k = 1; k < MegaSynthProcessor::kNumChorusPresets; ++k) m.addItem (k + 1, MegaSynthProcessor::chorusPresetName (k));
+                m.addSeparator(); m.addItem (1, MegaSynthProcessor::chorusPresetName (0));
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (b), [this] (int r)
+                {
+                    if (r <= 0) return;
+                    proc.applyChorusPreset (r - 1);
+                    setStatus (juce::String ("Chorus & Phase: ") + MegaSynthProcessor::chorusPresetName (r - 1));
+                });
+            };
+            s->addTitleChip (b, 168);
         };
 
-        // ---- SPACE (the original effects, unchanged, plus Stereo Tools)
-        auto* d = own (sub[0], mk ("Tape / BBD Delay"));
+        // ================= DELAYS: Tape / BBD, Dub
+        auto* d = own (pDel, mkG (FG_Delays, "Tape / BBD Delay  (A send effect: Return sets how much is heard. Sync locks the time to the song.)"));
+        presetsChip (d);
+        slotControls (d, FS_Delay, false);
         d->choice (P_delaySync, "Delay Sync", 150);
         d->choice (P_flutterSync, "Flutter Sync", 150);
         d->newRow();
         for (auto [idx, n] : { std::pair<int, const char*> { P_delayTime, "Time" }, { P_delayFeedback, "Feedback" }, { P_tapeTone, "Tone" },
                                { P_tapeFlutter, "Flutter" }, { P_delayMix, "Return" } })
             d->knob (idx, n);
-        auto* r = own (sub[0], mk ("90s Reverb + Shimmer"));
-        r->addTitleChip (new ParamToggle (proc, P_sxRevFreeze, "Freeze", col::fx), 80);   // (v0.1.70)
+        auto* dub = own (pDel, mkG (FG_Delays, "Dub Delay  (A ping-pong delay with filters and saturation in its feedback: Feedback goes to 110%, where the repeats "
+                                  "build up into a dub runaway, held back by a soft limiter so it never runs away to clipping. Throw: in Hold, only "
+                                  "what plays while you hold the Throw pad (or its learned note / CC, or the automatable Throw parameter) goes into "
+                                  "the delay, and the repeats ring on after you let go; Latch: each press switches it on or off; Always: a normal "
+                                  "delay. Return: how much is heard. Its duck is on the Ducking page.)"));
+        presetsChip (dub);
+        slotControls (dub, FS_Dub);
+        dub->choice (P_sxDubSync, "Sync", 120);
+        dub->choice (P_sxDubMode, "Throw Mode", 110);
+        auto* throwBtn = new MomentaryParamButton (proc, P_sxDubThrow, "THROW", juce::Colour (0xffff9f43),
+                                                   [this] { return proc.getEngine().fx().dubSending() && juce::roundToInt (proc.param (P_sxDubMode)->convertFrom0to1 (proc.param (P_sxDubMode)->getValue())) != 2; });
+        throwBtn->setTooltip ("Throw: hold to send into the Dub Delay (Hold mode), or press to switch it on and off (Latch). Lit while it sends.");
+        dub->add (throwBtn, 110, 56);
+        auto* tLearn = new juce::TextButton ("Learn");
+        tLearn->setTooltip ("Learn the Throw pad: press, then hit a pad (a note) or press a button that sends a CC");
+        tLearn->setClickingTogglesState (false);
+        tLearn->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffff9f43));
+        tLearn->onClick = [this] { proc.throwPadLearn = ! proc.throwPadLearn.load(); };
+        auto* tClear = new juce::TextButton ("Clear");
+        tClear->onClick = [this] { proc.throwPadLearn = false; proc.throwPadKind = 0; proc.throwPadNum = -1; setStatus ("Throw pad cleared"); };
+        dub->add (tLearn, 60, 26); dub->add (tClear, 52, 26);
+        auto* tLabel = new juce::Label();
+        tLabel->setColour (juce::Label::textColourId, col::text);
+        tLabel->setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+        dub->add (tLabel, 200, 26);
+        dub->newRow();
+        mixKnob (dub, FS_Dub);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_sxDubTime, "Time" }, { P_sxDubFb, "Feedback" }, { P_sxDubHP, "Low Cut" }, { P_sxDubLP, "High Cut" },
+                               { P_sxDubRes, "Resonance" }, { P_sxDubDrive, "Drive" }, { P_sxDubWidth, "Ping-Pong" } })
+            dub->knob (idx, n);
+        auto* dlTicker = pDel->own (new StoreTicker());
+        dlTicker->tick = [this, tLabel, tLearn]
+        {
+            const bool learning = proc.throwPadLearn.load();
+            const juce::String t = learning ? juce::String ("Pad: hit a pad or move a CC...") : "Pad: " + proc.throwPadText();
+            if (tLabel->getText() != t) tLabel->setText (t, juce::dontSendNotification);
+            tLearn->setToggleState (learning, juce::dontSendNotification);
+        };
+        pDel->onResize = [pDel, d, dub]
+        {
+            const int g = 10, W = pDel->getWidth(), y = 6;
+            d->setBounds (g, y, W - 2 * g, 176);
+            dub->setBounds (g, y + 186, W - 2 * g, 226);
+        };
+
+        // ================= REVERBS: 90s + Shimmer, Reverse, Plate, Gated, Spring, IR (the page scrolls)
+        auto* r = own (pRv, mkG (FG_Reverbs, "90s Reverb + Shimmer  (A send effect, with the Reverse reverb in the same Rack slot (Reverbs). Freeze holds the tail.)"));
+        presetsChip (r);
+        slotControls (r, FS_Reverb, false, 230);
+        r->addTitleChip (new ParamToggle (proc, P_sxRevFreeze, "Freeze", cRev), 80);   // (v0.1.70)
         r->choice (P_reverbSync, "Reverb / Shimmer Sync", 170);
         r->newRow();
         for (auto [idx, n] : { std::pair<int, const char*> { P_reverbSize, "Size" }, { P_reverbTone, "Tone" }, { P_shimmerBright, "Shimmer Bright" },
                                { P_reverbMix, "Reverb" }, { P_shimmerMix, "Shimmer" } })
             r->knob (idx, n);
-        auto* c = own (sub[0], mk ("Juno Chorus"));
-        c->choice (P_chorusSync, "Chorus Sync", 150);
-        c->newRow();
-        for (auto [idx, n] : { std::pair<int, const char*> { P_chorusRate, "Rate" }, { P_chorusDepth, "Depth" }, { P_chorusMix, "Return" } })
-            c->knob (idx, n);
-        auto* v = own (sub[0], mk ("Reverse Pitch Shifter Reverb"));
+        auto* v = own (pRv, mkG (FG_Reverbs, "Reverse Pitch Shifter Reverb  (Part of the Reverbs slot: its On is the 90s Reverb's.)"));
         v->choice (P_reverseSync, "Reverse Sync", 150);
         v->newRow();
         for (auto [idx, n] : { std::pair<int, const char*> { P_reverseTime, "Time" }, { P_reversePitch, "Pitch Drift" }, { P_reverseMix, "Return" } })
             v->knob (idx, n);
-        auto* st = own (sub[0], mk ("Stereo Tools  (mono-safe: the mono sum is never changed)"));
-        toggle (st, P_fxOnStereo, "On", 56);
+        auto* pl = own (pRv, mkG (FG_Reverbs, "Plate Reverb  (After Jon Dattorro's plate (1997): dense and bright, with no early reflections, good on snares and "
+                                 "leads. Mod moves the tail a little so it doesn't ring. Freeze holds the tail.)"));
+        slotControls (pl, FS_Plate);
+        pl->add (new ParamToggle (proc, P_sxPlFreeze, "Freeze", cRev), 86, 40);
+        mixKnob (pl, FS_Plate);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_sxPlDecay, "Decay" }, { P_sxPlDamp, "Damping" }, { P_sxPlPre, "Pre-delay" },
+                               { P_sxPlWidth, "Width" }, { P_sxPlMod, "Mod" } })
+            pl->knob (idx, n);
+        auto* gt = own (pRv, mkG (FG_Reverbs, "Gated Reverb  (A big room (an 8-line feedback delay network) cut off by a gate: it opens for Length after each "
+                                 "trigger - the input crossing Threshold, the break's kicks or snares, either sequencer, the sidechain, notes or "
+                                 "the Duck note - and closes hard (Hard) or falls away over the Length (Curved). The GATE light shows it opening. "
+                                 "On a held pad it opens once, at the start: it's made for hits. Freeze holds it open and ringing.)"));
+        slotControls (gt, FS_Gated, true, 260);
+        gt->choice (P_sxGateTrig, "Trigger", 150);
+        gt->choice (P_sxGateSync, "Length", 100);
+        gt->choice (P_sxGateShape, "Gate", 90);
+        gt->add (new ParamToggle (proc, P_sxGateFreeze, "Freeze", cRev), 86, 40);
+        gt->newRow();
+        mixKnob (gt, FS_Gated);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_sxGateSize, "Size" }, { P_sxGatePre, "Pre-delay" }, { P_sxGateTone, "Tone" },
+                               { P_sxGateLen, "Length (ms)" }, { P_sxGateThr, "Threshold" } })
+            gt->knob (idx, n);
+        auto* spr = own (pRv, mkG (FG_Reverbs, "Spring Reverb  (Two or three modelled springs: each a loop through a chain of stretched all-pass filters, which "
+                                  "gives the dispersive \"drip\" chirp of a real tank. Tension: how much it drips. Kick the tank: the crash of a "
+                                  "knocked spring unit (the button, or MIDI-learn / automate it). Freeze holds the springs ringing. A model, not a "
+                                  "capture of any particular unit.)"));
+        slotControls (spr, FS_Spring);
+        spr->choice (P_sxSprCount, "Springs", 110);
+        auto* kick = new MomentaryParamButton (proc, P_sxSprKick, "KICK THE TANK", juce::Colour (0xffff6b6b), nullptr);
+        kick->setTooltip ("A knock on the tank: noise and a thump straight into the springs");
+        spr->add (kick, 130, 56);
+        spr->add (new ParamToggle (proc, P_sxSprFreeze, "Freeze", cRev), 86, 40);
+        spr->newRow();
+        mixKnob (spr, FS_Spring);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_sxSprTension, "Tension" }, { P_sxSprDecay, "Decay" }, { P_sxSprTone, "Tone" } })
+            spr->knob (idx, n);
+        auto* ir = own (pRv, mkG (FG_Reverbs, "IR Reverb  (Convolution with an impulse: your own WAV / AIFF (up to 10 s, saved inside the project like the breaks) "
+                                 "or a built-in one - Room and Hall made from noise, Plate and Spring taken from this synth's own plate and spring. "
+                                 "Length trims it; Reverse plays it backwards. It loads in the background (with this window closed too); until "
+                                 "then it shows loading... and is silent.)"));
+        slotControls (ir, FS_Ir);
+        ir->choice (P_sxIrType, "Impulse", 120);
+        auto* irLoad = new juce::TextButton ("Load...");
+        irLoad->onClick = [this]
+        {
+            irChooser = std::make_unique<juce::FileChooser> ("Choose an impulse response", juce::File(), "*.wav;*.aif;*.aiff;*.flac");
+            irChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc)
+            {
+                const auto f = fc.getResult();
+                if (! f.existsAsFile()) return;
+                if (proc.loadSampleFile (f, MegaSynthProcessor::kSlotIr))
+                {
+                    auto* prm = proc.param (P_sxIrType); prm->beginChangeGesture(); prm->setValueNotifyingHost (0.0f); prm->endChangeGesture();
+                    setStatus ("Impulse loaded: " + f.getFileName());
+                }
+                else setStatus ("Couldn't read " + f.getFileName());
+            });
+        };
+        auto* irClear = new juce::TextButton ("Clear");
+        irClear->onClick = [this] { proc.clearSample (MegaSynthProcessor::kSlotIr); setStatus ("Impulse file cleared"); };
+        ir->add (irLoad, 70, 26); ir->add (irClear, 56, 26);
+        ir->add (new ParamToggle (proc, P_sxIrReverse, "Reverse", cRev), 90, 40);
+        auto* irInfo = new juce::Label();
+        irInfo->setColour (juce::Label::textColourId, col::muted);
+        irInfo->setFont (juce::Font (juce::FontOptions (11.5f)));
+        ir->add (irInfo, 330, 26);
+        ir->newRow();
+        mixKnob (ir, FS_Ir);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_sxIrPre, "Pre-delay" }, { P_sxIrLen, "Length" }, { P_sxIrLP, "High Cut" },
+                               { P_sxIrHP, "Low Cut" }, { P_sxIrWidth, "Width" } })
+            ir->knob (idx, n);
+        auto* rvTicker = pRv->own (new StoreTicker());
+        rvTicker->tick = [this, irInfo]
+        {
+            const int type = juce::roundToInt (proc.param (P_sxIrType)->convertFrom0to1 (proc.param (P_sxIrType)->getValue()));
+            juce::String t;
+            if (type == 0) t = proc.getSample (MegaSynthProcessor::kSlotIr) != nullptr ? "File: " + proc.getSampleName (MegaSynthProcessor::kSlotIr) : juce::String ("No file loaded: Load... one");
+            else t = juce::String ("Built-in: ") + tg::kSxIrTypeLabels[juce::jlimit (0, 4, type)];
+            if (proc.param (P_sxOnIr)->getValue() > 0.5f) t << (proc.getEngine().fx().irReady() ? "  (ready)" : "  (loading...)");
+            if (irInfo->getText() != t) irInfo->setText (t, juce::dontSendNotification);
+        };
+        pRv->onResize = [pRv, r, v, pl, gt, spr, ir]
+        {
+            const int g = 10, W = pRv->getWidth(), w2 = (W - g * 3) / 2, y = 6;
+            r->setBounds (g, y, w2, 176);
+            v->setBounds (g * 2 + w2, y, w2, 176);
+            pl->setBounds (g, y + 184, W - 2 * g, 128);
+            gt->setBounds (g, y + 320, W - 2 * g, 176);
+            spr->setBounds (g, y + 504, W - 2 * g, 190);
+            ir->setBounds (g, y + 702, W - 2 * g, 176);
+        };
+
+        // ================= CHORUS & PHASE (the page scrolls): choruses on the left, phasers on the right
+        auto* c = own (pCp, mkG (FG_Chorus, "Juno Chorus  (A send effect: Return sets how much is heard.)"));
+        chorusChip (c);
+        slotControls (c, FS_Chorus, false, 230);
+        c->choice (P_chorusSync, "Chorus Sync", 120);
+        c->newRow();
+        for (auto [idx, n] : { std::pair<int, const char*> { P_chorusRate, "Rate" }, { P_chorusDepth, "Depth" }, { P_chorusMix, "Return" } })
+            c->knob (idx, n);
+        auto* dm = own (pCp, mkG (FG_Chorus, "Dimension Chorus  (In the style of the Roland SDD-320: two short delays swept in opposite directions and cross-mixed, "
+                                "for width without an obvious wobble. Modes 1-4 get deeper and faster; press more than one to combine them, like "
+                                "the original's buttons. It adds width, so on a mono sound listen in stereo. An approximation of its idea, not a "
+                                "model of its circuit.)"));
+        slotControls (dm, FS_Dim, true, 170);
+        for (int m = 0; m < 4; ++m) dm->add (new ParamToggle (proc, P_sxDim1 + m, juce::String (m + 1), cCh), 48, 40);
+        mixKnob (dm, FS_Dim);
+        auto* en = own (pCp, mkG (FG_Chorus, "Ensemble  (A string-machine tri-chorus, after the Solina / ARP ensemble idea: three delayed copies swept by a slow "
+                                "and a fast LFO, 120 degrees apart, spread across the field. Speed Mix: from the slow, lush sweep (left) to the fast "
+                                "shimmer (right). Tone darkens the copies like the original's bucket brigades. Mix 50% is dry and wet equally.)"));
+        slotControls (en, FS_Ens, true, 170);
+        mixKnob (en, FS_Ens);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_cpEnsDepth, "Depth" }, { P_cpEnsSpeed, "Speed Mix" }, { P_cpEnsTone, "Tone" } })
+            en->knob (idx, n, 66);
+        auto* bb = own (pCp, mkG (FG_Chorus, "BBD Chorus  (After the Boss CE pedals: one bucket-brigade style delay swept by a triangle, its dark filtering and a "
+                                "touch of its clipping. Stereo turns the right side's sweep the other way (0: mono chorus). Bright opens the filter. "
+                                "Sync locks the rate to the song.)"));
+        slotControls (bb, FS_Bbd, true, 170);
+        bb->add (new ParamToggle (proc, P_cpBbdBright, "Bright", cCh), 80, 40);
+        bb->choice (P_cpBbdSync, "Sync", 110);
+        bb->newRow();
+        mixKnob (bb, FS_Bbd);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_cpBbdRate, "Rate" }, { P_cpBbdDepth, "Depth" }, { P_cpBbdStereo, "Stereo" } })
+            bb->knob (idx, n, 66);
+        auto* mc = own (pCp, mkG (FG_Chorus, "Multi-Chorus  (2 to 8 voices, each its own sweep (a little faster each, so they never line up), spread across "
+                                "the field by Spread. Feedback (+/-) makes it ring and flange. Changing Voices fades them in and out.)"));
+        slotControls (mc, FS_Multi, true, 170);
+        mc->choice (P_cpMulVoices, "Voices", 96);
+        mc->choice (P_cpMulSync, "Sync", 110);
+        mc->newRow();
+        mixKnob (mc, FS_Multi);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_cpMulSpread, "Spread" }, { P_cpMulRate, "Rate" }, { P_cpMulDepth, "Depth" }, { P_cpMulFb, "Feedback" } })
+            mc->knob (idx, n, 66);
+        auto* fl = own (pCp, mkG (FG_Phase, "Flanger / Phaser"));
+        slotControls (fl, FS_Flanger, true, 170);
+        fl->choice (P_flpMode, "Mode", 100);
+        fl->choice (P_flpSync, "Sync", 80);
+        fl->choice (P_flpStages, "Phaser", 100);
+        fl->newRow();
+        mixKnob (fl, FS_Flanger);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_flpRate, "Rate" }, { P_flpDepth, "Depth" }, { P_flpFeedback, "Feedback" },
+                               { P_flpManual, "Manual" }, { P_flpSpread, "Spread" }, { P_flpEnvSens, "Env Sens" } })
+            fl->knob (idx, n, 66);
+        toggle (fl, P_flpTZ, "Through-Zero", 120);
+        toggle (fl, P_flpEnv, "Envelope", 100)->setTooltip ("The sweep follows the input level instead of the LFO");
+        auto* sc = own (pCp, mkG (FG_Phase, "Script Phase  (A 4-stage phaser after the MXR Phase 90: script logo, smooth, with no feedback; Feedback adds the "
+                                "block logo's resonance. Speed or Sync.)"));
+        chorusChip (sc);
+        slotControls (sc, FS_Script, true, 140);
+        sc->add (new ParamToggle (proc, P_cpScrFb, "Feedback", cPh), 96, 40);
+        sc->choice (P_cpScrSync, "Sync", 90);
+        mixKnob (sc, FS_Script);
+        sc->knob (P_cpScrSpeed, "Speed", 66);
+        auto* co = own (pCp, mkG (FG_Phase, "Colour Phase  (A 4-stage phaser after the Electro-Harmonix Small Stone: a wider sweep; the Colour switch turns the "
+                                "feedback up for its vocal, resonant sound.)"));
+        slotControls (co, FS_Colour, true, 140);
+        co->add (new ParamToggle (proc, P_cpColColour, "Colour", cPh), 86, 40);
+        co->choice (P_cpColSync, "Sync", 90);
+        mixKnob (co, FS_Colour);
+        co->knob (P_cpColRate, "Rate", 66);
+        auto* du = own (pCp, mkG (FG_Phase, "Dual Phaser  (Two 6-stage phasers, after the Mu-Tron Bi-Phase. Parallel: A on the left, B on the right (stereo); "
+                                "Series: A then B. Link runs B at A's rate, a quarter turn behind; unlinked, B has its own Rate. Sync applies to A "
+                                "(and to B when linked).)"));
+        slotControls (du, FS_Dual, true, 170);
+        du->choice (P_cpDualMode, "Routing", 130);
+        du->add (new ParamToggle (proc, P_cpDualLink, "Link", cPh), 70, 40);
+        du->choice (P_cpDualSync, "Sync", 100);
+        du->newRow();
+        mixKnob (du, FS_Dual);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_cpDualRateA, "Rate A" }, { P_cpDualRateB, "Rate B" }, { P_cpDualDepth, "Depth" }, { P_cpDualFb, "Feedback" } })
+            du->knob (idx, n, 66);
+        auto* bp = own (pCp, mkG (FG_Phase, "Barber-pole Phaser  (An endless sweep: three phasers a third of a sweep apart, each fading in at one end and out "
+                                "at the other, so the notches seem to rise (or fall) for ever, like a Shepard tone. Speed: sweeps per second (or "
+                                "Sync: one per bar, half bar...).)"));
+        slotControls (bp, FS_Barber, true, 170);
+        bp->choice (P_cpBarDir, "Direction", 90);
+        bp->choice (P_cpBarSync, "Sync", 100);
+        bp->newRow();
+        mixKnob (bp, FS_Barber);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_cpBarSpeed, "Speed" }, { P_cpBarFb, "Feedback" } })
+            bp->knob (idx, n, 66);
+        auto* vb = own (pCp, mkG (FG_Phase, "Vibe  (After the Uni-Vibe: 4 unequal stages swept by a lamp and photocell (quick to brighten, slow to fade), "
+                                "which gives its throb. Chorus: dry and shifted together; Vibrato: the shifted sound only (pitch wobble).)"));
+        slotControls (vb, FS_Vibe, true, 170);
+        vb->choice (P_cpVibeMode, "Mode", 96);
+        vb->choice (P_cpVibeSync, "Sync", 100);
+        vb->newRow();
+        mixKnob (vb, FS_Vibe);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_cpVibeSpeed, "Speed" }, { P_cpVibeInt, "Intensity" } })
+            vb->knob (idx, n, 66);
+        pCp->onResize = [pCp, c, dm, en, bb, mc, fl, sc, co, du, bp, vb]
+        {
+            const int g = 10, W = pCp->getWidth(), w2 = (W - g * 3) / 2, y = 6, rx = g * 2 + w2;
+            c->setBounds (g, y, w2, 176);
+            dm->setBounds (g, y + 184, w2, 126);
+            en->setBounds (g, y + 318, w2, 126);
+            bb->setBounds (g, y + 452, w2, 176);
+            mc->setBounds (g, y + 636, w2, 176);
+            fl->setBounds (rx, y, w2, 222);
+            sc->setBounds (rx, y + 230, w2, 126);
+            co->setBounds (rx, y + 364, w2, 126);
+            du->setBounds (rx, y + 498, w2, 176);
+            bp->setBounds (rx, y + 682, w2, 176);
+            vb->setBounds (rx, y + 866, w2, 176);
+        };
+
+        // ================= WIDTH: Stereo Tools, the micro-pitch Widener
+        auto* st = own (pW, mkG (FG_Width, "Stereo Tools  (mono-safe: the mono sum is never changed)"));
+        presetsChip (st);
+        slotControls (st, FS_Stereo, false);
         toggle (st, P_sttMono, "Bass Mono", 110)->setTooltip ("Removes the stereo spread below Mono Below, so the sub stays centred");
         for (auto [idx, n] : { std::pair<int, const char*> { P_sttMonoFreq, "Mono Below" }, { P_sttWidth, "Width" }, { P_sttHaas, "Haas" }, { P_fxMixStereo, "Mix" } })
             st->knob (idx, n);
-
-        // ---- v0.1.70: the new Space effects, on their own pages (Dub & Spring, Reverbs, Width, Ducking)
+        auto* wd = own (pW, mkG (FG_Width, "Micro-pitch Widener  (Two copies of the sound, one pitched up and one down by Cents, each a little delayed, on the two "
+                                "sides: very wide, H3000-style. Low Cut keeps the lows out of the copies, so the bass stays mono. The mono sum "
+                                "keeps the dry sound in full: nothing cancels. It only adds width: listen in stereo; its light shows how much.)"));
+        slotControls (wd, FS_Widen);
+        mixKnob (wd, FS_Widen);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_sxWidCents, "Cents" }, { P_sxWidDelay, "Delay" }, { P_sxWidLowCut, "Low Cut" }, { P_sxWidWidth, "Width" } })
+            wd->knob (idx, n);
+        auto* wNote = keep (pW, new juce::Label ({}, "Dimension Chorus is on the Chorus & Phase page (its light there shows the width it adds)."));
+        wNote->setColour (juce::Label::textColourId, col::muted);
+        wNote->setFont (juce::Font (juce::FontOptions (12.0f)));
+        pW->onResize = [pW, st, wd, wNote]
         {
-            const juce::Colour fxc = col::fx;
-            auto presetsChip = [this] (Section* s)
-            {
-                auto* b = new juce::TextButton ("Space Presets...");
-                b->setTooltip ("Presets for the new Space effects only (Dub Delay, Spring, Gated, Plate, Widener, Dimension, IR and the ducks): they set just those, as one undo step");
-                b->onClick = [this, b]
-                {
-                    juce::PopupMenu m;
-                    for (int k = 1; k < MegaSynthProcessor::kNumSpacePresets; ++k) m.addItem (k + 1, MegaSynthProcessor::spacePresetName (k));
-                    m.addSeparator(); m.addItem (1, MegaSynthProcessor::spacePresetName (0));
-                    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (b), [this] (int r)
-                    {
-                        if (r <= 0) return;
-                        proc.applySpacePreset (r - 1);
-                        setStatus (juce::String ("Space: ") + MegaSynthProcessor::spacePresetName (r - 1));
-                    });
-                };
-                s->addTitleChip (b, 118);
-            };
-            // Dub & Spring
-            auto* pDS = addPage ("Dub & Spring");
-            auto* dub = own (pDS, mk ("Dub Delay  (A ping-pong delay with filters and saturation in its feedback: Feedback goes to 110%, where the repeats "
-                                      "build up into a dub runaway, held back by a soft limiter so it never runs away to clipping. Throw: in Hold, only "
-                                      "what plays while you hold the Throw pad (or its learned note / CC, or the automatable Throw parameter) goes into "
-                                      "the delay, and the repeats ring on after you let go; Latch: each press switches it on or off; Always: a normal "
-                                      "delay. Return: how much is heard. Its duck is on the Ducking page.)"));
-            presetsChip (dub);
-            slotControls (dub, FS_Dub);
-            dub->choice (P_sxDubSync, "Sync", 120);
-            dub->choice (P_sxDubMode, "Throw Mode", 110);
-            auto* throwBtn = new MomentaryParamButton (proc, P_sxDubThrow, "THROW", juce::Colour (0xffff9f43),
-                                                       [this] { return proc.getEngine().fx().dubSending() && juce::roundToInt (proc.param (P_sxDubMode)->convertFrom0to1 (proc.param (P_sxDubMode)->getValue())) != 2; });
-            throwBtn->setTooltip ("Throw: hold to send into the Dub Delay (Hold mode), or press to switch it on and off (Latch). Lit while it sends.");
-            dub->add (throwBtn, 110, 56);
-            auto* tLearn = new juce::TextButton ("Learn");
-            tLearn->setTooltip ("Learn the Throw pad: press, then hit a pad (a note) or press a button that sends a CC");
-            tLearn->setClickingTogglesState (false);
-            tLearn->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffff9f43));
-            tLearn->onClick = [this] { proc.throwPadLearn = ! proc.throwPadLearn.load(); };
-            auto* tClear = new juce::TextButton ("Clear");
-            tClear->onClick = [this] { proc.throwPadLearn = false; proc.throwPadKind = 0; proc.throwPadNum = -1; setStatus ("Throw pad cleared"); };
-            dub->add (tLearn, 60, 26); dub->add (tClear, 52, 26);
-            auto* tLabel = new juce::Label();
-            tLabel->setColour (juce::Label::textColourId, col::text);
-            tLabel->setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
-            dub->add (tLabel, 200, 26);
-            dub->newRow();
-            for (auto [idx, n] : { std::pair<int, const char*> { P_sxDubTime, "Time" }, { P_sxDubFb, "Feedback" }, { P_sxDubHP, "Low Cut" }, { P_sxDubLP, "High Cut" },
-                                   { P_sxDubRes, "Resonance" }, { P_sxDubDrive, "Drive" }, { P_sxDubWidth, "Ping-Pong" } })
-                dub->knob (idx, n);
-            auto* spr = own (pDS, mk ("Spring Reverb  (Two or three modelled springs: each a loop through a chain of stretched all-pass filters, which "
-                                      "gives the dispersive \"drip\" chirp of a real tank. Tension: how much it drips. Kick the tank: the crash of a "
-                                      "knocked spring unit (the button, or MIDI-learn / automate it). Freeze holds the springs ringing. A model, not a "
-                                      "capture of any particular unit.)"));
-            slotControls (spr, FS_Spring);
-            spr->choice (P_sxSprCount, "Springs", 110);
-            auto* kick = new MomentaryParamButton (proc, P_sxSprKick, "KICK THE TANK", juce::Colour (0xffff6b6b), nullptr);
-            kick->setTooltip ("A knock on the tank: noise and a thump straight into the springs");
-            spr->add (kick, 130, 56);
-            spr->add (new ParamToggle (proc, P_sxSprFreeze, "Freeze", fxc), 86, 40);
-            spr->newRow();
-            for (auto [idx, n] : { std::pair<int, const char*> { P_sxSprTension, "Tension" }, { P_sxSprDecay, "Decay" }, { P_sxSprTone, "Tone" } })
-                spr->knob (idx, n);
-            auto* dsTicker = pDS->own (new StoreTicker());
-            dsTicker->tick = [this, tLabel, tLearn]
-            {
-                const bool learning = proc.throwPadLearn.load();
-                const juce::String t = learning ? juce::String ("Pad: hit a pad or move a CC...") : "Pad: " + proc.throwPadText();
-                if (tLabel->getText() != t) tLabel->setText (t, juce::dontSendNotification);
-                tLearn->setToggleState (learning, juce::dontSendNotification);
-            };
-            pDS->onResize = [pDS, dub, spr]
-            {
-                const int g = 10, W = pDS->getWidth(), y = 6;
-                dub->setBounds (g, y, W - 2 * g, 222);
-                spr->setBounds (g, y + 232, W - 2 * g, 222);
-            };
+            const int g = 10, W = pW->getWidth(), y = 6;
+            st->setBounds (g, y, W - 2 * g, 136);
+            wd->setBounds (g, y + 144, W - 2 * g, 136);
+            wNote->setBounds (g + 4, y + 288, W - 2 * g, 22);
+        };
 
-            // Reverbs: Plate, Gated, IR
-            auto* pRv = addPage ("Reverbs");
-            auto* pl = own (pRv, mk ("Plate Reverb  (After Jon Dattorro's plate (1997): dense and bright, with no early reflections, good on snares and "
-                                     "leads. Mod moves the tail a little so it doesn't ring. Freeze holds the tail.)"));
-            presetsChip (pl);
-            slotControls (pl, FS_Plate);
-            pl->add (new ParamToggle (proc, P_sxPlFreeze, "Freeze", fxc), 86, 40);
-            for (auto [idx, n] : { std::pair<int, const char*> { P_sxPlDecay, "Decay" }, { P_sxPlDamp, "Damping" }, { P_sxPlPre, "Pre-delay" },
-                                   { P_sxPlWidth, "Width" }, { P_sxPlMod, "Mod" } })
-                pl->knob (idx, n);
-            auto* gt = own (pRv, mk ("Gated Reverb  (A big room (an 8-line feedback delay network) cut off by a gate: it opens for Length after each "
-                                     "trigger - the input crossing Threshold, the break's kicks or snares, either sequencer, the sidechain, notes or "
-                                     "the Duck note - and closes hard (Hard) or falls away over the Length (Curved). Freeze holds it open and ringing.)"));
-            slotControls (gt, FS_Gated);
-            gt->choice (P_sxGateTrig, "Trigger", 150);
-            gt->choice (P_sxGateSync, "Length", 100);
-            gt->choice (P_sxGateShape, "Gate", 90);
-            gt->add (new ParamToggle (proc, P_sxGateFreeze, "Freeze", fxc), 86, 40);
-            gt->newRow();
-            for (auto [idx, n] : { std::pair<int, const char*> { P_sxGateSize, "Size" }, { P_sxGatePre, "Pre-delay" }, { P_sxGateTone, "Tone" },
-                                   { P_sxGateLen, "Length (ms)" }, { P_sxGateThr, "Threshold" } })
-                gt->knob (idx, n);
-            auto* ir = own (pRv, mk ("IR Reverb  (Convolution with an impulse: your own WAV / AIFF (up to 10 s, saved inside the project like the breaks) "
-                                     "or a built-in one - Room and Hall made from noise, Plate and Spring taken from this synth's own plate and spring. "
-                                     "Length trims it; Reverse plays it backwards. It loads in the background, so it may take a moment to be heard.)"));
-            slotControls (ir, FS_Ir);
-            ir->choice (P_sxIrType, "Impulse", 120);
-            auto* irLoad = new juce::TextButton ("Load...");
-            irLoad->onClick = [this]
-            {
-                irChooser = std::make_unique<juce::FileChooser> ("Choose an impulse response", juce::File(), "*.wav;*.aif;*.aiff;*.flac");
-                irChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc)
-                {
-                    const auto f = fc.getResult();
-                    if (! f.existsAsFile()) return;
-                    if (proc.loadSampleFile (f, MegaSynthProcessor::kSlotIr))
-                    {
-                        auto* prm = proc.param (P_sxIrType); prm->beginChangeGesture(); prm->setValueNotifyingHost (0.0f); prm->endChangeGesture();
-                        setStatus ("Impulse loaded: " + f.getFileName());
-                    }
-                    else setStatus ("Couldn't read " + f.getFileName());
-                });
-            };
-            auto* irClear = new juce::TextButton ("Clear");
-            irClear->onClick = [this] { proc.clearSample (MegaSynthProcessor::kSlotIr); setStatus ("Impulse file cleared"); };
-            ir->add (irLoad, 70, 26); ir->add (irClear, 56, 26);
-            ir->add (new ParamToggle (proc, P_sxIrReverse, "Reverse", fxc), 90, 40);
-            auto* irInfo = new juce::Label();
-            irInfo->setColour (juce::Label::textColourId, col::muted);
-            irInfo->setFont (juce::Font (juce::FontOptions (11.5f)));
-            ir->add (irInfo, 330, 26);
-            ir->newRow();
-            for (auto [idx, n] : { std::pair<int, const char*> { P_sxIrPre, "Pre-delay" }, { P_sxIrLen, "Length" }, { P_sxIrLP, "High Cut" },
-                                   { P_sxIrHP, "Low Cut" }, { P_sxIrWidth, "Width" } })
-                ir->knob (idx, n);
-            auto* rvTicker = pRv->own (new StoreTicker());
-            rvTicker->tick = [this, irInfo]
-            {
-                const int type = juce::roundToInt (proc.param (P_sxIrType)->convertFrom0to1 (proc.param (P_sxIrType)->getValue()));
-                juce::String t;
-                if (type == 0) t = proc.getSample (MegaSynthProcessor::kSlotIr) != nullptr ? "File: " + proc.getSampleName (MegaSynthProcessor::kSlotIr) : juce::String ("No file loaded: Load... one");
-                else t = juce::String ("Built-in: ") + tg::kSxIrTypeLabels[juce::jlimit (0, 4, type)];
-                if (proc.param (P_sxOnIr)->getValue() > 0.5f) t << (proc.getEngine().fx().irReady() ? "  (ready)" : "  (loading...)");
-                if (irInfo->getText() != t) irInfo->setText (t, juce::dontSendNotification);
-            };
-            pRv->onResize = [pRv, pl, gt, ir]
-            {
-                const int g = 10, W = pRv->getWidth(), y = 6;
-                pl->setBounds (g, y, W - 2 * g, 128);
-                gt->setBounds (g, y + 134, W - 2 * g, 220);
-                ir->setBounds (g, y + 360, W - 2 * g, 220);
-            };
-
-            // Width: the micro-pitch widener and the dimension chorus
-            auto* pW = addPage ("Width");
-            auto* wd = own (pW, mk ("Micro-pitch Widener  (Two copies of the sound, one pitched up and one down by Cents, each a little delayed, on the two "
-                                    "sides: very wide, H3000-style. Low Cut keeps the lows out of the copies, so the bass stays mono. The mono sum "
-                                    "keeps the dry sound in full: nothing cancels.)"));
-            presetsChip (wd);
-            slotControls (wd, FS_Widen);
-            for (auto [idx, n] : { std::pair<int, const char*> { P_sxWidCents, "Cents" }, { P_sxWidDelay, "Delay" }, { P_sxWidLowCut, "Low Cut" }, { P_sxWidWidth, "Width" } })
-                wd->knob (idx, n);
-            auto* dm = own (pW, mk ("Dimension Chorus  (In the style of the Roland SDD-320: two short delays swept in opposite directions and cross-mixed, "
-                                    "for width without an obvious wobble. Modes 1-4 get deeper and faster; press more than one to combine them, like "
-                                    "the original's buttons. An approximation of its idea, not a model of its circuit.)"));
-            slotControls (dm, FS_Dim);
-            for (int m = 0; m < 4; ++m) dm->add (new ParamToggle (proc, P_sxDim1 + m, juce::String (m + 1), fxc), 60, 40);
-            pW->onResize = [pW, wd, dm]
-            {
-                const int g = 10, W = pW->getWidth(), y = 6;
-                wd->setBounds (g, y, W - 2 * g, 130);
-                dm->setBounds (g, y + 138, W - 2 * g, 130);
-            };
-
-            // Ducking: every reverb and delay can dip under the hits
+        // ================= DUCKING: every reverb and delay can dip under the hits
+        {
             auto* pDk = addPage ("Ducking");
             auto* dk = own (pDk, mk ("Ducking  (Each reverb and delay can dip under the hits, then bloom back in the gaps: Amount (how far), Attack (how "
                                      "fast it dips), Release (how long it takes to come back) and what it listens to - the break's kicks, snares or any "
                                      "hit (sorted as Break React sorts them), the main or the layer sequencer's hits, the sidechain input, the synth's "
-                                     "notes, or a Duck note of your own (it isn't played, so a MIDI clip can duck anywhere). Amount 0 is off.)"));
+                                     "notes, or a Duck note of your own (it isn't played, so a MIDI clip can duck anywhere). Amount 0 is off. The "
+                                     "choruses and phasers have no duck: they don't build up a tail to clear.)"));
             presetsChip (dk);
             static const char* duckNames[SD_COUNT] = { "Tape Delay", "90s Reverbs", "Dub Delay", "Spring", "Gated Reverb", "Plate", "IR Reverb" };
             for (auto* h : { "", "Amount", "Attack", "Release", "Listens to", "Gain now" })
@@ -4319,16 +4601,16 @@ void MegaSynthEditor::buildPages()
                 l->setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
                 dk->add (l, juce::String (h).isEmpty() ? 130 : (juce::String (h) == "Listens to" ? 170 : 150), 20);
             }
-            for (int d = 0; d < SD_COUNT; ++d)
+            for (int dd = 0; dd < SD_COUNT; ++dd)
             {
                 dk->newRow();
-                auto* l = new juce::Label ({}, duckNames[d]);
+                auto* l = new juce::Label ({}, duckNames[dd]);
                 l->setColour (juce::Label::textColourId, col::text);
                 l->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
                 dk->add (l, 130, 24);
-                for (int fld : { SDF_Amt, SDF_Att, SDF_Rel }) dk->add (new BareSlider (proc, sxDuckParam (d, fld), fxc), 150, 24);
-                dk->add (new BareChoice (proc, sxDuckParam (d, SDF_Src)), 170, 24);
-                dk->add (new DuckMeter (proc, d), 150, 24);
+                for (int fld : { SDF_Amt, SDF_Att, SDF_Rel }) dk->add (new BareSlider (proc, sxDuckParam (dd, fld), col::fx), 150, 24);
+                dk->add (new BareChoice (proc, sxDuckParam (dd, SDF_Src)), 170, 24);
+                dk->add (new DuckMeter (proc, dd), 150, 24);
             }
             dk->newRow();
             dk->knob (P_sxDuckNote, "Duck Note", 80);
@@ -4342,17 +4624,20 @@ void MegaSynthEditor::buildPages()
                 dk->setBounds (g, y, W - 2 * g, 400);
             };
         }
-        // ---- DIRT
-        auto* sm = own (sub[1], mk ("Vintage Sampler"));
+
+        // ================= DIRT
+        auto* sm = own (pDirt, mkG (FG_Dirt, "Vintage Sampler"));
         slotControls (sm, FS_Sampler);
         sm->choice (P_smpModel, "Model", 220)->box.setTooltip ("SP-1200: 12-bit, 26 kHz, no anti-alias filter.  S950: 12-bit at Rate, with anti-alias and the resonant Filter.  "
                                                                 "E-mu: 12-bit, 27.8 kHz, gentle filters.  Free: Bits, Rate and Anti-Alias as set.");
         toggle (sm, P_smpAA, "Anti-Alias (Free)", 150);
+        mixKnob (sm, FS_Sampler);
         for (auto [idx, n] : { std::pair<int, const char*> { P_smpBits, "Bits (Free)" }, { P_smpRate, "Rate" }, { P_smpCutoff, "Filter" },
                                { P_smpRes, "Resonance" }, { P_smpNoise, "Noise" }, { P_smpDrive, "Input Clip" } })
             sm->knob (idx, n);
-        auto* mb = own (sub[1], mk ("Multiband  (OTT style: upward and downward compression in three bands)"));
+        auto* mb = own (pDirt, mkG (FG_Dirt, "Multiband  (OTT style: upward and downward compression in three bands)"));
         slotControls (mb, FS_Multiband);
+        mixKnob (mb, FS_Multiband);
         for (auto [idx, n] : { std::pair<int, const char*> { P_mbcXLow, "Low / Mid" }, { P_mbcXHigh, "Mid / High" }, { P_mbcDepth, "Depth" },
                                { P_mbcTime, "Time" }, { P_mbcGain, "Output" } })
             mb->knob (idx, n);
@@ -4362,36 +4647,27 @@ void MegaSynthEditor::buildPages()
             for (auto [off, n] : { std::pair<int, const char*> { 0, "Up" }, { 1, "Down" }, { 2, "In" }, { 3, "Out" } })
                 mb->knob (P_mbcUpL + 4 * b + off, juce::String (bandName[b]) + " " + n);
         toggle (mb, P_mbcSidechain, "Sidechain", 100)->setTooltip ("The downward compression listens to the sidechain input (a kick or break routed in from another track) instead of the synth");
-        auto* metersC = keep (sub[1], new MultibandMeters (proc));
+        auto* metersC = keep (pDirt, new MultibandMeters (proc));
 
-        // ---- MOTION
-        auto* br = own (sub[2], mk ("Beat Repeat"));
+        // ================= MOTION
+        auto* br = own (pMot, mkG (FG_Motion, "Beat Repeat"));
         slotControls (br, FS_Stutter);
         br->choice (P_rptLength, "Length", 80);
         br->choice (P_rptDuration, "Duration", 100);
         br->choice (P_rptMidi, "MIDI Trigger", 150);
         br->newRow();
+        mixKnob (br, FS_Stutter);
         for (auto [idx, n] : { std::pair<int, const char*> { P_rptShrink, "Shrink" }, { P_rptPitch, "Pitch Drop" }, { P_rptGate, "Gate" }, { P_rptChance, "Chance" } })
             br->knob (idx, n);
         toggle (br, P_rptReverse, "Reverse", 90);
         toggle (br, P_rptDna, "DNA Gate", 100)->setTooltip ("Each DNA Sequencer step starts a repeat");
         auto* pad = new StutterPad (proc);
         br->add (pad, 170, 60);
-        auto* fl = own (sub[2], mk ("Flanger / Phaser"));
-        slotControls (fl, FS_Flanger);
-        fl->choice (P_flpMode, "Mode", 100);
-        fl->choice (P_flpSync, "Sync", 80);
-        fl->choice (P_flpStages, "Phaser", 100);
-        fl->newRow();
-        for (auto [idx, n] : { std::pair<int, const char*> { P_flpRate, "Rate" }, { P_flpDepth, "Depth" }, { P_flpFeedback, "Feedback" },
-                               { P_flpManual, "Manual" }, { P_flpSpread, "Spread" }, { P_flpEnvSens, "Env Sens" } })
-            fl->knob (idx, n);
-        toggle (fl, P_flpTZ, "Through-Zero", 120);
-        toggle (fl, P_flpEnv, "Envelope", 100)->setTooltip ("The sweep follows the input level instead of the LFO");
-        auto* vs = own (sub[2], mk ("Volume Shaper  (sidechain-style pump)"));
+        auto* vs = own (pMot, mkG (FG_Motion, "Volume Shaper  (sidechain-style pump)"));
         slotControls (vs, FS_Shaper);
         vs->choice (P_vshRate, "Cycle", 80);
         vs->choice (P_vshTrig, "Trigger", 160);
+        mixKnob (vs, FS_Shaper);
         vs->knob (P_vshDepth, "Depth");
         vs->knob (P_vshSmooth, "Smooth");
         const char* presetNames[] = { "Pump", "Gate", "1/8 Pump", "Triplet" };
@@ -4407,40 +4683,33 @@ void MegaSynthEditor::buildPages()
         vs->knob (P_schAttack, "Attack");
         vs->knob (P_schRelease, "Release");
         vs->add (new SidechainMeter (proc), 150, 60);
-        auto* curve = keep (sub[2], new ShaperCurve (proc));
+        auto* curve = keep (pMot, new ShaperCurve (proc));
+        auto* motNote = keep (pMot, new juce::Label ({}, "Flanger / Phaser is on the Chorus & Phase page."));
+        motNote->setColour (juce::Label::textColourId, col::muted);
+        motNote->setFont (juce::Font (juce::FontOptions (12.0f)));
 
-        // ---- RACK
-        auto* rack = keep (sub[3], new RackList (proc));
+        // ================= RACK
+        auto* rack = keep (pRack, new RackList (proc));
 
-        auto* sp = sub[0]; auto* dp = sub[1]; auto* mp = sub[2]; auto* rp = sub[3];
-        sp->onResize = [sp, d, r, c, v, st]
+        pDirt->onResize = [pDirt, sm, mb, metersC]
         {
-            const int g = 10, W = sp->getWidth(), w2 = (W - g * 3) / 2, y = 6;
-            d->setBounds (g, y, w2, 176);
-            r->setBounds (g * 2 + w2, y, w2, 176);
-            c->setBounds (g, y + 184, w2, 176);
-            v->setBounds (g * 2 + w2, y + 184, w2, 176);
-            st->setBounds (g, y + 368, W - 2 * g, 136);
-        };
-        dp->onResize = [dp, sm, mb, metersC]
-        {
-            const int g = 10, W = dp->getWidth(), y = 6;
+            const int g = 10, W = pDirt->getWidth(), y = 6;
             sm->setBounds (g, y, W - 2 * g, 136);
             mb->setBounds (g, y + 146, W - 2 * g - 230, 236);
             metersC->setBounds (W - g - 220, y + 146, 220, 236);
         };
-        mp->onResize = [mp, br, fl, vs, curve]
+        pMot->onResize = [pMot, br, vs, curve, motNote]
         {
-            const int g = 10, W = mp->getWidth(), w2 = (W - g * 3) / 2, y = 6;
-            br->setBounds (g, y, w2, 290);
-            fl->setBounds (g * 2 + w2, y, w2, 290);
-            vs->setBounds (g, y + 296, 600, 258);
-            curve->setBounds (g + 610, y + 296, W - 2 * g - 610, 258);
+            const int g = 10, W = pMot->getWidth(), y = 6;
+            br->setBounds (g, y, W - 2 * g, 176);
+            vs->setBounds (g, y + 184, 600, 258);
+            curve->setBounds (g + 610, y + 184, W - 2 * g - 610, 258);
+            motNote->setBounds (g + 4, y + 450, W - 2 * g, 22);
         };
-        rp->onResize = [rp, rack]
+        pRack->onResize = [pRack, rack]
         {
             const int g = 10;
-            rack->setBounds (g, 10, rp->getWidth() - 2 * g, rp->getHeight() - 20);
+            rack->setBounds (g, 6, pRack->getWidth() - 2 * g, pRack->getHeight() - 10);
         };
     }
 
@@ -5062,9 +5331,10 @@ void MegaSynthEditor::resized()
     originalBtn.setBounds (1076, 44, 110, 28);
     status.setBounds (812, 74, 374, 14);
     tabs.setBounds (0, 88, kDesignW, 670);
-    octDown.setBounds (10, 768, 70, 28);
-    octUp.setBounds (10, 802, 70, 28);
-    octLabel.setBounds (6, 836, 80, 40);
+    octDown.setBounds (8, 766, 37, 24);
+    octUp.setBounds (47, 766, 37, 24);
+    octLabel.setBounds (4, 790, 84, 30);
+    if (keysSwitch != nullptr) keysSwitch->setBounds (6, 822, 80, 62);   // (v0.1.72: Synth / Breaks / Auto)
     keyboard.setBounds (90, 764, kDesignW - 100 - 236, 120);
     if (midiMonitor != nullptr) midiMonitor->setBounds (kDesignW - 240, 764, 230, 120);
     keyboard.setKeyWidth ((float) keyboard.getWidth() / 36.0f);
@@ -5435,7 +5705,7 @@ void MegaSynthEditor::timerCallback()
     {
         lastOct = kbOct;
         keyboard.setKeyPressBaseOctave (5 + kbOct);
-        octLabel.setText ("Keys: C" + juce::String (4 + kbOct) + "\nZ / X shift", juce::dontSendNotification);
+        octLabel.setText ("C" + juce::String (4 + kbOct) + " (Z / X)", juce::dontSendNotification);
     }
 
     for (int k = 0; k < 2; ++k)

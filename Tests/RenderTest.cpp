@@ -8757,6 +8757,88 @@ int main()
         std::cout << "osc3Gain default " << make()->param (P_osc3Gain)->convertFrom0to1 (make()->param (P_osc3Gain)->getValue()) << std::endl;
         return 0;
     }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_V175DEMO", {}).isNotEmpty())
+    {
+        // v0.1.75: two DX7-format voices made here (no factory sounds), each played as v0.1.74 loaded it (no LFO, no pitch envelope)
+        // and then as v0.1.75 does: a brass with a pitch "blip" at each note's start and delayed vibrato, and a bell-pad with tremolo
+        const double bpm = 172.0, beat = 60.0 / bpm;
+        auto brass = [] {
+            tg::dx7::Voice v; v.name = "TEST BRASS"; v.algorithm = 21; v.feedback = 6; v.transpose = 24;
+            for (int k = 0; k < 6; ++k)
+            {
+                auto& o = v.op[k]; o.coarse = 1; o.fine = 0; o.detune = 7 + (k % 3) - 1;
+                o.rate[0] = k == 0 || k == 2 ? 60 : 72; o.rate[1] = 40; o.rate[2] = 30; o.rate[3] = 50;
+                o.level[0] = 99; o.level[1] = 92; o.level[2] = 88; o.level[3] = 0;
+                o.outLevel = (k == 0 || k == 2 || k == 3 || k == 4) ? 92 : 80; o.kvs = 2;
+            }
+            v.lfoWave = 4; v.lfoSpeed = 34; v.lfoDelay = 45; v.lfoPmd = 14; v.pms = 4; v.lfoSync = 1;
+            v.pitchLevel[0] = 50; v.pitchLevel[1] = 50; v.pitchLevel[2] = 50; v.pitchLevel[3] = 44;   // (starts a little flat and scoops up)
+            v.pitchRate[0] = 40; v.pitchRate[1] = 99; v.pitchRate[2] = 99; v.pitchRate[3] = 60;
+            return v;
+        }();
+        auto pad = [] {
+            tg::dx7::Voice v; v.name = "TEST TREMPAD"; v.algorithm = 4; v.feedback = 3; v.transpose = 24;
+            for (int k = 0; k < 6; ++k)
+            {
+                auto& o = v.op[k]; const bool car = (k % 2) == 0;
+                o.coarse = car ? 1 : (k == 1 ? 3 : 2); o.fine = 0; o.detune = car ? 6 + k : 7;
+                o.rate[0] = 40; o.rate[1] = 30; o.rate[2] = 25; o.rate[3] = 35;
+                o.level[0] = 99; o.level[1] = 90; o.level[2] = 85; o.level[3] = 0;
+                o.outLevel = car ? 88 : 62; o.ams = car ? 3 : 0;
+            }
+            v.lfoWave = 0; v.lfoSpeed = 30; v.lfoDelay = 0; v.lfoAmd = 45; v.lfoPmd = 6; v.pms = 3; v.lfoSync = 0;
+            return v;
+        }();
+        juce::AudioBuffer<float> all (2, 0);
+        auto append = [&] (const juce::AudioBuffer<float>& b) { const int at = all.getNumSamples(); all.setSize (2, at + b.getNumSamples(), true, true); for (int c = 0; c < 2; ++c) all.copyFrom (c, at, b, c, 0, b.getNumSamples()); };
+        for (int v = 0; v < 2; ++v)
+            for (int after = 0; after < 2; ++after)
+            {
+                auto p = make();
+                for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain, P_osc4Gain, P_wt2Gain, P_ringGain, P_delayMix, P_chorusMix, P_shimmerMix, P_reverseMix }) setP (*p, i, 0.0f);
+                for (int i : { P_lfo1Depth, P_lfo2Depth, P_lfo3Depth }) setP (*p, i, 0.0f);
+                setP (*p, P_reverbMix, 0.18f); setP (*p, P_ampA, 0.002f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.5f); setP (*p, P_filterCutoff, 9000.0f); setP (*p, P_fEnvAmt, 0.0f);
+                p->loadDx7Voice (0, v == 0 ? brass : pad);
+                setP (*p, tg::coreEnvModeParam (0), 1.0f);
+                if (! after) { setP (*p, tg::coreExParam (0, CX_Vib), 0.0f); setP (*p, tg::coreExParam (0, CX_Trem), 0.0f); setP (*p, tg::coreExParam (0, CX_Peg), 0.0f); }   // (as v0.1.74 loaded it)
+                std::vector<std::pair<double, juce::MidiMessage>> ev;
+                if (v == 0)
+                {
+                    // a brass line: short stabs, then a held note for the vibrato
+                    const int notes[6] = { 57, 60, 62, 64, 62, 69 };
+                    const double at[6] = { 0, 1, 1.5, 2.5, 3, 4 }, len[6] = { 0.7, 0.4, 0.8, 0.4, 0.8, 7.5 };
+                    for (int i = 0; i < 6; ++i) { ev.push_back ({ at[i] * beat, juce::MidiMessage::noteOn (1, notes[i], (juce::uint8) 100) }); ev.push_back ({ (at[i] + len[i]) * beat, juce::MidiMessage::noteOff (1, notes[i]) }); }
+                }
+                else
+                {
+                    const int ch[2][3] = { { 57, 64, 72 }, { 53, 60, 69 } };
+                    for (int i = 0; i < 2; ++i) for (int nn : ch[i]) { ev.push_back ({ i * 6.0 * beat, juce::MidiMessage::noteOn (1, nn, (juce::uint8) 85) }); ev.push_back ({ (i * 6.0 + 5.5) * beat, juce::MidiMessage::noteOff (1, nn) }); }
+                }
+                juce::AudioBuffer<float> c; tg::resetVoiceRandom(); render (*p, 12.0 * beat + 0.6, ev, &c);
+                append (c);
+            }
+        const float pk = all.getMagnitude (0, all.getNumSamples());
+        if (pk > 0.0f) all.applyGain (juce::Decibels::decibelsToGain (-1.0f) / pk);
+        writeWav (all, sr, "v175_dx7_lfo_pitchenv_before_after.wav");
+        {
+            // the Core A page with the brass loaded, scrolled down to its LFO and Pitch Envelope
+            auto p = make(); p->loadDx7Voice (0, brass);
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            ed->setSize (1200, 890);
+            dynamic_cast<MegaSynthEditor*> (ed.get())->showPage ("Core A");
+            std::function<void (juce::Component*)> scroll = [&] (juce::Component* c)
+            {
+                if (auto* vp = dynamic_cast<juce::Viewport*> (c)) if (vp->isVisible() && vp->getViewedComponent() != nullptr && vp->getViewedComponent()->getHeight() > 800) vp->setViewPosition (0, 400);
+                for (auto* ch : c->getChildren()) if (ch->isVisible()) scroll (ch);
+            };
+            scroll (ed.get());
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto f = juce::File::getCurrentWorkingDirectory().getChildFile ("renders").getChildFile ("v175_core_a_dx7_brass.png"); f.deleteFile();
+            juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        }
+        std::cout << "V175DEMO written" << std::endl;
+        return 0;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_V174DEMO", {}).isNotEmpty())
     {
         // v0.1.74 reel, 172 BPM, 16 bars and a 2-bar frozen tail: five parts, each its own Mega Synth (as five tracks in a DAW), mixed.
@@ -10961,6 +11043,217 @@ int main()
             CHECK (fxOk, "every effect's click-through opens its page (" + (e != nullptr ? e->shownPageForTests() : juce::String()) + ")");
         }
     };
+    // ------------------------------------------------------------------ v0.1.75
+    auto v175Tests = [&]
+    {
+        std::cout << "v0.1.75: the Core slots' own LFO and pitch envelope, and DX7 voices bringing theirs" << std::endl;
+        const double fs = sr;
+        auto coreOnly = [&] (MegaSynthProcessor& p, int slot)
+        {
+            for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain, P_osc4Gain, P_wt2Gain, P_ringGain,
+                           P_reverbMix, P_delayMix, P_chorusMix, P_shimmerMix, P_reverseMix }) setP (p, i, 0.0f);
+            setP (p, tg::coreParam (slot, CS_Engine), 1.0f);
+            setP (p, P_ampA, 0.001f); setP (p, P_ampS, 1.0f); setP (p, P_ampR, 0.3f); setP (p, P_filterCutoff, 20000.0f); setP (p, P_fEnvAmt, 0.0f);
+            setP (p, P_analogDrift, 0.0f); for (int i : { P_lfo1Depth, P_lfo2Depth, P_lfo3Depth }) setP (p, i, 0.0f);   // (no drift, no global LFOs: the pitch is measured to the cent)
+        };
+        auto x = [] (int slot, int w) { return tg::coreExParam (slot, w); };
+        // the average frequency between upward zero crossings in [t0, t0 + w]
+        auto freqAt = [&] (const juce::AudioBuffer<float>& c, double t0, double w)
+        {
+            const int a = std::max (1, (int) (t0 * fs)), b = std::min (c.getNumSamples(), (int) ((t0 + w) * fs));
+            double first = -1, last = -1; int n = 0;
+            for (int i = a; i < b; ++i)
+            {
+                const float y0 = c.getSample (0, i - 1), y1 = c.getSample (0, i);
+                if (y0 < 0.0f && y1 >= 0.0f) { const double t = (i - 1) + y0 / (y0 - y1); if (first < 0) first = t; else ++n; last = t; }
+            }
+            return n > 0 ? n * fs / (last - first) : 0.0;
+        };
+        auto centsOf = [] (double f, double ref) { return f > 0.0 ? 1200.0 * std::log2 (f / ref) : -9999.0; };
+        auto play = [&] (std::function<void (MegaSynthProcessor&)> set, double secs, double offAt, int note = 57)
+        {
+            auto p = make(); coreOnly (*p, 0); set (*p);
+            juce::AudioBuffer<float> c; tg::resetVoiceRandom();
+            render (*p, secs, { { 0.0, juce::MidiMessage::noteOn (1, note, (juce::uint8) 100) }, { offAt, juce::MidiMessage::noteOff (1, note) } }, &c);
+            return c;
+        };
+        auto same = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+        {
+            if (a.getNumSamples() != b.getNumSamples()) return false;
+            for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < a.getNumSamples(); ++i) if (a.getSample (ch, i) != b.getSample (ch, i)) return false;
+            return true;
+        };
+        // ---- 1. at their defaults (and with every other LFO / envelope setting moved, while Vibrato / Tremolo are 0 and the envelope is off), nothing changes
+        {
+            const auto base = play ([] (MegaSynthProcessor&) {}, 1.0, 0.6);
+            const auto moved = play ([&] (MegaSynthProcessor& p)
+            {
+                setP (p, x (0, CX_LfoWave), 5.0f); setP (p, x (0, CX_LfoRate), 13.0f); setP (p, x (0, CX_LfoDelay), 0.3f); setP (p, x (0, CX_LfoSync), 0.0f);
+                for (int k = 0; k < 6; ++k) setP (p, x (0, CX_Trem1 + k), 0.3f);
+                for (int i = 0; i < 4; ++i) { setP (p, x (0, CX_PegT1 + i), 0.2f); setP (p, x (0, CX_PegL1 + i), 7.0f); }
+            }, 1.0, 0.6);
+            CHECK (same (base, moved), "with Vibrato and Tremolo at 0 and the Pitch Envelope off, the Core is bit-for-bit as before");
+            const auto tremNoSens = play ([&] (MegaSynthProcessor& p) { setP (p, x (0, CX_Trem), 1.0f); for (int k = 0; k < 6; ++k) setP (p, x (0, CX_Trem1 + k), 0.0f); }, 1.0, 0.6);
+            CHECK (same (base, tremNoSens), "Tremolo with every operator's Trem at 0 changes nothing");
+        }
+        // ---- 2. Vibrato: 100 cents at 4 Hz (triangle): the pitch swings +/- 100 cents, four times a second
+        {
+            const auto c = play ([&] (MegaSynthProcessor& p) { setP (p, x (0, CX_Vib), 100.0f); setP (p, x (0, CX_LfoRate), 4.0f); }, 2.2, 2.1);
+            double lo = 1e9, hi = -1e9; int turns = 0; double prev = 0.0, prevD = 0.0;
+            for (double t = 0.2; t < 2.0; t += 0.01)
+            {
+                const double cc = centsOf (freqAt (c, t, 0.012), 220.0);
+                lo = std::min (lo, cc); hi = std::max (hi, cc);
+                const double d = cc - prev;
+                if (t > 0.21 && d * prevD < 0.0 && std::abs (d) > 1.0) ++turns;
+                if (std::abs (d) > 1.0) prevD = d;
+                prev = cc;
+            }
+            std::cout << "  Vibrato 100 cents at 4 Hz: the pitch from " << juce::String (lo, 1) << " to " << juce::String (hi, 1) << " cents, " << turns << " turns in 1.8 s (expect about 14)" << std::endl;
+            CHECK (lo < -80.0 && lo > -120.0 && hi > 80.0 && hi < 120.0, "Vibrato swings the pitch by its amount, up and down");
+            CHECK (turns >= 11 && turns <= 17, "the LFO runs at its Rate");
+        }
+        // ---- 3. Delay: nothing for the first half, full at Delay
+        {
+            const auto c = play ([&] (MegaSynthProcessor& p) { setP (p, x (0, CX_Vib), 100.0f); setP (p, x (0, CX_LfoRate), 4.0f); setP (p, x (0, CX_LfoDelay), 1.0f); }, 2.0, 1.9);
+            double early = 0.0, late = 0.0;
+            for (double t = 0.05; t < 0.45; t += 0.01) early = std::max (early, std::abs (centsOf (freqAt (c, t, 0.012), 220.0)));
+            for (double t = 1.05; t < 1.6; t += 0.01) late = std::max (late, std::abs (centsOf (freqAt (c, t, 0.012), 220.0)));
+            std::cout << "  LFO Delay 1 s: the biggest bend before 0.45 s " << juce::String (early, 1) << " cents, after 1 s " << juce::String (late, 1) << " cents" << std::endl;
+            CHECK (early < 5.0 && late > 80.0, "the LFO's Delay holds it off, then it's fully in");
+        }
+        // ---- 4. Tremolo: a square LFO turning the carrier down and up
+        {
+            const auto c = play ([&] (MegaSynthProcessor& p) { setP (p, x (0, CX_Trem), 0.5f); setP (p, x (0, CX_LfoWave), 3.0f); setP (p, x (0, CX_LfoRate), 2.0f); }, 2.0, 1.9);
+            auto rmsAt = [&] (double t0) { double e = 0; const int a = (int) (t0 * fs), n = (int) (0.05 * fs); for (int i = a; i < a + n; ++i) e += (double) c.getSample (0, i) * c.getSample (0, i); return std::sqrt (e / n); };
+            const double up = rmsAt (0.05), down = rmsAt (0.30);   // (square: the first half of each cycle at full level, the second half down)
+            const double db = 20.0 * std::log10 (down / up);
+            std::cout << "  Tremolo 50%, square: the level " << juce::String (db, 2) << " dB in its low half (expect -6.0)" << std::endl;
+            CHECK (std::abs (db + 6.02) < 0.5, "Tremolo turns the operator down by its depth");
+            // and no click where the square turns: the level ramps across a 16-sample control block
+            float jump = 0; for (int i = (int) (0.2 * fs); i < (int) (1.8 * fs); ++i) jump = std::max (jump, std::abs (c.getSample (0, i) - c.getSample (0, i - 1)));
+            const float sineStep = (float) (up * std::sqrt (2.0) * 2.0 * kPi * 220.0 / fs);
+            CHECK (jump < sineStep * 1.3f, "a square Tremolo doesn't click (" + juce::String (jump / sineStep, 2) + " of the sine's own step)");
+        }
+        // ---- 5. the pitch envelope: start an octave up, down to the note in 0.1 s, hold; on release, down a fifth in 0.2 s
+        {
+            const auto c = play ([&] (MegaSynthProcessor& p)
+            {
+                setP (p, x (0, CX_Peg), 1.0f);
+                setP (p, x (0, CX_PegL1 + 3), 12.0f);  setP (p, x (0, CX_PegT1), 0.1f); setP (p, x (0, CX_PegL1), 0.0f);
+                setP (p, x (0, CX_PegT1 + 1), 0.0f);   setP (p, x (0, CX_PegL1 + 1), 0.0f);
+                setP (p, x (0, CX_PegT1 + 2), 0.0f);   setP (p, x (0, CX_PegL1 + 2), 0.0f);
+                setP (p, x (0, CX_PegT1 + 3), 0.2f);
+                setP (p, P_ampR, 1.0f);
+            }, 1.5, 0.8);
+            const double s0 = centsOf (freqAt (c, 0.005, 0.012), 220.0) / 100.0, s1 = centsOf (freqAt (c, 0.045, 0.012), 220.0) / 100.0;
+            const double held = centsOf (freqAt (c, 0.4, 0.05), 220.0) / 100.0, rel = centsOf (freqAt (c, 1.01, 0.05), 220.0) / 100.0;   // (the operator's own 0.2 s release ends the note at about 1.1 s)
+            std::cout << "  Pitch Envelope (Level 4 +12, to 0 in 0.1 s; release to +12 in 0.2 s): " << juce::String (s0, 2) << " st at 11 ms, " << juce::String (s1, 2)
+                      << " st at 51 ms, " << juce::String (held, 2) << " st held, " << juce::String (rel, 2) << " st after release" << std::endl;
+            CHECK (s0 > 9.5 && s0 < 12.0 && s1 > 4.0 && s1 < 7.5 && std::abs (held) < 0.05 && std::abs (rel - 12.0) < 0.1, "the pitch envelope moves the pitch from Level 4 to 1, holds Level 3, and goes back on release");
+        }
+        // ---- 6. Key Sync off: each note starts the LFO somewhere else
+        {
+            auto startCents = [&] (bool sync, int note)
+            {
+                const auto c = play ([&] (MegaSynthProcessor& p) { setP (p, x (0, CX_Vib), 100.0f); setP (p, x (0, CX_LfoRate), 1.0f); setP (p, x (0, CX_LfoSync), sync ? 1.0f : 0.0f); setP (p, x (0, CX_LfoWave), 4.0f); }, 0.2, 0.15, note);
+                return centsOf (freqAt (c, 0.02, 0.03), 440.0 * std::pow (2.0, (note - 69) / 12.0));
+            };
+            const double a = startCents (true, 57), b = startCents (true, 60);
+            double lo = 1e9, hi = -1e9; juce::String offs;
+            for (int nn : { 50, 53, 57, 60, 62, 64, 67 }) { const double v = startCents (false, nn); lo = std::min (lo, v); hi = std::max (hi, v); offs << juce::roundToInt (v) << " "; }
+            std::cout << "  LFO start (sine, 1 Hz, 100 cents; the first 50 ms): Key Sync on " << juce::String (a, 1) << " / " << juce::String (b, 1) << " cents; off, seven notes: " << offs << "cents" << std::endl;
+            CHECK (std::abs (a - 22.0) < 6.0 && std::abs (b - 22.0) < 6.0 && hi - lo > 40.0, "Key Sync starts the LFO at its start; off, notes start it in different places");
+        }
+        // ---- 7. Core B too, and unison
+        {
+            auto p = make(); coreOnly (*p, 1); setP (*p, tg::coreParam (1, CS_Uni), 3.0f);
+            setP (*p, x (1, CX_Vib), 100.0f); setP (*p, x (1, CX_LfoRate), 4.0f);
+            juce::AudioBuffer<float> c; render (*p, 1.0, chord (0.0, 0.9, { 57 }), &c);
+            auto q = make(); coreOnly (*q, 1); setP (*q, tg::coreParam (1, CS_Uni), 3.0f);
+            juce::AudioBuffer<float> d; render (*q, 1.0, chord (0.0, 0.9, { 57 }), &d);
+            double diff = 0; for (int i = 0; i < c.getNumSamples(); ++i) diff = std::max (diff, (double) std::abs (c.getSample (0, i) - d.getSample (0, i)));
+            CHECK (diff > 0.05, "Core B's LFO works, with unison");
+        }
+        // ---- 8. DX7 voices: the LFO and the pitch envelope come with them
+        {
+            tg::dx7::Voice v;
+            v.name = "LFO TEST"; v.algorithm = 31;
+            for (int k = 0; k < 6; ++k) { auto& o = v.op[k]; o.outLevel = k == 0 ? 99 : 0; o.rate[0] = 99; o.rate[1] = 50; o.rate[2] = 50; o.rate[3] = 50; o.level[0] = 99; o.level[1] = 99; o.level[2] = 99; o.level[3] = 0; o.ams = k == 0 ? 2 : 0; }
+            v.lfoSpeed = 35; v.lfoDelay = 0; v.lfoPmd = 50; v.lfoAmd = 20; v.pms = 3; v.lfoWave = 4; v.lfoSync = 1;
+            v.pitchLevel[0] = 60; v.pitchLevel[1] = 50; v.pitchLevel[2] = 50; v.pitchLevel[3] = 40;
+            v.pitchRate[0] = 70; v.pitchRate[1] = 99; v.pitchRate[2] = 99; v.pitchRate[3] = 60;
+            auto p = make();
+            const auto approx = p->loadDx7Voice (0, v);
+            auto plain = [&] (int i) { return p->param (i)->convertFrom0to1 (p->param (i)->getValue()); };
+            const double expVib = 1200.0 * 33.0 / 255.0 * 50.0 / 99.0;
+            std::cout << "  DX7 voice (speed 35, PMD 50, PMS 3, AMD 20, AMS 2 on op 1, pitch levels 60/50/50/40): Rate " << juce::String (plain (x (0, CX_LfoRate)), 2) << " Hz, Vibrato "
+                      << juce::String (plain (x (0, CX_Vib)), 1) << " cents, Tremolo " << juce::String (plain (x (0, CX_Trem)), 3) << ", Op 1 Trem " << juce::String (plain (x (0, CX_Trem1)), 2)
+                      << ", Pitch Env " << (plain (x (0, CX_Peg)) > 0.5f ? "on" : "off") << ", levels " << juce::String (plain (x (0, CX_PegL1)), 2) << " / " << juce::String (plain (x (0, CX_PegL1 + 3)), 2)
+                      << " st, time 1 " << juce::String (plain (x (0, CX_PegT1)), 3) << " s" << std::endl;
+            CHECK (std::abs (plain (x (0, CX_LfoRate)) - 5.6f) < 0.1f && std::abs (plain (x (0, CX_Vib)) - expVib) < 0.2 && std::abs (plain (x (0, CX_Trem)) - 20.0f / 99.0f) < 0.01f
+                   && std::abs (plain (x (0, CX_Trem1)) - 0.43f) < 0.01f && plain (x (0, CX_Trem1 + 1)) < 0.01f && plain (x (0, CX_LfoWave)) > 3.5f && plain (x (0, CX_LfoSync)) > 0.5f,
+                   "a DX7 voice's LFO comes into the slot's LFO (rate, vibrato, tremolo, each operator's sensitivity, wave, sync)");
+            CHECK (plain (x (0, CX_Peg)) > 0.5f && std::abs (plain (x (0, CX_PegL1)) - 3.75f) < 0.01f && std::abs (plain (x (0, CX_PegL1 + 3)) + 3.75f) < 0.01f && plain (x (0, CX_PegT1)) > 0.0f,
+                   "a DX7 voice's pitch envelope comes into the slot's pitch envelope");
+            bool noOldNote = true; for (auto& a : approx) noOldNote = noOldNote && ! a.contains ("not carried over");
+            CHECK (noOldNote, "the approximations no longer say the LFO or pitch envelope isn't carried over");
+            // a voice with no LFO depth and a flat pitch envelope: off, so it plays exactly as v0.1.74 loaded it
+            v.lfoPmd = 0; v.lfoAmd = 0; for (int i = 0; i < 4; ++i) v.pitchLevel[i] = 50;
+            auto q = make(); q->loadDx7Voice (0, v);
+            auto pq = [&] (int i) { return q->param (i)->convertFrom0to1 (q->param (i)->getValue()); };
+            CHECK (pq (x (0, CX_Vib)) == 0.0f && pq (x (0, CX_Trem)) == 0.0f && pq (x (0, CX_Peg)) < 0.5f, "a voice without LFO depth or a pitch envelope leaves them off");
+            // heard: the loaded voice's pitch starts up and its vibrato is there
+            coreOnly (*p, 0);
+            juce::AudioBuffer<float> c; tg::resetVoiceRandom(); render (*p, 1.5, chord (0.0, 1.4, { 57 }), &c);
+            const double s0 = centsOf (freqAt (c, 0.002, 0.01), 220.0);
+            double lo = 1e9, hi = -1e9; for (double t = 0.6; t < 1.3; t += 0.01) { const double cc = centsOf (freqAt (c, t, 0.012), 220.0); lo = std::min (lo, cc); hi = std::max (hi, cc); }
+            std::cout << "  heard: " << juce::String (s0, 0) << " cents at the start, vibrato " << juce::String (lo, 1) << " to " << juce::String (hi, 1) << " cents" << std::endl;
+            CHECK (s0 > 100.0 && hi - lo > expVib * 1.5 && hi - lo < expVib * 2.4, "the loaded voice's pitch envelope and vibrato are heard");
+        }
+        // ---- 9. Randomise and Reset leave them off; old projects and patches load with them off; saved and undoable
+        {
+            auto p = make();
+            setP (*p, x (0, CX_Vib), 300.0f); setP (*p, x (0, CX_Peg), 1.0f);
+            tg::coregen::Options o; o.type = tg::coregen::T_Pad; o.seed = 5;
+            p->randomiseCore (0, o);
+            CHECK (p->param (x (0, CX_Vib))->getValue() == 0.0f && p->param (x (0, CX_Peg))->getValue() < 0.5f, "Randomise starts the LFO and pitch envelope from off");
+            setP (*p, x (0, CX_Vib), 300.0f); setP (*p, x (0, CX_Peg), 1.0f);
+            p->resetCoreSlot (0);
+            CHECK (p->param (x (0, CX_Vib))->getValue() == 0.0f && p->param (x (0, CX_Peg))->getValue() < 0.5f, "Reset puts them back to off");
+            setP (*p, x (1, CX_Vib), 250.0f); setP (*p, x (1, CX_PegL1), -5.0f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto r = make(); r->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (std::abs (r->param (x (1, CX_Vib))->convertFrom0to1 (r->param (x (1, CX_Vib))->getValue()) - 250.0f) < 0.5f, "saved with the project");
+            auto xml = getXmlFromBinaryForTest (mb).replace ("stateVersion=\"" + juce::String (MegaSynthProcessor::kStateVersion) + "\"", "stateVersion=\"33\"");
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*juce::parseXML (xml), old);
+            auto o2 = make(); setP (*o2, x (1, CX_Vib), 500.0f);
+            o2->setStateInformation (old.getData(), (int) old.getSize());
+            CHECK (o2->param (x (1, CX_Vib))->getValue() == 0.0f, "a v0.1.74 project loads with them off");
+            p->pushHistory ("before"); setP (*p, x (0, CX_Trem), 0.8f); p->pushHistory ("trem"); p->undo();
+            CHECK (p->param (x (0, CX_Trem))->getValue() == 0.0f, "undoable");
+        }
+        // ---- 10. CPU: 8 notes, six operators, unison 1, LFO and pitch envelope on, against off
+        {
+            auto cpu = [&] (bool on)
+            {
+                auto p = make(); coreOnly (*p, 0); p->applyCoreAlgorithm (0, 0);
+                if (on) { setP (*p, x (0, CX_Vib), 50.0f); setP (*p, x (0, CX_Trem), 0.3f); setP (*p, x (0, CX_Peg), 1.0f); setP (*p, x (0, CX_PegL1 + 3), 2.0f); }
+                double best = 1e9;
+                for (int r = 0; r < 3; ++r) { double secs = 0; render (*p, 2.0, chord (0.0, 1.9, { 48, 52, 55, 60, 64, 67, 72, 76 }), nullptr, &secs); best = std::min (best, secs / 2.0 * 100.0); }
+                return best;
+            };
+            const double off = cpu (false), on = cpu (true);
+            std::cout << "  CPU, Core A, 8 notes: " << juce::String (off, 1) << "% of a core; with the LFO and pitch envelope on " << juce::String (on, 1) << "%" << std::endl;
+            CHECK (on < off * 1.25 + 1.0, "the LFO and pitch envelope cost next to nothing");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_V175ONLY", {}).isNotEmpty())
+    {
+        v175Tests();
+        std::cout << (failures == 0 ? "V175 TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_V174ONLY", {}).isNotEmpty())
     {
         v174Tests();
@@ -11036,12 +11329,12 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.74.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.75.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         // (v0.1.69: the Fill Key and Fill Length are replaced by the Fill pad and Size, as asked; they're kept, hidden, for older projects)
         for (auto& id : before) if (ids.count (id) == 0 && id != "bsFillKey" && id != "bsFillLen") lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.74 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React, the Core A / B slots, Core Envelope, Key Entry, Slice Keys and the Break React rows added, the Breaks tab, Break 4, the layer sequencer, the Fill Pattern and pad, Fixed velocity and Break React Sequencer added; the Fill Key and Fill Length replaced by the pad and Size, the v0.1.70 Space effects, ducking and Reese additions added, the Snare Roll settings and Edit pair added, the v0.1.72 choruses and phasers and Glide Mode added, the v0.1.74 sampler settings and Vastness added; v0.1.71's 1212 and v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.75 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React, the Core A / B slots, Core Envelope, Key Entry, Slice Keys and the Break React rows added, the Breaks tab, Break 4, the layer sequencer, the Fill Pattern and pad, Fixed velocity and Break React Sequencer added; the Fill Key and Fill Length replaced by the pad and Size, the v0.1.70 Space effects, ducking and Reese additions added, the Snare Roll settings and Edit pair added, the v0.1.72 choruses and phasers and Glide Mode added, the v0.1.74 sampler settings and Vastness added, the v0.1.75 Core LFO and pitch envelope added; v0.1.71's 1212 and v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Breaks", "Mixer", "Filters", "Envelopes",
@@ -12460,6 +12753,7 @@ int main()
     spaceTests();
     v172Tests();
     v174Tests();
+    v175Tests();
     hardTests();
     lfoTests();
     arpTests();

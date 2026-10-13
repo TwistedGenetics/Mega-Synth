@@ -646,6 +646,83 @@ void Voice::updateWt (int slot, const Snapshot& s, const ModState& mod, double b
     if (w.pos < 0.0) { w.pos = startPos; w.stopped = false; }
 }
 
+// (v0.1.75) a Core slot's LFO and pitch envelope: from the start of a note
+void Voice::startCoreMod (int c, const Snapshot& s, uint32_t seed)
+{
+    auto& m = coreMod[c];
+    const int x = coreExParam (c, 0);
+    m.rng = seed * 2654435761u + 0x9e3779b9u; if (m.rng == 0) m.rng = 1;
+    auto rnd = [&m] { m.rng ^= m.rng << 13; m.rng ^= m.rng >> 17; m.rng ^= m.rng << 5; return (float) (m.rng & 0xffffff) / 16777216.0f; };
+    m.lfoPh = s.i (x + CX_LfoSync) >= 1 ? 0.0 : (double) rnd();   // (Key Sync off: each note starts the LFO somewhere else)
+    m.sh = rnd() * 2.0f - 1.0f;
+    m.t = 0.0; m.tremU = -1.0f;
+    m.pegStage = 0; m.pegT = 0.0;
+    m.pegVal = m.pegFrom = clampv (s.f (x + CX_PegL1 + 3), -48.0f, 48.0f);   // (it starts at Level 4, like the DX7's)
+}
+
+// advances it by dt; returns the pitch offset in semitones and each operator's tremolo gain (exactly 0 and 1 when unused)
+double Voice::stepCoreMod (int c, const Snapshot& s, double dt, float* trem)
+{
+    auto& m = coreMod[c];
+    const int x = coreExParam (c, 0);
+    for (int k = 0; k < CoreKernel::kOps; ++k) trem[k] = 1.0f;
+    m.t += dt;
+    m.lfoPh += clampv ((double) s.f (x + CX_LfoRate), 0.01, 60.0) * dt;
+    if (m.lfoPh >= 1.0)
+    {
+        m.lfoPh -= std::floor (m.lfoPh);
+        m.rng ^= m.rng << 13; m.rng ^= m.rng >> 17; m.rng ^= m.rng << 5;
+        m.sh = (float) (m.rng & 0xffffff) / 8388608.0f - 1.0f;   // (Sample & Hold: a new value each cycle)
+    }
+    double semis = 0.0;
+    const float vib = clampv (s.f (x + CX_Vib), 0.0f, 1200.0f), tr = clampv (s.f (x + CX_Trem), 0.0f, 1.0f);
+    if (vib > 0.0f || tr > 0.0f)
+    {
+        const double ph = m.lfoPh;
+        double w = 0.0;
+        switch (clampv (s.i (x + CX_LfoWave), 0, 5))
+        {
+            case 0: w = ph < 0.25 ? 4.0 * ph : (ph < 0.75 ? 2.0 - 4.0 * ph : 4.0 * ph - 4.0); break;   // triangle (from 0, rising)
+            case 1: w = 1.0 - 2.0 * ph; break;                                                          // saw down
+            case 2: w = 2.0 * ph - 1.0; break;                                                          // saw up
+            case 3: w = ph < 0.5 ? 1.0 : -1.0; break;                                                   // square
+            case 4: w = std::sin (2.0 * 3.14159265358979 * ph); break;                                  // sine
+            default: w = m.sh; break;                                                                   // sample & hold
+        }
+        // Delay: nothing for the first half of it, then fading in, full at Delay
+        const double d = std::max (0.0f, s.f (x + CX_LfoDelay));
+        const double fade = d <= 0.0 ? 1.0 : clampv ((m.t - 0.5 * d) / (0.5 * d), 0.0, 1.0);
+        if (vib > 0.0f) semis += vib / 100.0 * w * fade;
+        if (tr > 0.0f)
+        {
+            // (tremolo only turns operators down: fully up where the wave is at its top; smoothed over about 2 ms, so a square doesn't click)
+            const float u = (float) ((0.5 - 0.5 * w) * fade);
+            m.tremU = dt <= 0.0 || m.tremU < 0.0f ? u : m.tremU + (u - m.tremU) * (float) (1.0 - std::exp (-dt / 0.002));
+            for (int k = 0; k < CoreKernel::kOps; ++k) trem[k] = 1.0f - tr * clampv (s.f (x + CX_Trem1 + k), 0.0f, 1.0f) * m.tremU;
+        }
+    }
+    if (s.i (x + CX_Peg) >= 1)
+    {
+        // the pitch envelope: from Level 4 to Level 1 in Time 1, to Level 2 in Time 2, to Level 3 in Time 3 (held), then on release
+        // back to Level 4 in Time 4 - straight lines in semitones
+        auto L = [&] (int i) { return (double) clampv (s.f (x + CX_PegL1 + i), -48.0f, 48.0f); };
+        auto T = [&] (int i) { return (double) std::max (0.0f, s.f (x + CX_PegT1 + i)); };
+        if (released && m.pegStage < 4) { m.pegStage = 4; m.pegFrom = m.pegVal; m.pegT = 0.0; }
+        m.pegT += dt;
+        for (int guard = 0; guard < 5; ++guard)
+        {
+            if (m.pegStage == 3) { m.pegVal = L (2); break; }
+            if (m.pegStage >= 5) { m.pegVal = L (3); break; }
+            const int seg = m.pegStage == 4 ? 3 : m.pegStage;
+            const double target = L (seg == 3 ? 3 : seg), len = T (seg);
+            if (m.pegT < len) { m.pegVal = m.pegFrom + (target - m.pegFrom) * (m.pegT / len); break; }
+            m.pegT -= len; m.pegFrom = target; m.pegVal = target; ++m.pegStage;
+        }
+        semis += m.pegVal;
+    }
+    return semis;
+}
+
 void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, const ModState& mod, bool first)
 {
     const double dtc = kCtrl / sr;
@@ -788,8 +865,15 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
             for (int j = 0; j < 6; ++j) o.m[j] = clampv (op (CO_M1 + j), 0.0f, 24.0f);
             o.out = clampv (op (CO_Out), 0.0f, 1.0f);
         }
+        // (v0.1.75) the slot's own LFO (vibrato, tremolo) and pitch envelope: nothing changes while they're at 0 / off
+        const uint32_t cseed = (uint32_t) (order * 131u + (uint64_t) key + 977u * (uint64_t) c);
+        if (on && ! core[c].isStarted()) startCoreMod (c, s, cseed);
+        float trem[CoreKernel::kOps];
+        const double cmSemis = stepCoreMod (c, s, first ? 0.0 : (double) lastDt, trem);
+        for (int k = 0; k < CoreKernel::kOps; ++k) cs.op[k].trem = trem[k];
         const double pe = s.i (P_pEnvTarget) == 0 ? (double) peRatio[0] : 1.0;
         coreHz[c] = glHz * pow2 (std::round (s.f (coreParam (c, CS_Oct)))) * pow2 ((100.0 * std::round (s.f (coreParam (c, CS_Semi))) + s.f (coreParam (c, CS_Fine)) + pitch) / 1200.0) * pe;
+        if (cmSemis != 0.0) coreHz[c] *= pow2 (cmSemis / 12.0);
         if (on && ! core[c].isStarted())
         {
             core[c].start (cs, clampv (s.i (coreParam (c, CS_Retrig)), 0, 2), (uint32_t) (order * 131u + (uint64_t) key + 977u * (uint64_t) c), key, velocity);

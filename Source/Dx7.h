@@ -152,5 +152,43 @@ namespace dx7
     inline double levelGain (int l) { return l <= 0 ? 0.0 : std::pow (10.0, (double) (juce::jlimit (0, 99, l) - 99) * 0.75 / 20.0); }
     inline double ratioOf (const Op& o) { const double c = o.coarse == 0 ? 0.5 : (double) o.coarse; return c * (1.0 + o.fine / 100.0); }
     inline double fixedHzOf (const Op& o) { return std::pow (10.0, (double) (o.coarse & 3) + o.fine / 100.0); }
+    // (v0.1.75) the LFO and the pitch envelope. Approximations of the DX7's tables (from published descriptions of its behaviour)
+    // LFO speed 0-99 as Hz: about 0.06 Hz at 0 to about 49 Hz at 99
+    inline double lfoHz (int speed)
+    {
+        static const double sp[] = { 0, 5, 10, 20, 30, 35, 40, 50, 60, 70, 80, 90, 99 };
+        static const double hz[] = { 0.062, 0.5, 1.1, 2.7, 4.6, 5.6, 6.7, 9.4, 12.6, 17.0, 23.0, 32.0, 49.3 };
+        const double x = juce::jlimit (0, 99, speed);
+        for (int i = 1; i < 13; ++i)
+            if (x <= sp[i]) return hz[i - 1] * std::pow (hz[i] / hz[i - 1], (x - sp[i - 1]) / (sp[i] - sp[i - 1]));
+        return hz[12];
+    }
+    // LFO delay 0-99 as seconds (when it's fully in): 0 to about 5.5 s
+    inline double lfoDelaySeconds (int d) { const double x = juce::jlimit (0, 99, d) / 99.0; return x <= 0.0 ? 0.0 : 5.5 * std::pow (x, 1.6); }
+    // pitch modulation: depth 0-99 and sensitivity 0-7, as the vibrato's peak in cents (sensitivity 7 at depth 99: about an octave)
+    inline double vibratoCents (int pmd, int pms)
+    {
+        static const double sens[8] = { 0, 10, 20, 33, 55, 92, 153, 255 };
+        return 1200.0 * sens[juce::jlimit (0, 7, pms)] / 255.0 * juce::jlimit (0, 99, pmd) / 99.0;
+    }
+    // an operator's amplitude modulation sensitivity 0-3, as a share of the Tremolo depth
+    inline double ampModSens (int ams) { static const double t[4] = { 0.0, 0.26, 0.43, 1.0 }; return t[juce::jlimit (0, 3, ams)]; }
+    // the pitch envelope's levels: 50 is no change; each step from 50 about 3/8 of a semitone, steeper towards 0 and 99 (+/- 4 octaves)
+    inline double pitchLevelUnits (int l)
+    {
+        static const int low[18] = { -128, -116, -104, -95, -85, -76, -68, -61, -56, -52, -49, -46, -43, -41, -39, -37, -35, -33 };   // levels 0-17
+        l = juce::jlimit (0, 99, l);
+        if (l < 18) return low[l];
+        if (l > 82) return l == 99 ? 128.0 : -(double) low[100 - l];   // (mirrored about 50; 99 is +4 octaves)
+        return (double) (l - 50);
+    }
+    inline double pitchLevelSemis (int l) { return juce::jlimit (-128.0, 128.0, pitchLevelUnits (l)) * 0.375; }
+    // a pitch envelope segment's time: rate 0-99 as a speed in level units per second, over the distance between the two levels
+    inline double pitchSegmentSeconds (int rate, int fromLevel, int toLevel)
+    {
+        const double dist = std::abs (pitchLevelUnits (toLevel) - pitchLevelUnits (fromLevel));
+        if (dist <= 0.0) return 0.0;
+        return dist / (2.0 * std::pow (2.0, juce::jlimit (0, 99, rate) / 7.0));
+    }
 } // namespace dx7
 } // namespace tg

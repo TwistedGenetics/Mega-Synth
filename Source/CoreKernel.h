@@ -29,6 +29,7 @@ struct CoreOpSettings
     float dly = 0.0f, att = 0.001f, hold = 0.0f, dec = 0.3f, sus = 1.0f, rel = 0.2f;
     float m[6] {};   // to operator j (m[self] = feedback), radians
     float out = 0.0f;
+    float trem = 1.0f;   // (v0.1.75) the slot LFO's tremolo on this operator's level, this block (1: none)
 };
 
 struct CoreSettings
@@ -184,7 +185,7 @@ public:
             const auto& o = s.op[k];
             const float vg = 1.0f - o.vel + o.vel * velocity;
             const float kg = std::clamp (std::exp2 (o.key * (float) (note - 60) / 12.0f), 0.0f, 4.0f);
-            const float g = need[k] ? o.level * vg * kg : 0.0f;
+            const float g = need[k] ? o.level * vg * kg * o.trem : 0.0f;   // (x 1 exactly when there's no tremolo: unchanged)
             const float outT = need[k] ? o.out : 0.0f;
             if (first) { gain[k] = g; outG[k] = outT; }
             gainStep[k] = (g - gain[k]) * invN; gainTarget[k] = g;

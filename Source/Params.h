@@ -253,6 +253,8 @@ inline const char* const kCpVibeModeKeys[]   = { "chorus","vibrato" };
 inline const char* const kCpVibeModeLabels[] = { "Chorus","Vibrato" };
 inline const char* const kWtLoopTypeKeys[]  = { "fwd","pingpong","rev","off" };
 inline const char* const kWtLoopTypeLabels[]= { "Forward","Ping-Pong","Reverse","Off (one shot)" };
+inline const char* const kCoreLfoWaveKeys[] = { "tri","sawdown","sawup","square","sine","sh" };
+inline const char* const kCoreLfoWaveLabels[]={ "Triangle","Saw Down","Saw Up","Square","Sine","Sample & Hold" };
 inline const char* const kVsModeKeys[]       = { "hall","echo","shimmer","dark","bloom","endless","comb","tape" };
 inline const char* const kVsModeLabels[]     = { "Vast Hall","Echo Cascade","Shimmer Swell","Dark Cloud","Gated Bloom","Endless","Comb Galaxy","Tape Nebula" };
 inline const char* const kPortaModeKeys[]    = { "always","legato" };
@@ -520,6 +522,7 @@ inline const ChoiceList kListCpVibeMode = TG_LIST(kCpVibeMode);
 inline const ChoiceList kListPortaMode = TG_LIST(kPortaMode);
 inline const ChoiceList kListWtLoopType = TG_LIST(kWtLoopType);
 inline const ChoiceList kListVsMode = TG_LIST(kVsMode);
+inline const ChoiceList kListCoreLfoWave = TG_LIST(kCoreLfoWave);
 inline const ChoiceList kListSxThrow = TG_LIST(kSxThrow);
 inline const ChoiceList kListSxSprings = TG_LIST(kSxSprings);
 inline const ChoiceList kListSxGateTrig = TG_LIST(kSxGateTrig);
@@ -1997,7 +2000,49 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(vsDuckAmt, "Vastness Duck Amount", 0, 1, 0, 0.01, 0) \
     F(vsDuckAtt, "Vastness Duck Attack", 0.1, 50, 2, 0.1, 5) \
     F(vsDuckRel, "Vastness Duck Release", 20, 2000, 250, 1, 250) \
-    C(vsDuckSrc, "Vastness Duck Source", kListSxDuckSrc, 0)
+    C(vsDuckSrc, "Vastness Duck Source", kListSxDuckSrc, 0) \
+    C(cALfoWave, "Core A LFO Wave", kListCoreLfoWave, 0) \
+    F(cALfoRate, "Core A LFO Rate", 0.05, 50, 5, 0.001, -1) \
+    F(cALfoDelay,"Core A LFO Delay", 0, 5, 0, 0.001, 0.8) \
+    B(cALfoSync, "Core A LFO Key Sync", true) \
+    F(cAVib,     "Core A Vibrato", 0, 1200, 0, 0.1, 50) \
+    F(cATrem,    "Core A Tremolo", 0, 1, 0, 0.01, 0) \
+    F(cA1Trem,   "Core A Op 1 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cA2Trem,   "Core A Op 2 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cA3Trem,   "Core A Op 3 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cA4Trem,   "Core A Op 4 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cA5Trem,   "Core A Op 5 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cA6Trem,   "Core A Op 6 Tremolo", 0, 1, 1, 0.01, 0) \
+    B(cAPeg,     "Core A Pitch Env", false) \
+    F(cAPegT1,  "Core A Pitch Env Time 1", 0, 30, 0.05, 0.001, 0.5) \
+    F(cAPegT2,  "Core A Pitch Env Time 2", 0, 30, 0.3, 0.001, 0.5) \
+    F(cAPegT3,  "Core A Pitch Env Time 3", 0, 30, 0.5, 0.001, 0.5) \
+    F(cAPegT4,  "Core A Pitch Env Time 4", 0, 30, 0.4, 0.001, 0.5) \
+    F(cAPegL1,  "Core A Pitch Env Level 1", -48, 48, 0, 0.01, 0) \
+    F(cAPegL2,  "Core A Pitch Env Level 2", -48, 48, 0, 0.01, 0) \
+    F(cAPegL3,  "Core A Pitch Env Level 3", -48, 48, 0, 0.01, 0) \
+    F(cAPegL4,  "Core A Pitch Env Level 4", -48, 48, 0, 0.01, 0) \
+    C(cBLfoWave, "Core B LFO Wave", kListCoreLfoWave, 0) \
+    F(cBLfoRate, "Core B LFO Rate", 0.05, 50, 5, 0.001, -1) \
+    F(cBLfoDelay,"Core B LFO Delay", 0, 5, 0, 0.001, 0.8) \
+    B(cBLfoSync, "Core B LFO Key Sync", true) \
+    F(cBVib,     "Core B Vibrato", 0, 1200, 0, 0.1, 50) \
+    F(cBTrem,    "Core B Tremolo", 0, 1, 0, 0.01, 0) \
+    F(cB1Trem,   "Core B Op 1 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cB2Trem,   "Core B Op 2 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cB3Trem,   "Core B Op 3 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cB4Trem,   "Core B Op 4 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cB5Trem,   "Core B Op 5 Tremolo", 0, 1, 1, 0.01, 0) \
+    F(cB6Trem,   "Core B Op 6 Tremolo", 0, 1, 1, 0.01, 0) \
+    B(cBPeg,     "Core B Pitch Env", false) \
+    F(cBPegT1,  "Core B Pitch Env Time 1", 0, 30, 0.05, 0.001, 0.5) \
+    F(cBPegT2,  "Core B Pitch Env Time 2", 0, 30, 0.3, 0.001, 0.5) \
+    F(cBPegT3,  "Core B Pitch Env Time 3", 0, 30, 0.5, 0.001, 0.5) \
+    F(cBPegT4,  "Core B Pitch Env Time 4", 0, 30, 0.4, 0.001, 0.5) \
+    F(cBPegL1,  "Core B Pitch Env Level 1", -48, 48, 0, 0.01, 0) \
+    F(cBPegL2,  "Core B Pitch Env Level 2", -48, 48, 0, 0.01, 0) \
+    F(cBPegL3,  "Core B Pitch Env Level 3", -48, 48, 0, 0.01, 0) \
+    F(cBPegL4,  "Core B Pitch Env Level 4", -48, 48, 0, 0.01, 0)
 
 enum ParamIndex
 {
@@ -2057,6 +2102,10 @@ inline constexpr int rxRowParam (int row, int field)
     return row == 0 ? mainRow[field] : P_rxKOn + (row - 1) * RXF_COUNT + field;
 }
 static_assert (rxRowParam (3, RXF_Chance) == P_rxHChance && rxRowParam (2, RXF_On) == P_rxSOn, "Break React row layout");
+// (v0.1.75) each Core slot's LFO and pitch envelope: slot s starts at coreExParam (s, 0)
+enum CoreExParam { CX_LfoWave, CX_LfoRate, CX_LfoDelay, CX_LfoSync, CX_Vib, CX_Trem, CX_Trem1, CX_Peg = CX_Trem1 + 6, CX_PegT1, CX_PegL1 = CX_PegT1 + 4, CX_COUNT = CX_PegL1 + 4 };
+inline constexpr int coreExParam (int slot, int which) { return P_cALfoWave + slot * CX_COUNT + which; }
+static_assert (coreExParam (1, 0) == P_cBLfoWave && coreExParam (0, CX_COUNT - 1) == P_cAPegL4 && coreExParam (1, CX_COUNT - 1) == P_cBPegL4 && coreExParam (0, CX_Trem1 + 5) == P_cA6Trem, "Core LFO / pitch envelope layout");
 inline constexpr int coreParam (int slot, int which) { return P_cAEngine + slot * kCoreSlotStride + which; }
 inline constexpr int coreOpParam (int slot, int op, int which) { return P_cAEngine + slot * kCoreSlotStride + kCoreSlotHead + op * kCoreOpStride + which; }
 static_assert (coreParam (1, 0) == P_cBEngine && coreOpParam (0, 5, CO_Out) == P_cA6Out && coreOpParam (1, 5, CO_Out) == P_cB6Out && P_mxCoreAPan == P_cB6Out + 1, "Core parameter layout");

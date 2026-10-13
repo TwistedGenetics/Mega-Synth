@@ -223,6 +223,14 @@ namespace
             if (id.startsWith ("cA") || id.startsWith ("cB"))
                 m.unit = (id.endsWith ("Fine") || id.endsWith ("Detune")) ? "cents" : id.endsWith ("Hz") ? "Hz" : id.endsWith ("Oct") ? "oct" : id.endsWith ("Semi") ? "st"
                        : (id.endsWith ("Dly") || id.endsWith ("Att") || id.endsWith ("Hold") || id.endsWith ("Dec") || id.endsWith ("Rel")) ? "s" : juce::String();
+            if (id.startsWith ("cA") || id.startsWith ("cB"))   // (v0.1.75) the LFO and the pitch envelope
+            {
+                const auto r = id.substring (2);
+                if (r == "LfoRate") m.unit = "Hz";
+                else if (r == "LfoDelay" || r.startsWith ("PegT")) m.unit = "s";
+                else if (r == "Vib") m.unit = "cents";
+                else if (r.startsWith ("PegL")) m.unit = "st";
+            }
             if (id.startsWith ("rx")) m.unit = (id == "rxAttack" || id == "rxDecay" || id == "rxOffset" || id == "rxHuman") ? "ms" : id.endsWith ("Pitch") ? "st" : id == "rxNote" ? "note" : id.endsWith ("Cut") ? "oct" : juce::String();
             if (id.startsWith ("sx"))
                 m.unit = (id.endsWith ("Att") || id.endsWith ("Rel") || id.endsWith ("Pre") || id == "sxGateLen" || id == "sxWidDelay") ? "ms"

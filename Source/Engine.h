@@ -280,6 +280,17 @@ private:
     // the Core oscillator slots (A, B)
     CoreKernel core[2];
     CoreSettings coreSet[2];
+    // (v0.1.75) each Core slot's LFO and pitch envelope, per note
+    struct CoreMod
+    {
+        double lfoPh = 0.0, t = 0.0;      // the LFO's phase (turns) and the time since the note started
+        float sh = 0.0f, tremU = -1.0f; uint32_t rng = 1u;
+        int pegStage = 0;                 // 0 to L1, 1 to L2, 2 to L3 (held), 3 release to L4, 4 done
+        double pegVal = 0.0, pegFrom = 0.0, pegT = 0.0;
+        bool wasReleased = false;
+    } coreMod[2];
+    void startCoreMod (int c, const Snapshot& s, uint32_t seed);
+    double stepCoreMod (int c, const Snapshot& s, double dt, float* tremOut);   // semitones; fills the operators' tremolo gains
     S lCore[2];              // their levels (smoothed)
     bool coreRun[2] {};      // on, or still fading out
     double coreHz[2] {};

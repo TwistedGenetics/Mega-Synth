@@ -2997,7 +2997,7 @@ void MegaSynthEditor::buildPages()
     // ---------------------------------------------------------------- Oscillators > Core A, Core B
     for (int slot = 0; slot < 2; ++slot)
     {
-        auto* page = addPage (slot == 0 ? "Core A" : "Core B");
+        auto* page = scrollPage (addPage (slot == 0 ? "Core A" : "Core B"), 812, slot == 0 ? "Core A" : "Core B");   // (v0.1.75: scrolls, for the LFO and Pitch Envelope)
         const auto c = slot == 0 ? juce::Colour (0xff59d0ff) : juce::Colour (0xffb98cff);
         const juce::String nm = slot == 0 ? "Core A" : "Core B";
         auto* top = sec (page, nm, c);
@@ -3118,6 +3118,34 @@ void MegaSynthEditor::buildPages()
             for (int j = 0; j < 6; ++j)
                 knob (tg::CO_M1 + j, j == k ? juce::String ("FB") : juce::String (juce::CharPointer_UTF8 ("\xe2\x86\x92")) + juce::String (j + 1), 40);
         }
+        // (v0.1.75) the slot's own LFO and pitch envelope (a DX7 voice brings its own)
+        auto x = [slot] (int w) { return tg::coreExParam (slot, w); };
+        auto* lfo = sec (page, "LFO", c);
+        lfo->addInfo ("This slot's own LFO, for every note (only this slot hears it). Vibrato: how far it bends the pitch, up and down, "
+                      "in cents. Tremolo: how far it turns the operators down; each operator's Trem says how much it feels it (a DX7 "
+                      "voice sets these from its amplitude-modulation sensitivity; a trembling modulator changes the tone, a carrier "
+                      "the level). Delay: it fades in, fully there at Delay. Key Sync: each note starts it from the beginning (off: "
+                      "from a random point). At Vibrato and Tremolo 0 it does nothing. To bring vibrato in on the mod wheel, add a "
+                      "Mod Matrix route from Mod Wheel to this slot's Vibrato.");
+        lfo->choice (x (tg::CX_LfoWave), "Wave", 128);
+        lfo->knob (x (tg::CX_LfoRate), "Rate", 58);
+        lfo->knob (x (tg::CX_LfoDelay), "Delay", 58);
+        lfo->knob (x (tg::CX_Vib), "Vibrato", 62);
+        lfo->knob (x (tg::CX_Trem), "Tremolo", 62);
+        lfo->add (new ParamToggle (proc, x (tg::CX_LfoSync), "Key Sync", c), 92, 24);
+        lfo->newRow();
+        for (int k = 0; k < 6; ++k) lfo->knob (x (tg::CX_Trem1 + k), "Op " + juce::String (k + 1) + " Trem", 64);
+        auto* peg = sec (page, "Pitch Envelope", c);
+        peg->addInfo ("This slot's own pitch envelope, like the DX7's: each note starts at Level 4, moves to Level 1 in Time 1, to Level 2 "
+                      "in Time 2 and to Level 3 in Time 3, holds there, and on release moves back to Level 4 in Time 4. Levels are "
+                      "semitones from the note (straight lines between them). Off, or all levels at 0, it does nothing. A DX7 voice "
+                      "turns it on when it uses one.");
+        peg->add (new ParamToggle (proc, x (tg::CX_Peg), "On", c), 60, 24);
+        for (int i = 0; i < 4; ++i) peg->knob (x (tg::CX_PegT1 + i), "Time " + juce::String (i + 1), 62);
+        peg->newRow();
+        peg->add (new juce::Component(), 60, 24);
+        for (int i = 0; i < 4; ++i) peg->knob (x (tg::CX_PegL1 + i), "Level " + juce::String (i + 1), 62);
+
         auto* ticker = page->own (new StoreTicker());
         ticker->tick = [this, slot, ratioKnobs, hzKnobs, ops, top, relHint]
         {
@@ -3144,7 +3172,7 @@ void MegaSynthEditor::buildPages()
             juce::ignoreUnused (top);
         };
         ticker->tick();
-        page->onResize = [page, top, rt, view, algoBtn, resetBtn, ops]
+        page->onResize = [page, top, rt, view, algoBtn, resetBtn, ops, lfo, peg]
         {
             const int g = 10, W = page->getWidth();
             top->setBounds (g, g, 820, 126);
@@ -3154,6 +3182,8 @@ void MegaSynthEditor::buildPages()
             resetBtn->setBounds (rt->getRight() - 86, rt->getY() + 64, 78, 24);
             algoBtn->toFront (false); resetBtn->toFront (false); view->toFront (false);
             ops->setBounds (g, g + 134, W - 2 * g, 432);
+            lfo->setBounds (g, ops->getBottom() + 8, 600, 214);
+            peg->setBounds (lfo->getRight() + 10, lfo->getY(), W - 2 * g - 610, 214);
         };
     }
 

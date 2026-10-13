@@ -2164,6 +2164,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 31) setV31DefaultsForOldPatch();
     if (version < 32) setV32DefaultsForOldPatch();
     if (version < 33) setV33DefaultsForOldPatch();
+    if (version < 34) setV34DefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -2428,6 +2429,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("bsRollLen")) setV31DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("cpOnEns")) setV32DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("vsOn")) setV33DefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("cALfoWave")) setV34DefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2745,6 +2747,7 @@ tg::CorePlain MegaSynthProcessor::coreSettings (int slot) const
     for (int i = 0; i < tg::kCoreSlotHead; ++i) p.head[i] = params[(size_t) tg::coreParam (slot, i)]->convertFrom0to1 (params[(size_t) tg::coreParam (slot, i)]->getValue());
     for (int k = 0; k < tg::kCoreOps; ++k)
         for (int w = 0; w < tg::kCoreOpStride; ++w) { auto* prm = params[(size_t) tg::coreOpParam (slot, k, w)]; p.op[k][w] = prm->convertFrom0to1 (prm->getValue()); }
+    for (int w = 0; w < tg::CX_COUNT; ++w) { auto* prm = params[(size_t) tg::coreExParam (slot, w)]; p.ex[w] = prm->convertFrom0to1 (prm->getValue()); }
     return p;
 }
 
@@ -2755,6 +2758,7 @@ void MegaSynthProcessor::setCoreSettings (int slot, const tg::CorePlain& p, cons
     for (int i = 0; i < tg::kCoreSlotHead; ++i) set (tg::coreParam (slot, i), p.head[i]);
     for (int k = 0; k < tg::kCoreOps; ++k)
         for (int w = 0; w < tg::kCoreOpStride; ++w) set (tg::coreOpParam (slot, k, w), p.op[k][w]);
+    for (int w = 0; w < tg::CX_COUNT; ++w) set (tg::coreExParam (slot, w), p.ex[w]);
     pushHistory (undoLabel);
 }
 
@@ -2782,6 +2786,11 @@ void MegaSynthProcessor::resetCoreSlot (int slot)
     for (int i = tg::coreParam (slot, tg::CS_Level); i < tg::coreParam (slot, 0) + tg::kCoreSlotStride; ++i)
     {
         auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+    for (int w = 0; w < tg::CX_COUNT; ++w)
+    {
+        auto* prm = params[(size_t) tg::coreExParam (slot, w)];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
     }
     pushHistory ("Reset Core slot");
@@ -2956,6 +2965,15 @@ void MegaSynthProcessor::setV31DefaultsForOldPatch()
 void MegaSynthProcessor::setV33DefaultsForOldPatch()
 {
     for (int i = P_wt1SmpStart; i <= P_vsDuckSrc; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+void MegaSynthProcessor::setV34DefaultsForOldPatch()
+{
+    for (int i = P_cALfoWave; i <= P_cBPegL4; ++i)
     {
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();

@@ -6,6 +6,7 @@
 #include "Params.h"
 #include "CoreAlgorithms.h"
 #include "Dx7.h"
+#include "Registry.h"
 
 namespace tg
 {
@@ -13,7 +14,10 @@ struct CorePlain
 {
     float head[kCoreSlotHead] {};
     float op[kCoreOps][kCoreOpStride] {};
+    float ex[CX_COUNT] {};   // (v0.1.75) the slot's LFO and pitch envelope (coreExParam's order)
 };
+// the LFO and pitch envelope at their defaults (off: no vibrato, no tremolo, no pitch envelope)
+inline void setCoreExDefaults (CorePlain& p) { for (int w = 0; w < CX_COUNT; ++w) p.ex[w] = meta (coreExParam (0, w)).def; }
 
 namespace coregen
 {
@@ -86,6 +90,7 @@ namespace coregen
         if (type == T_Any) type = 1 + rng.nextInt (T_COUNT - 1);
         const auto& T = typeDef (type);
         CorePlain p = from;
+        setCoreExDefaults (p);   // (a new patch: no LFO or pitch envelope)
         // routing
         bool edge[6][6], carrier[6];
         if (o.locks & L_Algorithm)
@@ -182,6 +187,7 @@ namespace coregen
     inline CorePlain fromDx7 (const dx7::Voice& v, juce::StringArray& approximations)
     {
         CorePlain p;
+        setCoreExDefaults (p);
         const auto& al = dx7::kAlgos[juce::jlimit (0, 31, v.algorithm)];
         bool edge[6][6] {}, carrier[6] {};
         for (const char* e = al.edges; e[0] != 0 && e[1] != 0; )
@@ -192,7 +198,7 @@ namespace coregen
         }
         int nc = 0;
         for (const char* c = al.carriers; *c != 0; ++c) if (*c >= '1' && *c <= '6') { carrier[*c - '1'] = true; ++nc; }
-        bool ratioClamped = false, keyApprox = false, rateScale = false, lfo = v.lfoPmd > 0 || v.lfoAmd > 0, risingDecay = false;
+        bool ratioClamped = false, keyApprox = false, rateScale = false, risingDecay = false;
         for (int k = 0; k < 6; ++k)
         {
             const auto& o = v.op[k];
@@ -217,7 +223,7 @@ namespace coregen
             if (o.rd > 0 || o.ld > 0) keyApprox = true;
             q[CO_Key] = juce::jlimit (-1.0f, 1.0f, key);
             rateScale = rateScale || o.rateScale > 0;
-            lfo = lfo || o.ams > 0;
+            p.ex[CX_Trem1 + k] = (float) dx7::ampModSens (o.ams);
             // the envelope: L4 (start) up to L1 at R1, to L2 at R2, to L3 (sustain) at R3; R4 back to L4 on release
             auto t = [] (int rate, int from, int to) { return dx7::rateSeconds (rate) * std::abs (to - from) / 99.0; };
             const double top = std::max (1.0e-6, dx7::levelGain (std::max (o.level[0], std::max (o.level[1], o.level[2]))));
@@ -242,9 +248,27 @@ namespace coregen
         if (ratioClamped) approximations.add ("a ratio more than 100 cents from a quarter step (the nearest the Core's Ratio and Fine can reach)");
         if (keyApprox) approximations.add ("keyboard level scaling, as one slope per octave");
         if (rateScale) approximations.add ("keyboard rate scaling (not carried over)");
-        if (lfo) approximations.add ("the LFO and its pitch / amplitude modulation (not carried over)");
+        // (v0.1.75) the LFO and the pitch envelope, into the slot's own
+        p.ex[CX_LfoWave] = (float) juce::jlimit (0, 5, v.lfoWave);
+        p.ex[CX_LfoRate] = (float) dx7::lfoHz (v.lfoSpeed);
+        p.ex[CX_LfoDelay] = (float) dx7::lfoDelaySeconds (v.lfoDelay);
+        p.ex[CX_LfoSync] = v.lfoSync ? 1.0f : 0.0f;
+        p.ex[CX_Vib] = (float) juce::jlimit (0.0, 1200.0, dx7::vibratoCents (v.lfoPmd, v.pms));
+        p.ex[CX_Trem] = (float) v.lfoAmd / 99.0f;
         bool pitchEnv = false; for (int i = 0; i < 4; ++i) pitchEnv = pitchEnv || v.pitchLevel[i] != 50;
-        if (pitchEnv) approximations.add ("the pitch envelope (not carried over)");
+        p.ex[CX_Peg] = pitchEnv ? 1.0f : 0.0f;
+        for (int i = 0; i < 4; ++i) p.ex[CX_PegL1 + i] = (float) juce::jlimit (-48.0, 48.0, dx7::pitchLevelSemis (v.pitchLevel[i]));
+        for (int i = 0; i < 4; ++i)
+        {
+            const int from = v.pitchLevel[(i + 3) % 4], to = v.pitchLevel[i];   // (segment 1 starts from Level 4)
+            p.ex[CX_PegT1 + i] = (float) juce::jlimit (0.0, 30.0, dx7::pitchSegmentSeconds (v.pitchRate[i], from, to));
+        }
+        if (v.lfoPmd > 0 || v.lfoAmd > 0)
+            approximations.add ("the LFO's speed, delay and depths (from published DX7 behaviour, close but not measured against a DX7); it runs per note "
+                                + juce::String (v.lfoSync ? "from the note's start" : "from a random point (the DX7's runs freely across all notes)"));
+        if (pitchEnv) approximations.add ("the pitch envelope's rates and levels (approximate; its segments are straight lines in semitones)");
+        approximations.add ("the DX7's mod wheel / aftertouch routing isn't in a voice file: to bring vibrato in on the wheel, add a Mod Matrix "
+                            "route from Mod Wheel to this slot's Vibrato");
         if (v.feedback > 0) approximations.add ("feedback " + juce::String (v.feedback) + " as " + juce::String (juce::MathConstants<double>::pi * v.feedback / 7.0, 2) + " radians");
         if (v.algorithm == 3 || v.algorithm == 5) approximations.add ("algorithm " + juce::String (v.algorithm + 1) + "'s feedback loop through two operators, on the top one only");
         return p;

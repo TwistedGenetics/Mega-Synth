@@ -338,7 +338,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 33;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows, 29: Break 4, layer sequencer, fill pattern; 30: the Space effects, the Reese additions; 31: snare roll, pattern pads, layer pairs; 32: choruses and phasers, Glide Mode, Break FX, Keys pad; 33: the wavetables' Sampler mode, Vastness, Core names
+    static constexpr int kStateVersion = 34;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows, 29: Break 4, layer sequencer, fill pattern; 30: the Space effects, the Reese additions; 31: snare roll, pattern pads, layer pairs; 32: choruses and phasers, Glide Mode, Break FX, Keys pad; 33: the wavetables' Sampler mode, Vastness, Core names; 34: the Core slots' LFO and pitch envelope
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -401,6 +401,7 @@ private:
     void setV28DefaultsForOldPatch();
     void setV30DefaultsForOldPatch();
     void setV33DefaultsForOldPatch();       // (v0.1.74) the wavetables' sampler settings, Vastness
+    void setV34DefaultsForOldPatch();       // (v0.1.75) the Core slots' LFO and pitch envelope
     void setV32DefaultsForOldPatch();       // (v0.1.72) choruses / phasers, Glide Mode
     void setV31DefaultsForOldPatch();       // ... and from before the Snare Roll's settings       // ... and from before the new Space effects / Reese additions
     void setV29DefaultsForOldPatch();       // ... and from before Break 4 / the layer sequencer / the fill pattern       // ... and from before Slice Keys / the Break React rows       // ... and from before the Core envelope mode / key entry

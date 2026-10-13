@@ -129,6 +129,17 @@ inline juce::String formatParam (int idx, float v)
             }
         }
     }
+    // ---- (v0.1.75) the Core slots' LFO and pitch envelope
+    if (idx >= P_cALfoWave && idx <= P_cBPegL4)
+    {
+        const int w = (idx - P_cALfoWave) % CX_COUNT;
+        auto secs = [&] { return v < 1.0f ? juce::String (v * 1000.0f, v < 0.01f ? 1 : 0) + " ms" : fixed (v, 2) + " s"; };
+        if (w == CX_LfoRate) return fixed (v, v < 10.0f ? 2 : 1) + " Hz";
+        if (w == CX_LfoDelay || (w >= CX_PegT1 && w < CX_PegT1 + 4)) return secs();
+        if (w == CX_Vib) return v < 0.05f ? juce::String ("off") : fixed (v, v < 100.0f ? 1 : 0) + " cents";
+        if (w == CX_Trem || (w >= CX_Trem1 && w < CX_Trem1 + 6)) return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+        if (w >= CX_PegL1 && w < CX_PegL1 + 4) return (v > 0.004f ? "+" : "") + fixed (v, 2) + " st";
+    }
     // ---- the Reese engine
     if (id == "rsLevel" || id == "rsTwist" || id == "rsWidth" || id == "rsRotate" || id == "rsNotch" || id == "rsNotchMove" || id == "rsSub" || id == "rsDrive" || id == "rsTone")
         return juce::String (juce::roundToInt (v * 100.0f)) + "%";

@@ -383,7 +383,7 @@ private:
     BreakChopper chopper;        // the Break Chopper: into the bus before the effects
     const BreakStore* breakStore = nullptr;
     uint32_t breakSeen = 0;
-    float breakGateL = 1.0f, breakGateR = 1.0f;
+    float breakGateL = 1.0f, breakGateR = 1.0f, layerGateL = 1.0f, layerGateR = 1.0f;
     bool breakWasRunning = false;
     MasterFilter masterFilter;   // after every effect
     OutputTrim outTrim;          // the very last stage

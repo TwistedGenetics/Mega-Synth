@@ -36,6 +36,7 @@ public:
         bool sync = true, thruFilter = false;
         double hostTempo = 120.0;
         float stripL = 1.0f, stripR = 1.0f;   // the Mixer strip (balance pan, mute / solo), already worked out
+        float layerLevel = 0.8f, layerL = 1.0f, layerR = 1.0f;   // the layer sequencer's level and its own strip
         PerBreak b[kBreaks];                  // each break's stretch, colour, level and pan
     };
     static constexpr int kVoices = 8;
@@ -45,17 +46,17 @@ public:
         sr = sampleRate;
         for (auto& b : bus) b.assign ((size_t) std::max (64, maxBlock) + 16, 0.0f);
         for (auto& b : sub) b.assign ((size_t) std::max (64, maxBlock) + 16, 0.0f);
-        for (auto& c : colourFx) c.prepare (sr);
-        filter.reset();
+        for (auto& g : colourFx) for (auto& c : g) c.prepare (sr);
+        for (auto& f : filter) f.reset();
         reset();
     }
     void reset()
     {
         for (auto& v : voices) v.on = false;
-        for (auto& c : colourFx) c.reset();
-        filter.reset();
-        for (auto& t : tail) t = 0;
-        peakShown = 0.0f;
+        for (auto& g : colourFx) for (auto& c : g) c.reset();
+        for (auto& f : filter) f.reset();
+        for (auto& g : tail) for (auto& t : g) t = 0;
+        peakShown = peakLayer = 0.0f;
     }
 
     // the analysis and per-slice settings to play from (the engine pulls a fresh copy when it changes)
@@ -67,8 +68,9 @@ public:
     // ---- control (audio thread, between renders)
     // stretch: -1 = no override (then the slice's, then the break's), else Repitch / Cyclic / Clean;
     // cycleMs: 0 = no override (then the slice's, then Cycle Length)
+    // layerSeq: from the layer sequencer (its own choke groups and its own Mixer strip)
     struct Trigger { int slice = 0; float vel = 1.0f, pitch = 0.0f; bool reverse = false; bool fromKey = false; int brk = 0, key = -1; float level = 1.0f; bool noChoke = false;
-                     int stretch = -1; float cycleMs = 0.0f; };
+                     int stretch = -1; float cycleMs = 0.0f; bool layerSeq = false; };
     void trigger (const Trigger& t, const Settings& s)
     {
         const int bi = std::clamp (t.brk, 0, kBreaks - 1);
@@ -77,15 +79,16 @@ public:
         const int k = ((t.slice % bs.nSlices) + bs.nSlices) % bs.nSlices;
         const BreakSlice& sl = bs.slice[k];
         lastSlice = k; lastBreak = bi;
-        if (nHitLog < kHitLog) hitLog[nHitLog++] = { bi, k, t.vel * t.level };   // (for Break-Reactive mode)
-        // the choke group cuts the others off (fast fade), whichever break they're from
-        if (sl.choke > 0 && ! t.noChoke) for (auto& v : voices) if (v.on && v.choke == sl.choke) v.stop (sr);
+        if (nHitLog < kHitLog) hitLog[nHitLog++] = { bi, k, t.vel * t.level, t.layerSeq };   // (for Break-Reactive mode)
+        // the choke group cuts the others off (fast fade), whichever break they're from; the main and the layer sequencer
+        // each have their own groups, so a layer never chokes the main break
+        if (sl.choke > 0 && ! t.noChoke) for (auto& v : voices) if (v.on && v.choke == sl.choke && v.lay == t.layerSeq) v.stop (sr);
         Voice* slot = nullptr;
         for (auto& v : voices) if (! v.on) { slot = &v; break; }
         if (slot == nullptr) { slot = &voices[0]; for (auto& v : voices) if (v.age > slot->age) slot = &v; }
         Voice& v = *slot;
         v = Voice();
-        v.on = true; v.slice = k; v.brk = bi; v.key = t.key; v.choke = sl.choke; v.loop = sl.loop; v.held = t.fromKey;
+        v.on = true; v.slice = k; v.brk = bi; v.key = t.key; v.choke = sl.choke; v.loop = sl.loop; v.held = t.fromKey; v.lay = t.layerSeq;
         const double a = bs.start[k], b = bs.start[k + 1], len = b - a;
         v.s0 = a + sl.trimStart * len; v.s1 = a + sl.trimEnd * len;
         v.dir = (t.reverse != sl.reverse) ? -1 : 1;
@@ -125,7 +128,7 @@ public:
     double previewFrame() const { return pv.on ? pv.head : -1.0; }   // the frame being played now
     double previewFileRate() const { return wav[pv.brk] != nullptr ? wav[pv.brk]->sampleRate / sr : 1.0; }
     // the slices started since the last call (Break-Reactive mode listens to them)
-    struct HitLogEntry { int brk, slice; float vel; };
+    struct HitLogEntry { int brk, slice; float vel; bool layer = false; };
     static constexpr int kHitLog = 32;
     int takeHits (HitLogEntry* out) { const int n = nHitLog; std::copy (hitLog, hitLog + n, out); nHitLog = 0; return n; }
     int lastSlicePlayed() const { return lastSlice; }
@@ -135,11 +138,21 @@ public:
 
     // Renders the slices and adds them (coloured, filtered, through the strip) into L / R.
     // snapV: the parameters (Filter 1 settings for "through synth filter")
-    void process (float* L, float* R, int n, const Settings& s, const float* snapV)
+    void process (float* L, float* R, int n, const Settings& s, const float* snapV) { processGroup (0, L, R, n, s, snapV); }
+    // the layer sequencer's slices: the same colour and filter, its own level and strip, added into L / R
+    void processLayer (float* L, float* R, int n, const Settings& s, const float* snapV) { processGroup (1, L, R, n, s, snapV); }
+private:
+    void processGroup (const int grp, float* L, float* R, int n, const Settings& s, const float* snapV)
     {
+        const bool lay = grp == 1;
+        auto& tail = this->tail[grp];
+        auto& colourFx = this->colourFx[grp];
+        auto& filter = this->filter[grp];
+        int &fModel = this->fModel[grp], &fType = this->fType[grp], &fSlope = this->fSlope[grp], &fChar = this->fChar[grp];
+        float& peakShown = lay ? peakLayer : this->peakShown;
         bool anyVoice[kBreaks] {};
-        for (auto& v : voices) if (v.on) anyVoice[v.brk] = true;
-        if (pv.on) anyVoice[pv.brk] = true;
+        for (auto& v : voices) if (v.on && v.lay == lay) anyVoice[v.brk] = true;
+        if (pv.on && ! lay) anyVoice[pv.brk] = true;
         bool runs[kBreaks] {}, any = false;
         for (int k = 0; k < kBreaks; ++k) { runs[k] = anyVoice[k] || tail[k] > 0; any = any || runs[k]; }
         if (! any) { peakShown = 0.0f; return; }
@@ -159,11 +172,11 @@ public:
             {
                 const double tempoRatio = ratio (s, k);
                 const double fileRate = w->sampleRate / sr;
-                for (auto& v : voices) if (v.on && v.brk == k) renderVoice (v, xl, xr, n, s, tempoRatio, fileRate);
-                if (pv.on && pv.brk == k) renderVoice (pv, xl, xr, n, s, 1.0, fileRate);   // (chop playback: its own speed)
+                for (auto& v : voices) if (v.on && v.brk == k && v.lay == lay) renderVoice (v, xl, xr, n, s, tempoRatio, fileRate);
+                if (pv.on && pv.brk == k && ! lay) renderVoice (pv, xl, xr, n, s, 1.0, fileRate);   // (chop playback: its own speed)
             }
-            bool still = pv.on && pv.brk == k;
-            for (auto& v : voices) still = still || (v.on && v.brk == k);
+            bool still = pv.on && pv.brk == k && ! lay;
+            for (auto& v : voices) still = still || (v.on && v.brk == k && v.lay == lay);
             tail[k] = still ? (int) (0.3 * sr) : tail[k] - n;   // the colour and filter ring on a little after the last slice
             const PerBreak& pb = s.b[k];
             if (pb.colour > 0)
@@ -210,16 +223,19 @@ public:
         else fModel = -1;
         // ---- the strip and level, then into the bus
         float pk = 0.0f;
-        const float g = juce::jlimit (0.0f, 1.0f, s.level);
+        const float g = lay ? juce::jlimit (0.0f, 1.0f, s.level) * juce::jlimit (0.0f, 1.0f, s.layerLevel) : juce::jlimit (0.0f, 1.0f, s.level);
+        const float sl = lay ? s.layerL : s.stripL, sr2 = lay ? s.layerR : s.stripR;
         for (int i = 0; i < n; ++i)
         {
             const float l = bl[i] * g, r = br[i] * g;
             pk = std::max (pk, std::max (std::abs (l), std::abs (r)));
-            L[i] += l * s.stripL; R[i] += r * s.stripR;
+            L[i] += l * sl; R[i] += r * sr2;
         }
         peakShown = std::max (peakShown, pk);
     }
+public:
     float takePeak() { const float p = peakShown; peakShown = 0.0f; return p; }
+    float takeLayerPeak() { const float p = peakLayer; peakLayer = 0.0f; return p; }
 
     // for the display: the newest voice's position (fraction of the sample), -1 when none
     double playheadFrac (int k = 0) const
@@ -234,7 +250,7 @@ public:
 private:
     struct Voice
     {
-        bool on = false, held = false, loop = false, whole = false;
+        bool on = false, held = false, loop = false, whole = false, lay = false;
         int slice = 0, choke = 1, dir = 1, brk = 0, key = -1, stretch = -1;
         float cycleMs = 0.0f;
         double s0 = 0, s1 = 0;            // the (trimmed) slice in sample frames
@@ -399,14 +415,14 @@ private:
     std::array<Voice, kVoices> voices {};
     Voice pv;   // chop mode's playback
     std::vector<float> bus[2], sub[2];
-    VintageSampler colourFx[kBreaks];
+    VintageSampler colourFx[2][kBreaks];   // [0] the main sequencer and the keys, [1] the layer sequencer
     std::array<float, P_COUNT> colourV {};
-    FilterUnit filter;
-    int fModel = -1, fType = -1, fSlope = -1, fChar = -1;
-    int tail[kBreaks] {}, lastSlice = 0, lastBreak = 0;
+    FilterUnit filter[2];
+    int fModel[2] { -1, -1 }, fType[2] { -1, -1 }, fSlope[2] { -1, -1 }, fChar[2] { -1, -1 };
+    int tail[2][kBreaks] {}, lastSlice = 0, lastBreak = 0;
     HitLogEntry hitLog[kHitLog] {};
     int nHitLog = 0;
-    float peakShown = 0.0f;
+    float peakShown = 0.0f, peakLayer = 0.0f;
 };
 
 } // namespace tg

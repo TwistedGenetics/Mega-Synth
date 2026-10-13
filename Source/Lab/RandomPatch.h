@@ -103,6 +103,7 @@ struct Result
     int patTool[4] { -1, -1, -1, -1 };
     juce::String chain;
     uint32_t toolSeed = 1;
+    int fillTool = -1;   // the fill written into Pattern H (the Fill Pattern), from the pattern A of the break; -1: none
     juce::StringArray notes;            // fallbacks and such, for the page
 };
 
@@ -446,7 +447,12 @@ inline Result generate (const Options& o, int nBreakFiles, int nSampleFiles, int
         res.patTool[2] = r.of ({ (int) breaktools::ToolRollers, (int) breaktools::ToolTwoStep, (int) breaktools::ToolHalftime, (int) breaktools::ToolCutUp });
         res.patTool[3] = r.of ({ (int) breaktools::ToolSnareBuild, (int) breaktools::ToolStutter, (int) breaktools::ToolGhosts, (int) breaktools::ToolVariation });
         res.toolSeed = r.next() | 1u;
-        if (cx >= 1) b.set (P_bsAutoFill, (float) (1 + r.pick (3)));
+        if (cx >= 1)
+        {
+            // a fill in Pattern H (the Fill Pattern), played by Auto Fill every 4, 8 or 16 bars (and from the Fill button / pad)
+            b.set (P_bsAutoFill, (float) (1 + r.pick (3))).set (P_bsFillPat, 8).set (P_bsFillSize, 3);
+            res.fillTool = r.of ({ (int) breaktools::ToolSnareBuild, (int) breaktools::ToolStutter, (int) breaktools::ToolRollers, (int) breaktools::ToolPitchDive });
+        }
         if (cx == 2 && r.chance (0.5f)) { res.chain = r.of ({ "AABA", "AABC", "ABAC", "AAAD" }); b.set (P_bsChainOn, 1); }
         res.engines.add (res.nBreaks == 1 ? "a break" : juce::String (res.nBreaks) + " breaks");
     }

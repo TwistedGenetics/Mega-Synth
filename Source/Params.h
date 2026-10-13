@@ -152,8 +152,8 @@ inline const char* const kRsRatioKeys[]   = { "x3","x5","golden" };
 inline const char* const kRsRatioLabels[] = { "x3 (locked)","x5 (locked)","Golden (free)" };
 inline const char* const kRxListenKeys[]   = { "all","kicks","snares","hats" };
 inline const char* const kRxListenLabels[] = { "All hits","Kicks","Snares","Hats" };
-inline const char* const kRxBreakKeys[]    = { "any","b1","b2","b3" };
-inline const char* const kRxBreakLabels[]  = { "Any break","Break 1","Break 2","Break 3" };
+inline const char* const kRxBreakKeys[]    = { "any","b1","b2","b3","b4" };
+inline const char* const kRxBreakLabels[]  = { "Any break","Break 1","Break 2","Break 3","Break 4" };
 inline const char* const kRsRetrigKeys[]   = { "free","reset","random" };
 inline const char* const kRsRetrigLabels[] = { "Free","Reset","Random" };
 // the Core oscillator slots (A and B): the engine (more engines are added at the end of the list later)
@@ -218,12 +218,22 @@ inline const char* const kBsKeysKeys[]   = { "off","24","72","84","96" };
 inline const char* const kBsKeysLabels[] = { "Off","MIDI 24-31 (C0-G0)","MIDI 72-79 (C4-G4)","MIDI 84-91 (C5-G5)","MIDI 96-103 (C6-G6)" };
 inline const char* const kBsAltKeys[]   = { "off","1bar","2bar","4bar" };
 inline const char* const kBsAltLabels[] = { "Off","Every other bar","Every other 2 bars","Every other 4 bars" };
-inline const char* const kBsAltBreakKeys[]   = { "1","2","3" };
-inline const char* const kBsAltBreakLabels[] = { "Break 1","Break 2","Break 3" };
+inline const char* const kBsAltBreakKeys[]   = { "1","2","3","4" };
+inline const char* const kBsAltBreakLabels[] = { "Break 1","Break 2","Break 3","Break 4" };
 inline const char* const kBsToolSrcKeys[]   = { "active","all" };
-inline const char* const kBsToolSrcLabels[] = { "From the Active Break","From all three breaks" };
+inline const char* const kBsToolSrcLabels[] = { "This pattern's break","All four breaks" };
 inline const char* const kBsFillModeKeys[]   = { "oneshot","held" };
-inline const char* const kBsFillModeLabels[] = { "One-shot","Held" };
+inline const char* const kBsFillModeLabels[] = { "Trigger","Hold" };
+inline const char* const kBsFillPatKeys[]    = { "off","A","B","C","D","E","F","G","H" };
+inline const char* const kBsFillPatLabels[]  = { "Off","Pattern A","Pattern B","Pattern C","Pattern D","Pattern E","Pattern F","Pattern G","Pattern H" };
+inline const char* const kBsFillSizeKeys[]   = { "whole","beat","2beats","bar" };
+inline const char* const kBsFillSizeLabels[] = { "Whole pattern","Last 1 beat","Last 2 beats","Last 1 bar" };
+inline const char* const kBsLFollowKeys[]    = { "follow","own" };
+inline const char* const kBsLFollowLabels[]  = { "Follow main","Own" };
+inline const char* const kBsLFillKeys[]      = { "keep","fill" };
+inline const char* const kBsLFillLabels[]    = { "Keep going","Play its own fill" };
+inline const char* const kRxFromKeys[]       = { "main","layer","both" };
+inline const char* const kRxFromLabels[]     = { "Main sequencer","Layer sequencer","Both" };
 inline const char* const kBsFillLenKeys[]    = { "beat","2beats","bar","2bars" };
 inline const char* const kBsFillLenLabels[]  = { "1 beat","2 beats","1 bar","2 bars" };
 inline const char* const kBsFillStartKeys[]   = { "beat","bar","end" };
@@ -426,6 +436,11 @@ inline const ChoiceList kListRxEvery    = TG_LIST(kRxEvery);
 inline const ChoiceList kListRxDetect   = TG_LIST(kRxDetect);
 inline const ChoiceList kListRxListen   = TG_LIST(kRxListen);
 inline const ChoiceList kListRxBreak    = TG_LIST(kRxBreak);
+inline const ChoiceList kListBsFillPat  = TG_LIST(kBsFillPat);
+inline const ChoiceList kListBsFillSize = TG_LIST(kBsFillSize);
+inline const ChoiceList kListBsLFollow  = TG_LIST(kBsLFollow);
+inline const ChoiceList kListBsLFill    = TG_LIST(kBsLFill);
+inline const ChoiceList kListRxFrom     = TG_LIST(kRxFrom);
 inline const ChoiceList kListPfAkaiMode = TG_LIST(kPfAkaiMode);
 inline const ChoiceList kListPfAkaiSpeed = TG_LIST(kPfAkaiSpeed);
 inline const ChoiceList kListPfAkaiSync = TG_LIST(kPfAkaiSync);
@@ -446,7 +461,7 @@ constexpr int kUniStride = 5, kUniOscs = 6;
 // Mixer channel strips: Pan, Mute, Solo per source (Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, Ring), from P_mxOsc1Pan
 constexpr int kMxStride = 3, kMxSources = 9;
 // ... plus strips added later, each Pan / Mute / Solo in a row: 9 = Granular Synth, 10 = Break Chopper
-constexpr int kMxStrips = 14;   // ... 11 = Reese, 12 = Core A, 13 = Core B
+constexpr int kMxStrips = 15;   // ... 11 = Reese, 12 = Core A, 13 = Core B, 14 = Break Layer (the layer sequencer)
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
@@ -1149,7 +1164,7 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(bsChainOn,   "Break Pattern Chain", false) \
     C(bsKeys,      "Break Pattern Keys", kListBsKeys, 0) \
     F(bsSwing,     "Break Swing", 0, 0.75, 0, 0.01, 0) \
-    F(bcActive,    "Active Break", 1, 3, 1, 1, 0) \
+    F(bcActive,    "Active Break", 1, 4, 1, 1, 0) \
     B(bcSelKeys,   "Break Select Keys", true) \
     B(bcSelQuant,  "Break Select on the Beat", false) \
     F(bcLevel1,    "Break 1 Level", 0, 2, 1, 0.01, 0) \
@@ -1596,7 +1611,35 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     B(rxSaw, "Break React SuperSaw", false) \
     B(rxComplex, "Break React Complex", false) \
     B(rxGran, "Break React Granular", false) \
-    F(rxGranBurst, "Break React Grain Burst", 0, 1, 0.5, 0.01, 0)
+    F(rxGranBurst, "Break React Grain Burst", 0, 1, 0.5, 0.01, 0) \
+    C(bcSliceMode4, "Break 4 Slicing", kListBcSlice, 0) \
+    F(bcSens4,   "Break 4 Transient Sensitivity", 0, 1, 0.5, 0.01, 0) \
+    C(bcBars4,   "Break 4 Bars", kListBcBars, 0) \
+    F(bcTempo4,  "Break 4 Original Tempo", 0, 250, 0, 0.01, 0) \
+    C(bcStretch4,"Break 4 Stretch", kListBcStretch, 1) \
+    C(bcColour4, "Break 4 Colour", kListBcColour, 0) \
+    F(bcLevel4,  "Break 4 Level", 0, 2, 1, 0.01, 0) \
+    F(bcPan4,    "Break 4 Pan", -1, 1, 0, 0.01, 0) \
+    B(bsKeyFixed, "Break Seq Key Entry Fixed Velocity", false) \
+    F(bsKeyVel,  "Break Seq Key Entry Velocity", 0, 1, 1, 0.01, 0) \
+    C(bsFillPat, "Break Fill Pattern", kListBsFillPat, 0) \
+    C(bsFillSize,"Break Fill Size", kListBsFillSize, 0) \
+    B(bsLOn,     "Break Layer Run", false) \
+    C(bsLPattern,"Break Layer Pattern", kListBsPat, 0) \
+    C(bsLSteps,  "Break Layer Length", kListBsSteps, 0) \
+    C(bsLSwitch, "Break Layer Switch", kListBsSwitch, 2) \
+    B(bsLChainOn,"Break Layer Chain", false) \
+    C(bsLKeys,   "Break Layer Pattern Keys", kListBsKeys, 0) \
+    F(bsLSwing,  "Break Layer Swing", 0, 0.75, 0, 0.01, 0) \
+    C(bsLFollow, "Break Layer Patterns", kListBsLFollow, 0) \
+    C(bsLFill,   "Break Layer During Fill", kListBsLFill, 0) \
+    C(bsLAlternate, "Break Layer Alternate", kListBsAlt, 0) \
+    C(bsLAltBreak,  "Break Layer Alternate With", kListBsAltBreak, 1) \
+    F(bsLLevel,  "Break Layer Level", 0, 1, 0.8, 0.01, 0) \
+    F(mxLayerPan, "Break Layer Pan", -1, 1, 0, 0.01, 0) \
+    B(mxLayerMute, "Break Layer Mute", false) \
+    B(mxLayerSolo, "Break Layer Solo", false) \
+    C(rxFrom,    "Break React From Sequencer", kListRxFrom, 0)
 
 enum ParamIndex
 {
@@ -1627,9 +1670,10 @@ inline const char* const kParamIds[] = {
 };
 
 // a Mixer strip's Pan parameter (Mute and Solo follow it)
-inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : (strip == kMxSources ? P_mxGranPan : (strip == kMxSources + 1 ? P_mxBreakPan : (strip == kMxSources + 2 ? P_mxReesePan : (strip == kMxSources + 3 ? P_mxCoreAPan : P_mxCoreBPan)))); }
+inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1Pan + kMxStride * strip : (strip == kMxSources ? P_mxGranPan : (strip == kMxSources + 1 ? P_mxBreakPan : (strip == kMxSources + 2 ? P_mxReesePan : (strip == kMxSources + 3 ? P_mxCoreAPan : (strip == kMxSources + 4 ? P_mxCoreBPan : P_mxLayerPan))))); }
 constexpr int kMxReeseStrip = kMxSources + 2;
 constexpr int kMxCoreStrip = kMxSources + 3;   // Core A; Core B is the next
+constexpr int kMxLayerStrip = kMxSources + 5;  // the Break Layer
 
 // The Core oscillator slots: slot s (0 = A, 1 = B) starts at coreParam (s, 0); then 6 operators of kCoreOpStride
 constexpr int kCoreSlotHead = 11, kCoreOpStride = 21, kCoreOps = 6, kCoreSlotStride = kCoreSlotHead + kCoreOps * kCoreOpStride;
@@ -1655,7 +1699,7 @@ struct BreakParamSet { int sliceMode, sens, bars, tempo, stretch, colour, level,
 inline BreakParamSet breakParams (int k)
 {
     if (k <= 0) return { P_bcSliceMode, P_bcSens, P_bcBars, P_bcTempo, P_bcStretch, P_bcColour, P_bcLevel1, P_bcPan1 };
-    const int b = k == 1 ? P_bcSliceMode2 : P_bcSliceMode3;
+    const int b = k == 1 ? P_bcSliceMode2 : (k == 2 ? P_bcSliceMode3 : P_bcSliceMode4);
     return { b, b + 1, b + 2, b + 3, b + 4, b + 5, b + 6, b + 7 };
 }
 

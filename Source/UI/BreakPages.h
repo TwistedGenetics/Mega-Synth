@@ -1,6 +1,6 @@
 #pragma once
-// The Break Chopper page (Oscillators > Break Chopper) and the Break Sequencer page
-// (Sequencers > Break Sequencer): the per-slice and per-step editors, the step grid.
+// The Break Chopper page (Breaks > Break Chopper) and the Break Sequencer page
+// (Breaks > Break Sequencer): the per-slice and per-step editors, the step grid.
 // Their settings live in the processor's BreakStore (saved with the patch, the project, undo and A/B).
 // Included from PluginEditor.cpp after PluginEditor.h and SamplePages.h.
 #include <JuceHeader.h>
@@ -57,8 +57,8 @@ private:
 
 inline juce::Colour breakColourForGrid (int k)
 {
-    static const juce::Colour c[] = { juce::Colour (0xffff6b6b), juce::Colour (0xfffeca57), juce::Colour (0xff00d2d3) };
-    return c[juce::jlimit (0, 2, k)];
+    static const juce::Colour c[] = { juce::Colour (0xffff6b6b), juce::Colour (0xfffeca57), juce::Colour (0xff00d2d3), juce::Colour (0xffa29bfe) };
+    return c[juce::jlimit (0, 3, k)];
 }
 
 // The step grid: 16 or 32 cells with the slice number, velocity, accent, roll, reverse and tie
@@ -71,23 +71,25 @@ public:
     }
     std::function<void (int)> onSelect;
     int selected = 0;
+    bool layer = false;   // showing (and editing) the layer sequencer
     void refresh()
     {
         const auto d = proc.breakStore.get();
         const int pat = editedPattern(), steps = numSteps();
-        juce::String key; key << pat << "|" << steps << "|" << selected << "|" << proc.bsStepShown.load() << "|" << proc.bsPatternShown.load()
+        juce::String key; key << (layer ? "L" : "M") << pat << "|" << steps << "|" << selected << "|" << playingStep() << "|" << shownPattern()
                               << "|f" << proc.bsFillCountdown.load() << "," << proc.bsFillPosShown.load() << "," << proc.bsFillLenShown.load() << "," << proc.bsFillFirstIdx.load();
-        for (int i = 0; i < steps; ++i) { const auto& s = d.step[pat][i]; key << (s.on ? "1" : "0") << s.slice << s.roll << (s.accent ? "a" : "") << (s.reverse ? "r" : "") << (s.tie ? "t" : "") << juce::roundToInt (s.vel * 20.0f) << "b" << s.brk << (s.layer ? "L" : "") << juce::roundToInt (s.pitch) << "s" << s.stretch << juce::roundToInt (s.cycleMs) << "n" << juce::roundToInt (s.nudge * 100); }
+        for (int i = 0; i < steps; ++i) { const auto& s = stepsOf (d, pat)[i]; key << (s.on ? "1" : "0") << s.slice << s.roll << (s.accent ? "a" : "") << (s.reverse ? "r" : "") << (s.tie ? "t" : "") << juce::roundToInt (s.vel * 20.0f) << "b" << s.brk << (s.layer ? "L" : "") << juce::roundToInt (s.pitch) << "s" << s.stretch << juce::roundToInt (s.cycleMs) << "n" << juce::roundToInt (s.nudge * 100); }
         if (key != lastKey) { lastKey = key; data = d; repaint(); }
     }
     void paint (juce::Graphics& g) override
     {
         const int steps = numSteps(), pat = editedPattern();
-        const int playing = proc.bsPatternShown.load() == pat ? proc.bsStepShown.load() : -1;
+        const int playing = shownPattern() == pat ? playingStep() : -1;
+        const bool fillHere = ! layer || proc.param (tg::P_bsLFill)->getValue() > 0.5f;
         for (int i = 0; i < steps; ++i)
         {
             auto r = cell (i).toFloat().reduced (2.0f);
-            const auto& s = data.step[pat][i];
+            const auto& s = stepsOf (data, pat)[i];
             g.setColour (i == playing ? col::seq.withAlpha (0.55f) : ((i / 4) % 2 == 0 ? col::panel2 : col::panel3));
             g.fillRoundedRectangle (r, 5.0f);
             if (s.on || s.tie)
@@ -114,7 +116,7 @@ public:
             if (i == selected) { g.setColour (col::text); g.drawRoundedRectangle (r, 5.0f, 1.6f); }
             // the fill: the steps it covers (an orange bar), its countdown and length on its first step
             const int f0 = proc.bsFillFirstIdx.load(), fl = proc.bsFillLenShown.load();
-            if (f0 >= 0 && proc.bsPatternShown.load() == pat)
+            if (fillHere && f0 >= 0 && proc.bsPatternShown.load() == editedMainPattern())
             {
                 const int span = fl > 0 ? std::min (fl, steps) : 1;
                 if (((i - f0) % steps + steps) % steps < span)
@@ -130,12 +132,14 @@ public:
         }
         // the fill's countdown and length, on its first step
         const int f0 = proc.bsFillFirstIdx.load(), fl = proc.bsFillLenShown.load();
-        if (f0 >= 0 && f0 < steps && proc.bsPatternShown.load() == pat)
+        if (fillHere && f0 >= 0 && f0 < steps && proc.bsPatternShown.load() == editedMainPattern())
         {
             const auto r = cell (f0).toFloat().reduced (2.0f);
             const int cd = proc.bsFillCountdown.load(), pos = proc.bsFillPosShown.load();
             const juce::String len = fl == 4 ? "1 beat" : fl == 8 ? "2 beats" : fl == 16 ? "1 bar" : fl == 32 ? "2 bars" : "held";
-            const juce::String t = cd >= 0 ? "FILL in " + juce::String (cd) : "FILL " + juce::String (pos + 1) + (fl > 0 ? "/" + juce::String (fl) : juce::String());
+            const int fp = juce::roundToInt (plain (tg::P_bsFillPat));
+            const juce::String fn = fp > 0 ? "FILL " + juce::String::charToString ((juce::juce_wchar) ('A' + fp - 1)) : juce::String ("FILL");
+            const juce::String t = cd >= 0 ? fn + " in " + juce::String (cd) : fn + " " + juce::String (pos + 1) + (fl > 0 ? "/" + juce::String (fl) : juce::String());
             const juce::String label = t + "  (" + len + ")";
             const juce::Font f (juce::FontOptions (9.5f, juce::Font::bold));
             juce::GlyphArrangement ga; ga.addLineOfText (f, label, 0.0f, 0.0f);
@@ -156,17 +160,27 @@ public:
             const int pat = editedPattern();
             proc.breakStore.edit ([&] (tg::BreakData& d)
             {
-                auto& s = d.step[pat][i];
+                auto& s = (layer ? d.lstep : d.step)[pat][i];
                 s.on = ! s.on;
-                const int ab = juce::jlimit (0, 2, juce::roundToInt (proc.param (tg::P_bcActive)->convertFrom0to1 (proc.param (tg::P_bcActive)->getValue())) - 1);
+                const int ab = juce::jlimit (0, tg::BreakData::kBreaks - 1, juce::roundToInt (proc.param (tg::P_bcActive)->convertFrom0to1 (proc.param (tg::P_bcActive)->getValue())) - 1);
                 const int ns = d.brk[s.brk > 0 ? s.brk - 1 : ab].nSlices;
                 if (s.on && s.slice == 0 && i > 0 && ns > 0) s.slice = (i * ns / numSteps()) % ns;   // a sensible first slice
             });
         }
         lastKey.clear(); refresh();
     }
-    int editedPattern() const { return juce::jlimit (0, 7, juce::roundToInt (proc.param (tg::P_bsPattern)->convertFrom0to1 (proc.param (tg::P_bsPattern)->getValue()))); }
-    int numSteps() const { return proc.param (tg::P_bsSteps)->getValue() > 0.5f ? 32 : 16; }
+    // the pattern being edited: the main's selected one; the layer's own selected one (or, when it follows the main, the main's letter)
+    int editedPattern() const
+    {
+        const bool own = layer && proc.param (tg::P_bsLFollow)->getValue() > 0.5f;
+        return juce::jlimit (0, 7, juce::roundToInt (plain (own ? tg::P_bsLPattern : tg::P_bsPattern)));
+    }
+    int editedMainPattern() const { return juce::jlimit (0, 7, juce::roundToInt (plain (tg::P_bsPattern))); }
+    int numSteps() const { return proc.param (layer ? tg::P_bsLSteps : tg::P_bsSteps)->getValue() > 0.5f ? 32 : 16; }
+    const tg::BreakStep* stepsOf (const tg::BreakData& d, int pat) const { return layer ? d.lstep[pat] : d.step[pat]; }
+    int playingStep() const { return layer ? proc.lsStepShown.load() : proc.bsStepShown.load(); }
+    int shownPattern() const { return layer ? proc.lsPatternShown.load() : proc.bsPatternShown.load(); }
+    float plain (int i) const { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); }
 private:
     juce::Rectangle<int> cell (int i) const
     {
@@ -188,7 +202,7 @@ public:
     explicit FillButton (MegaSynthProcessor& p) : juce::TextButton ("Fill"), proc (p)
     {
         tagParam (*this, tg::P_bsFill);
-        setTooltip ("Fill: plays this pattern's fill, then the pattern carries on where it would have been. Also the Fill key, or automate / MIDI-learn the Fill parameter.");
+        setTooltip ("Fill: plays the Fill Pattern (quantised to Start), then the pattern carries on where it would have been. Also the Fill pad, or automate / MIDI-learn the Fill parameter.");
         startTimerHz (15);
     }
     ~FillButton() override { stopTimer(); }
@@ -252,10 +266,10 @@ inline juce::String breakInfoText (const MegaSynthProcessor& p, int k)
             t << "   at " << juce::String (host, 1) << " BPM: " << (sync ? "x" + juce::String (host / b.origBpm, 3) : juce::String ("not synced (x1)"));
         }
     }
-    // the three together: a warning above 20 MB
+    // the four together: a warning above 20 MB
     double mb = 0.0;
-    for (int j = 0; j < 3; ++j) mb += (double) p.getSampleBytes (MegaSynthProcessor::breakSlot (j)) / (1024.0 * 1024.0);
-    if (mb > 20.0) t << "   (all three breaks add " << juce::String (mb, 1) << " MB to the project: saving and undo get slower)";
+    for (int j = 0; j < tg::BreakData::kBreaks; ++j) mb += (double) p.getSampleBytes (MegaSynthProcessor::breakSlot (j)) / (1024.0 * 1024.0);
+    if (mb > 20.0) t << "   (the breaks add " << juce::String (mb, 1) << " MB to the project: saving and undo get slower)";
     return t;
 }
 

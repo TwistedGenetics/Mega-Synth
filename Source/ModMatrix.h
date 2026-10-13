@@ -92,7 +92,9 @@ enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_
     X(CoreBEnv,    "Core B Op 1 Env",   K_ENV,    false) \
     X(KickHit,     "Kick Hit",          K_ENV,    false) \
     X(SnareHit,    "Snare Hit",         K_ENV,    false) \
-    X(HatHit,      "Hat Hit",           K_ENV,    false)
+    X(HatHit,      "Hat Hit",           K_ENV,    false) \
+    X(LsStep,      "Layer Seq Step",    K_SEQ,    false) \
+    X(LsPattern,   "Layer Seq Pattern", K_SEQ,    false)
 
 enum ModSource
 {
@@ -231,7 +233,7 @@ struct GlobalModInputs
     float polyAT[128] {};
     float mpePressure[16] {}, mpeSlide[16] {}, mpeGlide[16] {};
     float arpPos = 0, arpGate = 0;
-    float bsStep = 0, bsPattern = 0, bsSlice = 0, bsBreak = 0, bsFill = 0;   // the Break Sequencer's step and pattern, the last slice played (0..1)
+    float bsStep = 0, bsPattern = 0, bsSlice = 0, bsBreak = 0, bsFill = 0, lsStep = 0, lsPattern = 0;   // the Break Sequencer's step and pattern, the last slice played (0..1)
     float sidechain = 0;             // the sidechain input's level (envelope), 0..1   // the arpeggiator's place in its note cycle (0..1) and a pulse at each step
 };
 

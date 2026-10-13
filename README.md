@@ -63,14 +63,15 @@ The tabs follow the signal: the oscillators, the mix, the filters, the envelopes
 |---|---|
 | Perform | Perform, Performance FX |
 | Overview | (one page) |
-| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring, Granular Synth, Break Chopper, Reese, Core A, Core B, Break React |
+| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring, Granular Synth, Reese, Core A, Core B |
+| Breaks | Break Chopper, Break Sequencer, Break React |
 | Mixer | (one page) |
 | Filters | (one page) |
 | Envelopes | Amp & Filter, Mod Envelopes, Pitch Envelope, MSEG 1 & 2 |
 | FX & Mutation | Note Mutation, Bus Mutation, Space, Dirt, Motion, Rack |
 | Modulation | LFOs, Mod Matrix, Assignments, Macros & Scenes, Cell Instability |
-| Sequencers | Step Sequencer, Arp / Chord, DNA Sequencer, Break Sequencer |
-| Lab | Mutate / Lab, Capture |
+| Sequencers | Step Sequencer, Arp / Chord, DNA Sequencer |
+| Lab | Mutate / Lab, Capture, Random Patch |
 
 Moved from earlier versions:
 
@@ -94,6 +95,8 @@ Moved from earlier versions:
 | Effects: Space / Dirt / Motion / Rack | FX & Mutation > Space / Dirt / Motion / Rack |
 | Sequencer, Arp / Chord, DNA Seq | Sequencers > Step Sequencer / Arp / Chord / DNA Sequencer |
 | Mutate / Lab, Capture | Lab > Mutate / Lab, Lab > Capture |
+| Oscillators > Break Chopper, Oscillators > Break React (v0.1.68) | Breaks > Break Chopper, Breaks > Break React |
+| Sequencers > Break Sequencer (v0.1.68) | Breaks > Break Sequencer |
 
 ## Effects (FX & Mutation > Space / Dirt / Motion / Rack)
 
@@ -170,7 +173,7 @@ The character models, with ideas from Beep Street's Sunrizer plus extras:
 
 A console, in the order the sound flows:
 
-- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, the Ring modulator, the Granular Synth, the Break Chopper, the Reese engine and the two Core slots, with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
+- **Sources**: a strip each for Osc 1, 2, 3, Sub, WT 1, WT 2, Complex, SuperSaw, the Ring modulator, the Granular Synth, the Break Chopper, the Reese engine, the two Core slots and the Break Sequencer's layer (**Brk Layer**: its level, pan and swing), with **Level**, **Pan**, **Voices** (unison; the SuperSaw's own voices; the ring modulator's wet / dry), **M**ute and **S**olo, a meter, and a **PITCH ENV** tag that lights when the pitch envelope moves that source.
   - Pan is a balance: centred, both sides stay at full level, so a centred mix sounds exactly as it did before the strips. Panning turns the other side down.
   - A muted source still works as an FM or ring modulator. With any Solo on, only soloed sources are heard. Mute and Solo ramp over a few milliseconds, so they don't click.
   - Pan is a Mod Matrix destination. The strips aren't changed by Mutate.
@@ -200,7 +203,7 @@ A second oscillator built for jungle and drum & bass basses: 2, 3 or 4 detuned v
 - **Measured** (our build machine, 48 kHz): the beating period within 0.04% of the note value across 90/140/172/174 BPM and C1-C5 (1% allowed); at C7 on High, aliasing at -114 dB without the drive, -64 dB (2 saws, drive 60%) and -70 dB (2 squares, drive 100%); with full drive on Normal it's about -48 dB and on Eco about -25 dB. Mono Below 120 Hz takes the side signal under 70 Hz from -5 dB to -34 dB. The sub stays locked to voice 1 (no measurable drift over 18 s).
 - **CPU** (8 notes held): about 3-6% of one core for the Reese on top of Init at 2-4 voices; with the Drive at 4 voices, about 5% on Eco, 9% on Normal and 15% on High. The numbers vary a few percent from run to run.
 
-## Break React (Oscillators > Break React)
+## Break React (Breaks > Break React)
 
 Break-Reactive mode: the synth listens to the breaks and reacts on the hits you choose, so a bass locks to the drums. It's **off by default**; off, the sound is bit-for-bit what it was, and older patches and projects load as they were (everything new below starts off or at no change).
 
@@ -208,7 +211,7 @@ Break-Reactive mode: the synth listens to the breaks and reacts on the hits you 
   - **Main**, the original row, with its **Listen** choice (All hits, Kicks, Snares or Hats). Older patches use this row exactly as before.
   - **Kick**, **Snare** and **Hat**: each reacts to its own kind of hit. Off by default.
   - Each row has **On**, **Sens** (lets in weaker hits, like ghost notes) and its actions. Rows combine: a kick can pitch-dive the sub while a snare opens the filter and a hat flicks the Reese notch.
-- **From:** any break, or one of the three.
+- **From:** any break, or one of the four. **Sequencer** (in Triggers): the main Break Sequencer's hits, the layer sequencer's, or both (the default is Main, as before). The slice keys and fills always count.
 - **Detection:** how a slice is sorted into kick, snare or hat.
   - **Classic** (the default, as before): the low end against the bright noisy part in its first 60 ms.
   - **Band energy:** what the slice adds in its first 20 ms against the 20 ms before it, split at 300 Hz and 2 kHz. A kick adds low with little top, a snare both, a hat top with almost no low. So a hat over a kick's tail counts as a hat.
@@ -294,7 +297,7 @@ A playable granular oscillator. Each note plays its own cloud of grains from a s
   - Grains read the sample with linear interpolation.
   - Without Spray, the cloud repeats at the Density rate. Like any synchronous granular engine, that colours the sound with a comb of Density-spaced partials, so a little Spray gives a cleaner pitch.
 
-## Break Chopper (Oscillators > Break Chopper)
+## Break Chopper (Breaks > Break Chopper)
 
 Load a drum break and play it in slices, from the keys or from the Break Sequencer.
 
@@ -315,7 +318,7 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
 - **Keys:**
   - Slices play from **First Key** up. The default is C1 (MIDI 36), and the key names are drawn on the wave.
   - Those keys play slices only while the chopper is on. Performance FX keys, if set to the same range, take priority.
-  - **Slice Keys** (in the All Breaks title): **On** (the default, as before), **Off** (the slice keys and the Break Select keys play the synth as ordinary notes) or **Auto** (they play the synth while the Break Sequencer is playing, so Break React gets its hits from the patterns and you get the whole keyboard; when it's stopped, or with Key Entry on, they play the breaks). The pattern keys and the Fill key keep their jobs in every mode. The keyboard tints the zone only while it takes notes, and a line next to the setting (and on the Break React page) says what it's doing. Each key's release goes where its press went, so switching with keys held leaves nothing hanging.
+  - **Slice Keys** (in the All Breaks title): **On** (the default, as before), **Off** (the slice keys and the Break Select keys play the synth as ordinary notes) or **Auto** (they play the synth while the Break Sequencer is playing, so Break React gets its hits from the patterns and you get the whole keyboard; when it's stopped, or with Key Entry on, they play the breaks). The pattern keys and the Fill pad keep their jobs in every mode. The keyboard tints the zone only while it takes notes, and a line next to the setting (and on the Break React page) says what it's doing. Each key's release goes where its press went, so switching with keys held leaves nothing hanging.
   - Clicking a slice plays it and selects it.
 - **Per slice:** Pitch, Gain, Pan, Trim Start and Trim End, Attack, Decay (off means it plays to its end), Choke group, Stretch, Cycle, React Type, Reverse and Loop.
   - **React Type:** what Break React counts this slice as: Auto (from the analysis), Kick, Snare, Hat or None (never a hit). It wins over the analysis, so you can fix a slice it guessed wrong. Saved with the break.
@@ -377,42 +380,46 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
   - Each drag or nudge is one Undo step, and markers are saved with the patch and the project.
 - **Trim handles:** the two triangles along the bottom of the wave are the selected slice's Trim Start and Trim End. Drag them; the Trim knobs follow.
 
-### Three breaks
+### Four breaks
 
-- **Slots:** there are three break slots, Break 1, Break 2 and Break 3. Each has its own sample, slicing, markers, tempo, per-slice settings, stretch mode, colour, level and pan.
-- **Active Break:** the selector at the top of the page picks the Active Break. That's the break you're editing, and the break the keys play.
-  - The three small waveforms show all the breaks; click one to make it active.
-  - The Active Break is a parameter, so you can automate it, MIDI-learn it, or drive it from the Mod Matrix.
-- **One key zone:** all three breaks play from First Key up. The zone is as long as the Active Break's slice count and is tinted in its colour on the keyboard.
-  - The three **Break Select** keys just below the zone switch the Active Break: A0, A#0 and B0 when the zone starts at C1. They move with First Key.
+- **Slots:** there are four break slots, Break 1 to Break 4. Each has its own sample, slicing, markers, tempo, per-slice settings, stretch mode, colour, level and pan. (Break 4 is new in v0.1.69; older projects load with it empty.)
+- **Active Break:** the selector at the top of the page picks the Active Break. That's the break you're editing, and the break the keys play (except on the Break Sequencer page, below).
+  - The small waveforms show all the breaks; click one to make it active.
+  - The Active Break is a parameter, so you can automate it, MIDI-learn it, or drive it from the Mod Matrix. Its range is now 1-4, so a DAW automation lane drawn for it before v0.1.69 is scaled for 1-3: redraw it if you automated it (the saved value itself loads as it was).
+- **One key zone:** all four breaks play from First Key up. The zone is as long as the Active Break's slice count and is tinted in its colour on the keyboard.
+  - The **Break Select** keys just below the zone switch the Active Break: A0, A#0 and B0 pick Breaks 1-3 as before when the zone starts at C1, and G#0 (the key below them) picks Break 4. They move with First Key.
   - **On the Beat** makes the switch wait for the next beat.
   - A key you're holding keeps playing the slice it started; letting go stops that slice, whichever break it came from.
   - Older projects load with Break Select off, since those keys may be notes they play.
 - **The sequencer:**
-  - Each step plays the Active Break by default, or can be pinned to Break 1, 2 or 3. The grid shows a B1/B2/B3 tag and the break's colour.
+  - Each pattern can own a break (Pattern Break, below). Each step plays its pattern's break by default, or can be pinned to Break 1-4. The grid shows a B1-B4 tag and the break's colour.
   - **Layer** stacks a second hit from another break on a step, with its own slice and level.
-  - **Pattern Break:** a pattern can make a break active when it starts, so pattern keys can change the break too.
-  - **Alternate** swaps the Active steps to another break every other bar, every other 2 bars, or every other 4 bars.
+  - **Alternate** swaps the pattern-break steps to another break every other bar, every other 2 bars, or every other 4 bars.
 - **New tools:**
-  - **Franken (Frankenbreak):** the Active Break's groove, with its kicks, snares and hats each taken from a different loaded break, matched kind for kind using the kick/snare/hat analysis. **Amount** sets how many hits are swapped; each press gives a new mix.
-  - **Swap:** the same pattern played with the Active Break's slices in the same places.
+  - **Franken (Frankenbreak):** the pattern's break's groove, with its kicks, snares and hats each taken from a different loaded break, matched kind for kind using the kick/snare/hat analysis. **Amount** sets how many hits are swapped; each press gives a new mix.
+  - **Swap:** the same pattern played with the pattern's break's slices in the same places.
   - **Match Levels** evens out the loaded breaks' loudness with their level faders.
   - **Match Tempo** turns Tempo Sync on, so every break follows the song.
 - **Mixing:**
-  - All three share **one Break strip** on the Mixer (pan, mute, solo, meter, master level).
+  - The main sequencer's hits (and the keys) share **one Break strip** on the Mixer (pan, mute, solo, meter, master level); the layer sequencer has its own **Brk Layer** strip.
   - Each break has its own level (0-200%) and pan on the Break Chopper page.
-  - The level faders are Mod Matrix destinations, and **Break Slot** (which break played last) is a Mod Matrix source.
-- **Size:** each break keeps the 30 s cap. The page warns when the three together add more than 20 MB to a project.
-- **CPU:** 8 slices spread over three breaks, each with a different stretch mode and colour, costs about 1.7% of one core.
+  - The level faders are Mod Matrix destinations, and **Break Slot** (which break played last) is a Mod Matrix source: 0, 0.5 and 1 for Breaks 1-3 as before; Break 4 also reads 1.
+- **Size:** each break keeps the 30 s cap. The page warns when the four together add more than 20 MB to a project.
+- **CPU:** 8 slices spread over three breaks, each with a different stretch mode and colour, costs about 1.7% of one core. Both sequencers playing 32nd rolls from all four breaks with Clean stretch measured 1.6% of one core on our build machine.
 - **Factory content:**
   - Two more breaks are synthesised by the plugin: a 2-step at 174 BPM and a ghost-note roller at 165 BPM.
-  - **Break Frankenstein** loads all three and chains the original with Frankenbreak edits.
+  - **Break Frankenstein** loads three and chains the original with Frankenbreak edits.
 - **Key names:** the Break pages name keys the way Live does (MIDI 60 = C3). The on-screen keyboard has always labelled MIDI 60 as C4, so the zone that Live calls C1 shows as C2 there.
 
-## Break Sequencer (Sequencers > Break Sequencer)
+## Break Sequencer (Breaks > Break Sequencer)
+
+Everything to do with breaks is on one tab, **Breaks**: the Break Chopper, the Break Sequencer and Break React, so you don't jump between Oscillators and Sequencers any more. The Break Sequencer page holds two sequencers, the **main** one and a **layer**; the **Main / Layer** buttons in the title pick which one the controls, the grid and the Step section edit (both keep playing).
 
 - **Patterns:**
   - Eight patterns, **A-H**, each of **16 or 32** sixteenth steps (one or two bars).
+  - **Each pattern owns its break** (**Pattern Break**: Break 1-4, or **Active**). Pick pattern A, set Break 2, press **Original**: A gets Break 2's slices and timing. Go to B, set Break 3, press Original: B gets Break 3's. The choice stays with the pattern and is saved with it.
+    - When a pattern with its own break starts (or the sequencer starts on it), that break becomes the Active Break, as Pattern Break did before.
+    - **Active** (the default, and every pattern in an older project) plays whichever break is active, exactly as before.
   - Each step has: on/off, **Slice**, **Velocity**, **Accent**, **Pitch**, **Reverse**, **Roll** (2, 3 or 4 hits within the step), **Probability**, and **Tie** (no new hit; the last slice rings on).
   - Click a step to edit it below the grid; double-click switches it on or off. The playing step is lit.
 - **Timing:**
@@ -423,7 +430,8 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
   - A new pattern starts on the **next step, beat or bar** (Switch).
   - **Chain** plays a typed order, e.g. AABA, moving on each time a pattern ends.
 - **Tools:**
-  - **Original:** the break's slices in order, each on the step where it falls.
+  - Every tool works from the edited pattern's break. On a pattern with its own break, the hits it makes are pinned to that break (so they stay on it when copied or when the Active Break changes). On an Active pattern, they use the Active Break, as before.
+  - **Original:** the pattern's break's slices in order, each on the step where it falls.
   - **Reverse:** the pattern back to front.
   - **Shuffle:** the same slices in a new order.
   - **Jungle:** an edit of the original, with snare ghosts and swaps late in each bar, a kick double, a reversed hit, a cut-up of two 1/8s, and a rising snare roll into the end.
@@ -432,7 +440,7 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
 - **More tools (the third row):**
   - Each applies straight away when pressed, with a new seed each press. It doesn't preview first; **Undo** takes it back.
   - **Amount** (0-100%) sets how much each tool changes. **Variation** has its own knob.
-  - **Tools draw from:** the Active Break, or all three loaded breaks (each new hit from a break picked at random, pinned to that break).
+  - **Tools draw from:** **This pattern's break**, or **All four breaks** (each new hit from a loaded break picked at random, pinned to that break).
   - Kicks, snares and hats are chosen from the kick/snare/hat analysis. A break with no analysis falls back to where hits usually are: the kick on beat 1, the snare on beat 2, the hats on the off-beat 8ths.
   - An empty pattern is first filled with Original (Halftime builds its own).
   - **Rollers:** quiet 16th ghost snares around the backbeat.
@@ -455,27 +463,39 @@ Load a drum break and play it in slices, from the keys or from the Break Sequenc
   - The order is: the step's setting, then the slice's (Break Chopper page), then the break's.
   - The grid tags these steps **R**, **A** or **C**. A **\*** means a cycle override.
 - **Late:** how late a step plays, as a share of a step (0-50%). Humanise sets it, and you can set it by hand. The grid tags a late step with **>**.
-- **Fills (the Fill panel):**
-  - **Fill** plays the current pattern's fill. It can come from the **Fill** button, the **Fill Key** (a note you choose, which isn't played as a note), or the Fill parameter, which you can automate or MIDI-learn.
-  - **Start:** the next beat, the next bar, or **End of pattern** (the fill starts as many steps before the pattern's end as it is long, so it lands at the end of the phrase).
-  - **Length:** 1 beat, 2 beats, 1 bar or 2 bars. **Mode:** **One-shot** plays the Length; **Held** plays from the start until you let go.
+- **Fills (the Fill panel):** one **Fill Pattern** for the whole project, called from whichever pattern is playing. Write your fill in, say, H (on any break: it plays H's own break) and call it from A-G.
+  - **Fill Pattern:** Off, or Pattern A-H. Calling a fill while the Fill Pattern itself is playing does nothing.
+  - **Call it** with the **Fill** button, the **Fill pad** or the Fill parameter (automate or MIDI-learn it).
+  - **The Fill pad:** press **Learn**, then hit a pad (a note) or press a button that sends a CC on your controller. That note or CC now calls the fill and isn't played as a note (a CC counts as pressed at 64 and above). **Clear** forgets it. The title shows the pad (e.g. "Pad: Note 36 (C1)"). It's saved with the project.
+  - **Mode:** **Trigger** plays the fill once; **Hold** plays it while you hold the pad (or button).
+  - **Start** (the quantise): the next beat, the next bar, or **End of pattern** (the fill starts as many steps before the pattern's end as it is long, so it lands at the end of the phrase).
+  - **Size:** the **Whole pattern**, or its **last 1 beat, 2 beats or 1 bar**. For example, a 1-bar fill from a 2-bar Fill Pattern plays that pattern's second bar.
   - **When it ends:**
     - **Pattern carries on** (the default): the pattern comes back exactly where it would have been, as if it had kept running underneath.
     - **Restart the pattern:** the pattern starts again from step 1.
     - A running chain carries on underneath either way.
-  - **Fill Source** (per pattern):
-    - **Auto** (the default) makes a fill from the pattern with one of Snare Build, Stutter, Rollers, Pitch Dive or Frankenbreak. The tool is chosen per pattern from a seed, so it's the same every time, and the knob shows which one.
-    - **New Fills** picks again for every pattern; Undo goes back.
-    - Or choose a pattern A-H as the fill.
-    - A fill plays the last steps of its source, as many as its length. For example, a 1-bar fill from a 2-bar pattern plays that pattern's second bar.
-  - **Fill Break** (per pattern) plays the fill's Active steps from another break, for example a fill from Break 2 over a groove from Break 1.
-  - **Auto Fill:** a fill every 4, 8 or 16 bars, timed to end with the phrase. **Chance** sets how often it actually plays.
-  - **On the grid:** the fill's steps get an orange bar, and its first step shows the countdown ("FILL in 5") and then its progress ("FILL 3/16"), with its length.
+  - **Auto Fill:** plays the Fill Pattern every 4, 8 or 16 bars, timed to end with the phrase. **Chance** sets how often it actually plays.
+  - **Layer during fill:** the layer sequencer **Keeps going**, or **Plays its own fill** (its own pattern of the Fill Pattern's letter, with the same timing).
+  - **On the grid:** the fill's steps get an orange bar, and its first step shows the countdown ("FILL H in 5") and then its progress ("FILL H 3/16"), with its length.
   - **Fill Active** (0 or 1) is a Mod Matrix source.
-  - **What's saved:** fill settings are saved in patches, projects, undo and A/B. Older projects load with fills off. Auto fills aren't saved; they're remade from the pattern and the seed.
-- **Key Entry** (on the Step section, off by default): with it on, playing a slice key (from the Break Chopper's key base) writes that slice into the selected step. The step is switched on, its velocity set from how hard you played, and it's pinned to that slice's break. The slice still plays, so you hear what you're entering. Hold **Shift** (on the page) or the **sustain pedal** to add the hit as a Layer on the step instead of replacing it. **Advance** (No advance, 1, 2 or 4) moves the selection on after each key, wrapping at the end of the pattern, so you can play a beat in step by step. Pattern keys, the Fill key and notes outside the slice range keep their usual jobs. Each key is one undo step. Key Entry and Advance are saved with patches and projects.
-- **Mod Matrix sources:** **Break Seq Step** (where in the pattern), **Break Seq Pattern** (which one), **Break Slice** (the last slice played), **Break Slot** and **Fill Active**, all 0..1.
-- **What's saved:** patterns, chain and per-slice settings are saved in patches, projects, undo and A/B. That includes each step's Stretch, Cycle and Late, and each slice's Stretch and Cycle.
+  - **What's saved:** the fill settings are saved in patches, projects, undo and A/B; the pad with the project.
+  - **Changed in v0.1.69 (as asked):** the per-pattern Fill Source and Fill Break, the auto-generated fills and the Fill Key note are gone. Older projects and patches are converted when they load, so they play the same fill:
+    - a Fill Key note becomes the Fill pad;
+    - a fill that was another pattern (A-H) becomes the Fill Pattern;
+    - an Auto fill (or a fill with its own Fill Break) is written into an empty pattern, H first, then G and so on (never one the pattern or chain uses), with that break as the pattern's break, and that pattern becomes the Fill Pattern. The status line says what was done. If there's no empty pattern, the fill is dropped and the status line says so.
+    - Only the fill of the pattern that was playing (or the chain's first) is kept, since there's now one Fill Pattern; if your older project gave different patterns different fills, set the others by hand.
+    - The old Fill Length becomes Size (2 bars on a 1-bar pattern becomes Whole pattern).
+- **Key Entry** (on the Step section, off by default): with it on, playing a slice key (from the Break Chopper's key base) writes that slice into the selected step. The step is switched on, its velocity set from how hard you played (or, with **Fixed vel** ticked, the velocity set next to it), and it's pinned to that slice's break.
+  - **The keys follow the pattern's break:** on the Break Sequencer page (and while Key Entry is on), the slice keys play the edited pattern's own break, and the keyboard shows its slices in its colour. Change pattern and the keys change with it, without touching the Active Break. On an Active pattern they play the Active Break, as before.
+  - With **Layer** being edited, Key Entry writes into the layer sequencer's pattern. The slice still plays, so you hear what you're entering. Hold **Shift** (on the page) or the **sustain pedal** to add the hit as a Layer on the step instead of replacing it. **Advance** (No advance, 1, 2 or 4) moves the selection on after each key, wrapping at the end of the pattern, so you can play a beat in step by step. Pattern keys, the Fill pad and notes outside the slice range keep their usual jobs. Each key is one undo step. Key Entry and Advance are saved with patches and projects.
+- **The layer sequencer** (Main / Layer: Layer): a second Break Sequencer with everything the main one has: eight patterns, 16 or 32 steps, every step setting, the tools, chain, Pattern Keys, Switch, Swing, Alternate and Key Entry. Use it for hats or a shaker from another break over the main groove.
+  - **Run** (off by default) and **Plays**: **Follow main** (the default) plays its pattern of the same letter as the main, on the same steps, switching and restarting with it (and with the main's chain); **Own** plays its own selected pattern, with its own Switch, Pattern Keys and chain.
+  - Each of its patterns owns a break too (Pattern Break, or Active).
+  - Its hits choke only each other: a hat on the layer never cuts the main's kick, and the reverse.
+  - Its own Mixer strip, **Brk Layer**: level, pan, mute, solo, meter, and its Swing.
+  - Measured at 172 BPM: every step of both sequencers lands on the same 16th grid, within one sample.
+- **Mod Matrix sources:** **Break Seq Step** (where in the pattern), **Break Seq Pattern** (which one), **Layer Seq Step**, **Layer Seq Pattern**, **Break Slice** (the last slice played), **Break Slot** and **Fill Active**, all 0..1.
+- **What's saved:** patterns, chain and per-slice settings are saved in patches, projects, undo and A/B. That includes each step's Stretch, Cycle and Late, each slice's Stretch and Cycle, each pattern's break, and the layer sequencer's patterns, breaks and chain. Older projects load with every pattern on Active, the layer off and empty, and Break 4 empty, so they play as they did.
 
 ## Performance FX (Perform > Performance FX)
 

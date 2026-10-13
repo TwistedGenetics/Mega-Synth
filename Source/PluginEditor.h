@@ -435,6 +435,7 @@ public:
     void breakKeyEntryForTests();   // (tests) run the Break Sequencer page's Key Entry now
     int breakSelectedStepForTests() const;
     void setBreakSelectedStepForTests (int step);
+    void setBreakEditLayerForTests (bool layer) { if (breakEditLayerFn) breakEditLayerFn (layer); }
     tgui::PatchBrowser* browserForTests() { return browser.get(); }
     void showBrowserForTests (bool b) { showBrowser (b); }
 private:
@@ -539,6 +540,8 @@ public:
     juce::Label* sliceKeysStateLabel = nullptr;   // the Break Chopper page: what Slice Keys is doing now
     juce::Component* breakWaveForTests = nullptr;
     juce::Component* breakGridForTests = nullptr;
+    juce::Component* breakSeqPage = nullptr;
+    std::function<void (bool)> breakEditLayerFn;   // the Break Sequencer page: edit the main (false) or the layer sequencer (true)
 private:
 
     uint32_t lastStepVersion = 0;

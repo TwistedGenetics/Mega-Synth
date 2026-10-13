@@ -256,7 +256,7 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
         v[MS_ArpPos]      = in->arpPos;
         v[MS_ArpGate]     = in->arpGate;
         v[MS_Sidechain]   = in->sidechain;
-        v[MS_BsStep] = in->bsStep; v[MS_BsPattern] = in->bsPattern; v[MS_BsSlice] = in->bsSlice; v[MS_BsBreak] = in->bsBreak; v[MS_BsFill] = in->bsFill;
+        v[MS_BsStep] = in->bsStep; v[MS_BsPattern] = in->bsPattern; v[MS_BsSlice] = in->bsSlice; v[MS_BsBreak] = in->bsBreak; v[MS_BsFill] = in->bsFill; v[MS_LsStep] = in->lsStep; v[MS_LsPattern] = in->lsPattern;
         v[MS_ReesePhase] = rsRun ? (float) reese.beatPhase() : 0.0f;
         v[MS_CoreAEnv] = coreRun[0] ? core[0].envelope (0) : 0.0f;
         v[MS_CoreBEnv] = coreRun[1] ? core[1].envelope (0) : 0.0f;
@@ -463,7 +463,8 @@ void Voice::updateMixer (const Snapshot& s, bool first, float c)
             if (std::abs (mxPan[k].v - mxPan[k].target) < 1.0e-5f) mxPan[k].v = mxPan[k].target;
             if (std::abs (mxGate[k].v - mxGate[k].target) < 1.0e-5f) mxGate[k].v = mxGate[k].target;
         }
-        active |= mxPan[k].v != 0.0f || mxGate[k].v != 1.0f || mxPan[k].target != 0.0f || mxGate[k].target != 1.0f;
+        if (k != kMxLayerStrip)   // (the Break Layer isn't a voice source: its strip never puts the voices on the Mixer path)
+            active |= mxPan[k].v != 0.0f || mxGate[k].v != 1.0f || mxPan[k].target != 0.0f || mxGate[k].target != 1.0f;
         // balance: the centre leaves both sides at full level; panning turns the other side down
         mxL[k] = mxGate[k].v * std::min (1.0f, 1.0f - mxPan[k].v);
         mxR[k] = mxGate[k].v * std::min (1.0f, 1.0f + mxPan[k].v);
@@ -1718,7 +1719,7 @@ BreakReact::Settings Engine::reactSettings (const Snapshot& s) const
 {
     BreakReact::Settings r;
     r.on = s.v[P_rxOn] > 0.5f;
-    r.listen = clampv (s.i (P_rxListen), 0, 3); r.brk = clampv (s.i (P_rxBreak), 0, 3);
+    r.listen = clampv (s.i (P_rxListen), 0, 3); r.brk = clampv (s.i (P_rxBreak), 0, 4);
     r.sens = clampv (s.f (P_rxSens), 0.0f, 1.0f);
     r.fromBreaks = s.v[P_rxFromBreaks] > 0.5f; r.fromSc = s.v[P_rxFromSc] > 0.5f; r.scSens = clampv (s.f (P_rxScSens), 0.0f, 1.0f);
     r.attackMs = clampv (s.f (P_rxAttack), 0.0f, 100.0f); r.decayMs = clampv (s.f (P_rxDecay), 5.0f, 2000.0f);
@@ -1968,6 +1969,9 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             const BreakData& bd = chopper.data();
             for (int k = 0; k < nh; ++k)
             {
+                // From: the main sequencer (and the keys), the layer sequencer, or both
+                const int from = clampv (s.i (P_rxFrom), 0, 2);
+                if ((from == 0 && hl[k].layer) || (from == 1 && ! hl[k].layer)) continue;
                 const BreakSlot& b = bd.brk[clampv (hl[k].brk, 0, BreakChopper::kBreaks - 1)];
                 const int sl = clampv (hl[k].slice, 0, BreakSlot::kSlices - 1);
                 const int ht = b.slice[sl].hitType;
@@ -2079,7 +2083,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
             globalSrc[MS_ModWheel] = modIn->wheel; globalSrc[MS_PitchBend] = modIn->bend;
             globalSrc[MS_Aftertouch] = modIn->aftertouch; globalSrc[MS_CcA] = modIn->ccA; globalSrc[MS_CcB] = modIn->ccB;
             globalSrc[MS_ArpPos] = modIn->arpPos; globalSrc[MS_ArpGate] = modIn->arpGate; globalSrc[MS_Sidechain] = modIn->sidechain;
-            globalSrc[MS_BsStep] = modIn->bsStep; globalSrc[MS_BsPattern] = modIn->bsPattern; globalSrc[MS_BsSlice] = modIn->bsSlice; globalSrc[MS_BsBreak] = modIn->bsBreak; globalSrc[MS_BsFill] = modIn->bsFill;
+            globalSrc[MS_BsStep] = modIn->bsStep; globalSrc[MS_BsPattern] = modIn->bsPattern; globalSrc[MS_BsSlice] = modIn->bsSlice; globalSrc[MS_BsBreak] = modIn->bsBreak; globalSrc[MS_BsFill] = modIn->bsFill; globalSrc[MS_LsStep] = modIn->lsStep; globalSrc[MS_LsPattern] = modIn->lsPattern;
         }
         for (int k = 0; k < 8; ++k) globalSrc[MS_Macro1 + k] = s.v[P_macro1 + k];
         for (int k = 0; k < 4; ++k) globalSrc[MS_PfX1 + k] = 2.0f * s.v[P_pfX1 + k] - 1.0f;
@@ -2130,16 +2134,28 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         if (std::abs (breakGateL - tl) < 1.0e-4f) breakGateL = tl;
         if (std::abs (breakGateR - tr) < 1.0e-4f) breakGateR = tr;
         st.stripL = breakGateL; st.stripR = breakGateR;
+        {
+            // the Break Layer's strip (the layer sequencer): its level, balance pan, mute / solo, ramped the same way
+            const int lb = mxParam (kMxLayerStrip);
+            const bool lm = fs->v[lb + 1] > 0.5f || (anySolo && fs->v[lb + 2] <= 0.5f);
+            const float lp = clampv (fs->f (lb), -1.0f, 1.0f);
+            const float ll = lm ? 0.0f : std::min (1.0f, 1.0f - lp), lr = lm ? 0.0f : std::min (1.0f, 1.0f + lp);
+            layerGateL += (ll - layerGateL) * c; layerGateR += (lr - layerGateR) * c;
+            if (std::abs (layerGateL - ll) < 1.0e-4f) layerGateL = ll;
+            if (std::abs (layerGateR - lr) < 1.0e-4f) layerGateR = lr;
+            st.layerL = layerGateL; st.layerR = layerGateR; st.layerLevel = clampv (fs->f (P_bsLLevel), 0.0f, 1.0f);
+        }
         // Break FX Route: through the effects (as always), or past them into a dry bus, ramped over 10 ms
         const int route = dryReady ? clampv (fs->i (P_bcFxRoute), 0, 3) : 0;
         if (! breakWasRunning) for (int k = 0; k < 4; ++k) brkRG[k] = k == route ? 1.0f : 0.0f;   // (nothing playing: start on the route)
         // Break-Reactive mode with a negative Offset: the breaks play that much later (the synth reacts first)
         const int rxDelay = react.breakDelay (rxs);
-        if (route == 0 && brkRG[0] == 1.0f && rxDelay == 0) chopper.process (L, R, numSamples, st, fs->v);
+        if (route == 0 && brkRG[0] == 1.0f && rxDelay == 0) { chopper.process (L, R, numSamples, st, fs->v); chopper.processLayer (L, R, numSamples, st, fs->v); }
         else
         {
             std::fill (brkTmp[0].begin(), brkTmp[0].begin() + numSamples, 0.0f); std::fill (brkTmp[1].begin(), brkTmp[1].begin() + numSamples, 0.0f);
             chopper.process (brkTmp[0].data(), brkTmp[1].data(), numSamples, st, fs->v);
+            chopper.processLayer (brkTmp[0].data(), brkTmp[1].data(), numSamples, st, fs->v);
             if (rxDelay > 0) react.delayBreaks (brkTmp[0].data(), brkTmp[1].data(), numSamples, rxDelay);
             const float rc = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
             float* dst[4][2] = { { L, R }, { dryBus[0][0].data(), dryBus[0][1].data() }, { dryBus[1][0].data(), dryBus[1][1].data() }, { dryBus[2][0].data(), dryBus[2][1].data() } };
@@ -2158,7 +2174,10 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         const float pk = chopper.takePeak();
         auto& m = mixerPeak[(size_t) (kMxSources + 1)];
         if (pk > m.load (std::memory_order_relaxed)) m.store (pk, std::memory_order_relaxed);
-        breakPlayheadShown.store (chopper.playheadFrac (clampv (fs->i (P_bcActive) - 1, 0, 2)), std::memory_order_relaxed);
+        const float lpk = chopper.takeLayerPeak();
+        auto& lm2 = mixerPeak[(size_t) kMxLayerStrip];
+        if (lpk > lm2.load (std::memory_order_relaxed)) lm2.store (lpk, std::memory_order_relaxed);
+        breakPlayheadShown.store (chopper.playheadFrac (clampv (fs->i (P_bcActive) - 1, 0, BreakChopper::kBreaks - 1)), std::memory_order_relaxed);
         breakSliceShown.store (chopper.activeVoices() > 0 ? chopper.lastSlicePlayed() : -1, std::memory_order_relaxed);
         breakWasRunning = chopper.activeVoices() > 0;
     }

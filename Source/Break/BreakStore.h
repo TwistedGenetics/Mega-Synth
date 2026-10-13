@@ -71,16 +71,22 @@ struct BreakSlot
 
 struct BreakData
 {
-    static constexpr int kBreaks = 3, kSlices = BreakSlot::kSlices, kPatterns = 8, kSteps = 32;
+    static constexpr int kBreaks = 4, kSlices = BreakSlot::kSlices, kPatterns = 8, kSteps = 32;
     BreakSlot brk[kBreaks];
     BreakStep step[kPatterns][kSteps];
-    int patBreak[kPatterns] {};  // 0: none; 1-3: starting this pattern makes that break the Active Break
+    int patBreak[kPatterns] {};  // 0: Active (the pattern follows the Active Break, as before); 1-4: the pattern's own break (its
+                                 // steps with no break of their own play it, the tools use it, and it becomes the Active Break)
     char chain[17] {};           // pattern chain, e.g. "AABA"
     int seed = 1;                // Shuffle / Jungle / Frankenbreak: each press takes the next seed
     // fills: per pattern, where its fill comes from (0: Auto, 1-8: pattern A-H) and which break it
     // plays (0: as the steps say; 1-3: that break for the Active steps); Auto fills use fillSeed
     int fillSrc[kPatterns] {}, fillBrk[kPatterns] {};
     int fillSeed = 1;
+    // the layer sequencer: its own eight patterns, each with its own break, its chain and tool seed
+    BreakStep lstep[kPatterns][kSteps];
+    int lpatBreak[kPatterns] {};
+    char lchain[17] {};
+    int lseed = 1;
     // ---- derived (not saved): each pattern's Auto fill, made from the pattern on the message thread
     BreakStep autoFill[kPatterns][kSteps];
     int autoFillTool[kPatterns] {};
@@ -171,26 +177,15 @@ public:
         }
     }
 
-    juce::var toVar() const
+    static juce::var patternsToVar (const BreakStep (&st)[BreakData::kPatterns][BreakData::kSteps])
     {
-        const auto d = get();
-        auto* o = new juce::DynamicObject();
-        slotToVar (d.brk[0], *o);
-        for (int k = 1; k < BreakData::kBreaks; ++k)
-        {
-            auto* bo = new juce::DynamicObject();
-            slotToVar (d.brk[k], *bo);
-            const bool empty = bo->getProperty ("slices").getArray()->isEmpty() && bo->getProperty ("markers").getArray()->isEmpty();
-            if (empty) delete bo;
-            else o->setProperty ("break" + juce::String (k + 1), juce::var (bo));
-        }
         juce::Array<juce::var> pats;
         for (int p = 0; p < BreakData::kPatterns; ++p)
         {
             juce::Array<juce::var> steps;
             for (int i = 0; i < BreakData::kSteps; ++i)
             {
-                const auto& s = d.step[p][i];
+                const auto& s = st[p][i];
                 if (! s.on && ! s.tie && s.slice == 0 && s.brk == 0 && ! s.layer && ! s.hasExtras()) continue;
                 auto* x = new juce::DynamicObject();
                 x->setProperty ("i", i); x->setProperty ("on", s.on); x->setProperty ("slice", s.slice); x->setProperty ("vel", s.vel);
@@ -209,12 +204,42 @@ public:
             }
             pats.add (steps);
         }
-        o->setProperty ("patterns", pats);
+        return pats;
+    }
+
+    juce::var toVar() const
+    {
+        const auto d = get();
+        auto* o = new juce::DynamicObject();
+        slotToVar (d.brk[0], *o);
+        for (int k = 1; k < BreakData::kBreaks; ++k)
+        {
+            auto* bo = new juce::DynamicObject();
+            slotToVar (d.brk[k], *bo);
+            const bool empty = bo->getProperty ("slices").getArray()->isEmpty() && bo->getProperty ("markers").getArray()->isEmpty();
+            if (empty) delete bo;
+            else o->setProperty ("break" + juce::String (k + 1), juce::var (bo));
+        }
+        o->setProperty ("patterns", patternsToVar (d.step));
         o->setProperty ("chain", juce::String (d.chain));
         o->setProperty ("seed", d.seed);
         bool anyPatBreak = false;
         for (int p : d.patBreak) anyPatBreak = anyPatBreak || p != 0;
         if (anyPatBreak) { juce::Array<juce::var> pb; for (int p : d.patBreak) pb.add (p); o->setProperty ("patBreak", pb); }
+        {
+            // the layer sequencer (only once it has something, so older plug-ins and tests read the rest unchanged)
+            bool anyLayer = d.lseed != 1 || d.lchain[0] != 0;
+            for (int p = 0; p < BreakData::kPatterns; ++p) { anyLayer = anyLayer || d.lpatBreak[p] != 0; for (int i = 0; i < BreakData::kSteps; ++i) { const auto& x = d.lstep[p][i]; anyLayer = anyLayer || x.on || x.tie || x.slice != 0 || x.brk != 0 || x.layer || x.hasExtras(); } }
+            if (anyLayer)
+            {
+                auto* lo = new juce::DynamicObject();
+                lo->setProperty ("patterns", patternsToVar (d.lstep));
+                lo->setProperty ("chain", juce::String (d.lchain));
+                lo->setProperty ("seed", d.lseed);
+                juce::Array<juce::var> pb; for (int p : d.lpatBreak) pb.add (p); lo->setProperty ("patBreak", pb);
+                o->setProperty ("layer", juce::var (lo));
+            }
+        }
         bool anyFill = d.fillSeed != 1;
         for (int p = 0; p < BreakData::kPatterns; ++p) anyFill = anyFill || d.fillSrc[p] != 0 || d.fillBrk[p] != 0;
         if (anyFill)
@@ -225,6 +250,36 @@ public:
         }
         return juce::var (o);
     }
+    static void patternsFromVar (BreakStep (&st)[BreakData::kPatterns][BreakData::kSteps], const juce::var& patsV)
+    {
+            if (auto* pats = patsV.getArray())
+                for (int p = 0; p < juce::jmin (BreakData::kPatterns, pats->size()); ++p)
+                    if (auto* steps = (*pats)[p].getArray())
+                        for (auto& x : *steps)
+                        {
+                            const int i = (int) x["i"];
+                            if (i < 0 || i >= BreakData::kSteps) continue;
+                            auto& s = st[p][i];
+                            s.on = (bool) x.getProperty ("on", false);
+                            s.slice = juce::jlimit (0, BreakData::kSlices - 1, (int) x.getProperty ("slice", 0));
+                            s.vel = juce::jlimit (0.0f, 1.0f, (float) x.getProperty ("vel", 0.8));
+                            s.accent = (bool) x.getProperty ("acc", false);
+                            s.reverse = (bool) x.getProperty ("rev", false);
+                            s.tie = (bool) x.getProperty ("tie", false);
+                            s.roll = juce::jlimit (1, 4, (int) x.getProperty ("roll", 1));
+                            s.pitch = juce::jlimit (-24.0f, 24.0f, (float) x.getProperty ("pitch", 0.0));
+                            s.prob = juce::jlimit (0.0f, 1.0f, (float) x.getProperty ("prob", 1.0));
+                            s.brk = juce::jlimit (0, BreakData::kBreaks, (int) x.getProperty ("brk", 0));
+                            s.layer = (bool) x.getProperty ("layer", false);
+                            s.layerBrk = juce::jlimit (1, BreakData::kBreaks, (int) x.getProperty ("lb", 2));
+                            s.layerSlice = juce::jlimit (0, BreakData::kSlices - 1, (int) x.getProperty ("ls", 0));
+                            s.layerLevel = juce::jlimit (0.0f, 1.5f, (float) x.getProperty ("ll", 0.7));
+                            s.stretch = juce::jlimit (0, 3, (int) x.getProperty ("st", 0));
+                            s.cycleMs = juce::jlimit (0.0f, 200.0f, (float) x.getProperty ("cyc", 0.0));
+                            s.nudge = juce::jlimit (0.0f, 0.5f, (float) x.getProperty ("nudge", 0.0));
+                        }
+    }
+
     juce::String toJson() const { return juce::JSON::toString (toVar(), true); }
 
     void fromVar (const juce::var& v)
@@ -242,50 +297,40 @@ public:
                 const auto bv = v[juce::Identifier ("break" + juce::String (k + 1))];
                 if (bv.isObject()) slotFromVar (d.brk[k], bv);
             }
-            if (auto* pats = v["patterns"].getArray())
-                for (int p = 0; p < juce::jmin (BreakData::kPatterns, pats->size()); ++p)
-                    if (auto* steps = (*pats)[p].getArray())
-                        for (auto& x : *steps)
-                        {
-                            const int i = (int) x["i"];
-                            if (i < 0 || i >= BreakData::kSteps) continue;
-                            auto& s = d.step[p][i];
-                            s.on = (bool) x.getProperty ("on", false);
-                            s.slice = juce::jlimit (0, BreakData::kSlices - 1, (int) x.getProperty ("slice", 0));
-                            s.vel = juce::jlimit (0.0f, 1.0f, (float) x.getProperty ("vel", 0.8));
-                            s.accent = (bool) x.getProperty ("acc", false);
-                            s.reverse = (bool) x.getProperty ("rev", false);
-                            s.tie = (bool) x.getProperty ("tie", false);
-                            s.roll = juce::jlimit (1, 4, (int) x.getProperty ("roll", 1));
-                            s.pitch = juce::jlimit (-24.0f, 24.0f, (float) x.getProperty ("pitch", 0.0));
-                            s.prob = juce::jlimit (0.0f, 1.0f, (float) x.getProperty ("prob", 1.0));
-                            s.brk = juce::jlimit (0, 3, (int) x.getProperty ("brk", 0));
-                            s.layer = (bool) x.getProperty ("layer", false);
-                            s.layerBrk = juce::jlimit (1, 3, (int) x.getProperty ("lb", 2));
-                            s.layerSlice = juce::jlimit (0, BreakData::kSlices - 1, (int) x.getProperty ("ls", 0));
-                            s.layerLevel = juce::jlimit (0.0f, 1.5f, (float) x.getProperty ("ll", 0.7));
-                            s.stretch = juce::jlimit (0, 3, (int) x.getProperty ("st", 0));
-                            s.cycleMs = juce::jlimit (0.0f, 200.0f, (float) x.getProperty ("cyc", 0.0));
-                            s.nudge = juce::jlimit (0.0f, 0.5f, (float) x.getProperty ("nudge", 0.0));
-                        }
+            patternsFromVar (d.step, v["patterns"]);
             setChain (d, v["chain"].toString());
             d.seed = juce::jmax (1, (int) v.getProperty ("seed", 1));
             if (auto* pb = v["patBreak"].getArray())
-                for (int p = 0; p < juce::jmin (BreakData::kPatterns, pb->size()); ++p) d.patBreak[p] = juce::jlimit (0, 3, (int) (*pb)[p]);
+                for (int p = 0; p < juce::jmin (BreakData::kPatterns, pb->size()); ++p) d.patBreak[p] = juce::jlimit (0, BreakData::kBreaks, (int) (*pb)[p]);
             if (auto* fs = v["fillSrc"].getArray())
                 for (int p = 0; p < juce::jmin (BreakData::kPatterns, fs->size()); ++p) d.fillSrc[p] = juce::jlimit (0, 8, (int) (*fs)[p]);
             if (auto* fb = v["fillBrk"].getArray())
-                for (int p = 0; p < juce::jmin (BreakData::kPatterns, fb->size()); ++p) d.fillBrk[p] = juce::jlimit (0, 3, (int) (*fb)[p]);
+                for (int p = 0; p < juce::jmin (BreakData::kPatterns, fb->size()); ++p) d.fillBrk[p] = juce::jlimit (0, BreakData::kBreaks, (int) (*fb)[p]);
             d.fillSeed = juce::jmax (1, (int) v.getProperty ("fillSeed", 1));
+            if (const auto lv = v["layer"]; lv.isObject())
+            {
+                patternsFromVar (d.lstep, lv["patterns"]);
+                setChain (d.lchain, lv["chain"].toString());
+                d.lseed = juce::jmax (1, (int) lv.getProperty ("seed", 1));
+                if (auto* pb = lv["patBreak"].getArray())
+                    for (int p = 0; p < juce::jmin (BreakData::kPatterns, pb->size()); ++p) d.lpatBreak[p] = juce::jlimit (0, BreakData::kBreaks, (int) (*pb)[p]);
+            }
         });
     }
 
-    static void setChain (BreakData& d, const juce::String& text)
+    static void setChain (BreakData& d, const juce::String& text) { setChain (d.chain, text); }
+    static void setChain (char (&chain)[17], const juce::String& text)
     {
-        std::fill (std::begin (d.chain), std::end (d.chain), 0);
+        std::fill (std::begin (chain), std::end (chain), 0);
         int n = 0;
         for (auto c : text.toUpperCase())
-            if (c >= 'A' && c <= 'H' && n < 16) d.chain[n++] = (char) c;
+            if (c >= 'A' && c <= 'H' && n < 16) chain[n++] = (char) c;
+    }
+    // the layer's patterns in the main ones' place (and back): so every pattern tool works on the layer as it is
+    static void swapLayer (BreakData& d)
+    {
+        for (int p = 0; p < BreakData::kPatterns; ++p) { std::swap_ranges (d.step[p], d.step[p] + BreakData::kSteps, d.lstep[p]); std::swap (d.patBreak[p], d.lpatBreak[p]); }
+        std::swap (d.chain, d.lchain); std::swap (d.seed, d.lseed);
     }
     static void copyAnalysis (const BreakData& from, BreakData& to)
     {

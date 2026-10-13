@@ -77,7 +77,12 @@ public:
     struct KeyEntry { int brk = 0, slice = 0; float vel = 0.8f; bool sustain = false; };
     std::vector<KeyEntry> takeKeyEntries();
     // put a played slice on a step of a pattern (layer: as the step's Layer hit); one undo step
-    void applyKeyEntry (int pattern, int step, const KeyEntry& k, bool layer);
+    void applyKeyEntry (int pattern, int step, const KeyEntry& k, bool layer, bool layerSeq = false);
+    // the Break Sequencer's tools on a pattern of the main or the layer sequencer, from that pattern's break (pinned to it when
+    // it has its own; the Active Break, unpinned, when it's set to Active). tool: one of the BreakTool values below, or a
+    // breaktools tool (0..kNumTools-1). Returns the break it used (0-3)
+    enum BreakTool { BtOriginal = -1, BtReverse = -2, BtShuffle = -3, BtJungle = -4, BtFranken = -5, BtSwap = -6, BtClear = -7 };
+    int runBreakTool (int tool, bool layerSeq, int pattern);   // layer: as the step's Layer hit; layerSeq: into the layer sequencer
     double snapChopFrame (int brk, double frame);
     double snapMarkerFrame (int brk, double frame);  // dragging a marker: Marker Snap
     static constexpr double kMarkerGap = 64.0;       // samples a marker keeps from its neighbours
@@ -92,11 +97,26 @@ public:
     double getHostTempoShown() const { const double h = hostTempo.load(); return h > 0.0 ? h : (double) raw[tg::P_seqTempo]->load(); }   // slice the loaded break again when its sample or slicing changed (message thread)
     std::atomic<int> breakAudition { -1 };    // the editor asks for a slice to be played
     std::atomic<int> bsStepShown { -1 }, bsPatternShown { 0 };   // the Break Sequencer's playing step and pattern
+    std::atomic<int> lsStepShown { -1 }, lsPatternShown { 0 };   // ... and the layer sequencer's
+    // the Fill pad: a note or CC learned from the controller (saved with the project, like the MIDI map)
+    std::atomic<int> fillPadKind { 0 }, fillPadNum { -1 };       // kind: 0 none, 1 note, 2 CC
+    std::atomic<bool> fillPadLearn { false };
+    bool fillPadCcDown = false;
+    juce::String fillPadText() const;                            // e.g. "Note 36 (C1)", "CC 20", "none"
+    // the break a pattern plays (and its tools use): its own, or the Active Break when it's set to Active
+    int patternBreak (const tg::BreakData& d, int pattern, bool layer) const;
+    // the editor's Key Entry / sequencer page: the slice keys play this break (-1: the Active Break)
+    std::atomic<int> keyBreakOverride { -1 };
+    // Key Entry into the layer sequencer (set by the page)
+    std::atomic<bool> keyEntryLayer { false };
     // the fill, for the step grid: steps until it starts (-1: none waiting), steps played (-1: none
     // playing), its length in steps (0: held), and the pattern step it starts on (-1: none)
     std::atomic<int> bsFillCountdown { -1 }, bsFillPosShown { -1 }, bsFillLenShown { 0 }, bsFillFirstIdx { -1 };
-    void refreshAutoFills (bool force = false);   // each pattern's Auto fill (message thread)
-    struct BsLogEntry { double beat; int64_t step; int pattern, slice; bool fired; int brk = -1; bool fill = false; };
+    void refreshAutoFills (bool force = false);   // each pattern's Auto fill, as before v0.1.69 (message thread; for converting older fills)
+    juce::String convertOldFills (bool always);   // an older project's fill into the Fill Pattern (see the .cpp); returns what changed
+    juce::String lastFillConversion;              // ... for the status line
+    bool importLegacyFills = false;
+    struct BsLogEntry { double beat; int64_t step; int pattern, slice; bool fired; int brk = -1; bool fill = false; bool layer = false; };
     std::vector<BsLogEntry>* bsLog = nullptr;   // tests: every Break Sequencer step with the beat it played on
     std::atomic<int> arpStepShown { -1 };     // for the editor
     struct ArpLogEntry { double beat; int note; bool on; float vel; };
@@ -198,10 +218,10 @@ public:
     juce::String getSampleStatus (int slot = 0) const;
     // sample slots: 0 WT 1, 1 WT 2, 2 the Granular Synth, 3 the Break Chopper
     // sample slots: 0 WT 1, 1 WT 2, 2 the Granular Synth, 3-5 the Break Chopper's Breaks 1-3
-    static constexpr int kSampleSlots = 6, kSlotGranular = 2, kSlotBreak = 3;
-    static int breakSlot (int k) { return kSlotBreak + juce::jlimit (0, 2, k); }
-    static juce::String sampleSuffix (int k) { static const char* s[] = { "", "2", "Gran", "Break", "Break2", "Break3" }; return s[juce::jlimit (0, 5, k)]; }
-    static const char* samplePatchKey (int k) { static const char* s[] = { "wavetable", "wavetable2", "granularSample", "breakSample", "breakSample2", "breakSample3" }; return s[juce::jlimit (0, 5, k)]; }
+    static constexpr int kSampleSlots = 7, kSlotGranular = 2, kSlotBreak = 3;
+    static int breakSlot (int k) { return kSlotBreak + juce::jlimit (0, tg::BreakData::kBreaks - 1, k); }
+    static juce::String sampleSuffix (int k) { static const char* s[] = { "", "2", "Gran", "Break", "Break2", "Break3", "Break4" }; return s[juce::jlimit (0, 6, k)]; }
+    static const char* samplePatchKey (int k) { static const char* s[] = { "wavetable", "wavetable2", "granularSample", "breakSample", "breakSample2", "breakSample3", "breakSample4" }; return s[juce::jlimit (0, 6, k)]; }
     // the longest audio a slot keeps: the wavetable slots 120 s as before; the Granular Synth 20 s and the
     // Break Chopper 30 s (8 bars at 64 BPM), so a project doesn't grow past roughly 10 MB per sample
     static double sampleCapSeconds (int k) { return k == kSlotGranular ? 20.0 : (k >= kSlotBreak ? 30.0 : 120.0); }
@@ -275,7 +295,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 28;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows
+    static constexpr int kStateVersion = 29;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows; 29: Break 4, layer sequencer, fill pattern
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -329,7 +349,8 @@ private:
     juce::String rpFinish (const tg::randompatch::Options&, const tg::randompatch::Result&);                     // message thread
     void setRandomReport (const juce::String& r) { { const juce::ScopedLock sl (rpLock); rpReport = r; } randomReportVersion.fetch_add (1); }
     void setV27DefaultsForOldPatch();
-    void setV28DefaultsForOldPatch();       // ... and from before Slice Keys / the Break React rows       // ... and from before the Core envelope mode / key entry
+    void setV28DefaultsForOldPatch();
+    void setV29DefaultsForOldPatch();       // ... and from before Break 4 / the layer sequencer / the fill pattern       // ... and from before Slice Keys / the Break React rows       // ... and from before the Core envelope mode / key entry
     void setCoreDefaultsForOldPatch();      // ... and from before the Core oscillator slots
     void setReeseDefaultsForOldPatch();     // ... and from before the Reese engine
     void setReactDefaultsForOldPatch();     // ... and from before Break-Reactive mode
@@ -351,8 +372,8 @@ private:
         tg::PatchMeta meta;
         juce::String steps, patchName, label, routes, scenes, macroNames, dnaSteps, fxRack, lfoShapes, arpStore, msegs, breakStore;
         int sceneEdit = 0;
-        std::shared_ptr<const juce::MemoryBlock> wave[6];
-        juce::String waveName[6];
+        std::shared_ptr<const juce::MemoryBlock> wave[kSampleSlots];
+        juce::String waveName[kSampleSlots];
     };
     Snapshot captureSnapshot (const juce::String& label);
     void restoreSnapshot (const Snapshot&);
@@ -395,14 +416,14 @@ private:
     std::atomic<uint32_t> midiMapVersion { 0 };
     double fxBeatStart = 0.0, fxBeatInc = 0.0, fxBeatsInternal = 0.0;   // the effects' beat clock for this block
     uint32_t lastRackVersion = 0, lastLfoShapeVersion = 0, lastArpVersion = 0, lastMsegVersion = 0, lastBreakVersion = 0;
-    juce::String lastBreakKey[3];
+    juce::String lastBreakKey[tg::BreakData::kBreaks];
     juce::AbstractFifo chopFifo { 64 };
     juce::AbstractFifo keyEntryFifo { 64 };
     struct KeyEntryRaw { int brk = 0, slice = 0; float vel = 0.8f; bool sustain = false; uint32_t ms = 0; } keyEntryBuf[64];
     double chopFrames[64] {}; int chopBrks[64] {};
     std::vector<std::pair<int, float>> chopHistory;   // the markers chop mode added, newest last
-    const tg::WaveSample* onsetsFor[3] {};
-    std::vector<int> onsets[3];                       // every transient (high sensitivity), for snapping
+    const tg::WaveSample* onsetsFor[tg::BreakData::kBreaks] {};
+    std::vector<int> onsets[tg::BreakData::kBreaks];                       // every transient (high sensitivity), for snapping
     bool lastChopMode = false;
     int breakSelPending = -1; double breakSelBeat = 0.0;   // a Break Select key waiting for the beat
     void bsApplyPatternBreak (const tg::BreakData&);
@@ -415,9 +436,9 @@ private:
     struct BsRoll { double beat; tg::BreakChopper::Trigger t; };
     BsRoll bsRolls[16]; int bsNumRolls = 0;
     // fills (audio thread): 0 none, 1 waiting for its start, 2 playing; steps [start, end)
-    int bsFillState = 0, bsFillPat = 0, bsFillLen = 16;
+    int bsFillState = 0, bsFillPat = 0, bsFillLen = 16;   // bsFillPat: the fill pattern playing (or waiting)
     int64_t bsFillStart = 0, bsFillEnd = 0, bsOffset = 0;   // bsOffset: where the pattern restarted (Restart the pattern)
-    bool bsFillHeld = false, bsFillParamLast = false, bsSkipChain = false;
+    bool bsFillHeld = false, bsFillParamLast = false, bsSkipChain = false, bsJustStarted = false;
     uint32_t bsFillRng = 0x2545F491u;
     void bsFillPress (bool down);
     void bsShowFill (int64_t k, int steps);
@@ -425,6 +446,15 @@ private:
     double bsDue() const;          // the beat of the next step or roll
     void bsTick (double beat);     // plays what's due at this beat
     void bsStart (double beat);
+    int fillLenSteps (int steps) const;   // the fill's length: the whole fill pattern, or its last 1 beat, 2 beats or 1 bar
+    // the layer sequencer (audio thread): its own patterns, steps, chain and rolls; Follow main takes the main's pattern
+    struct LayerRun { bool running = false; int64_t lastStep = INT64_MIN; int playing = 0, chainIdx = -1; uint32_t rng = 0x85EBCA6Bu;
+                      BsRoll rolls[16]; int numRolls = 0; int64_t offset = 0; bool skipChain = false; };
+    LayerRun lay;
+    void lsStart (double beat);
+    double lsDue() const;
+    void lsTick (double beat);
+    void bsPlayStep (const tg::BreakStep& s, int64_t k, double stepBeat, int pattern, bool inFill, bool layer, BsRoll* rolls, int& numRolls, uint32_t& rng, int& firedBrk, bool& fired);
     double hostStartBeat = 0.0; bool hostWasPlayingLfo = false;
     bool dnaGateRouted() const;     // a Mod Matrix route uses the DNA step gate
     tg::GlobalModInputs modInputs;
@@ -476,11 +506,11 @@ private:
     bool hostWasPlaying = false;
 
     // sample for Osc 4
-    std::atomic<tg::WaveSample*> currentWave[6] { { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr } };
+    std::atomic<tg::WaveSample*> currentWave[kSampleSlots] { { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr } };
     std::vector<std::unique_ptr<tg::WaveSample>> waveKeep;
-    juce::MemoryBlock waveData[6];
-    std::shared_ptr<const juce::MemoryBlock> waveShared[6];   // same bytes, shared with history snapshots
-    juce::String waveName[6];
+    juce::MemoryBlock waveData[kSampleSlots];
+    std::shared_ptr<const juce::MemoryBlock> waveShared[kSampleSlots];   // same bytes, shared with history snapshots
+    juce::String waveName[kSampleSlots];
     mutable juce::CriticalSection waveLock;
     juce::AudioFormatManager formats;
 

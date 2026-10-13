@@ -1582,6 +1582,22 @@ namespace
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> att;
     };
 
+    // a small value bar for a float parameter with no caption (for a section's title row)
+    struct BareSlider : juce::Component
+    {
+        BareSlider (MegaSynthProcessor& p, int idx, juce::Colour c)
+        {
+            s.setSliderStyle (juce::Slider::LinearBar);
+            s.setColour (juce::Slider::trackColourId, c.withAlpha (0.6f));
+            s.setColour (juce::Slider::textBoxTextColourId, col::text);
+            addAndMakeVisible (s);
+            att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, kParamIds[idx], tagParam (s, idx));
+        }
+        void resized() override { s.setBounds (getLocalBounds()); }
+        juce::Slider s;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
+    };
+
     juce::Colour rxTypeColour (int type)
     {
         static const juce::Colour c[4] = { juce::Colour (0xffff5a5a), juce::Colour (0xffffd166), juce::Colour (0xff4dd0e1), juce::Colour (0xffb0b8c8) };
@@ -1650,12 +1666,13 @@ void MegaSynthEditor::buildPages()
     struct TabDef { const char* name; juce::StringArray subs; juce::Colour colour; };
     const TabDef layout[] = {
         { "Perform", { "Perform", "Performance FX" }, col::accent }, { "Overview", {}, col::accent },
-        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Break Chopper", "Reese", "Core A", "Core B", "Break React" }, col::osc },
+        { "Oscillators", { "Osc 1-3 & Sub", "Wavetables", "Complex & SuperSaw", "Unison", "FM & Ring", "Granular Synth", "Reese", "Core A", "Core B" }, col::osc },
+        { "Breaks", { "Break Chopper", "Break Sequencer", "Break React" }, col::complex },
         { "Mixer", {}, col::mixer }, { "Filters", {}, col::filter },
         { "Envelopes", { "Amp & Filter", "Mod Envelopes", "Pitch Envelope", "MSEG 1 & 2" }, col::env },
         { "FX & Mutation", { "Note Mutation", "Bus Mutation", "Space", "Dirt", "Motion", "Rack" }, col::fx },
         { "Modulation", { "LFOs", "Mod Matrix", "Assignments", "Macros & Scenes", "Cell Instability" }, col::mod },
-        { "Sequencers", { "Step Sequencer", "Arp / Chord", "DNA Sequencer", "Break Sequencer" }, col::seq },
+        { "Sequencers", { "Step Sequencer", "Arp / Chord", "DNA Sequencer" }, col::seq },
         { "Lab", { "Mutate / Lab", "Capture", "Random Patch" }, col::wavetable } };
     for (auto& t : layout)
     {
@@ -2083,25 +2100,25 @@ void MegaSynthEditor::buildPages()
         };
     }
 
-    // ---------------------------------------------------------------- Oscillators > Break Chopper
+    // ---------------------------------------------------------------- Breaks > Break Chopper
     {
         auto* page = addPage ("Break Chopper");
         auto* ticker = page->own (new StoreTicker());
         auto selected = std::make_shared<int> (0);
-        auto activeOf = [this] { return juce::jlimit (0, 2, juce::roundToInt (proc.param (P_bcActive)->convertFrom0to1 (proc.param (P_bcActive)->getValue())) - 1); };
-        auto* smp = sec (page, "Breaks  (Three breaks, each with its own sample, slicing, tempo, slice settings, stretch and colour. "
-                               "The selector picks the Active Break: the one you edit here and the one the keys play. All three share one key zone "
-                               "from First Key up (C1 by default); the three Break Select keys just below it (A0, A#0, B0) switch the Active Break "
+        auto activeOf = [this] { return juce::jlimit (0, tg::BreakData::kBreaks - 1, juce::roundToInt (proc.param (P_bcActive)->convertFrom0to1 (proc.param (P_bcActive)->getValue())) - 1); };
+        auto* smp = sec (page, "Breaks  (Four breaks, each with its own sample, slicing, tempo, slice settings, stretch and colour. "
+                               "The selector picks the Active Break: the one you edit here and the one the keys play. All four share one key zone "
+                               "from First Key up (C1 by default); the Break Select keys just below it (A0, A#0, B0 for Breaks 1-3, G#0 for Break 4) switch the Active Break "
                                "while you play. Click a slice's label to hear and edit it. Drag a marker to move it (Alt: fine, no snap; arrow keys nudge); the "
                                "triangles along the bottom are the slice's trim. Mouse wheel or pinch zooms, Shift+wheel scrolls. In Manual markers mode a "
                                "click adds a marker, a double-click splits a slice, right-click or Delete removes one. Each break is saved inside the "
                                "project and patch, cut to 30 s at most.)", col::complex);
-        auto* selector = page->own (new Segmented (proc, -1, { "Break 1", "Break 2", "Break 3" }, breakColour (0)));
+        auto* selector = page->own (new Segmented (proc, -1, { "Break 1", "Break 2", "Break 3", "Break 4" }, breakColour (0)));
         tagParam (*selector, P_bcActive);
         selector->setTooltip ("The Active Break: the one shown and edited here, and the one the keys play");
         selector->onSelect = [this] (int k) { auto* prm = proc.param (P_bcActive); prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (k + 1))); prm->endChangeGesture(); };
         juce::Array<SampleWaveView*> minis;
-        for (int k = 0; k < 3; ++k)
+        for (int k = 0; k < tg::BreakData::kBreaks; ++k)
         {
             auto* mv = page->own (new SampleWaveView (proc, MegaSynthProcessor::breakSlot (k), breakColour (k)));
             mv->emptyText = "Break " + juce::String (k + 1) + ": empty";
@@ -2109,7 +2126,7 @@ void MegaSynthEditor::buildPages()
             minis.add (mv);
         }
         auto* wave = page->own (new SampleWaveView (proc, MegaSynthProcessor::breakSlot (0), breakColour (0)));
-        for (int k = 0; k < 3; ++k)
+        for (int k = 0; k < tg::BreakData::kBreaks; ++k)
         {
             auto* mv = minis[k];
             // the Active Break's small wave shows where the zoomed view is; click or drag on it to move the view
@@ -2381,7 +2398,7 @@ void MegaSynthEditor::buildPages()
 
         // ---- each break's own slicing and sound (one set shows: the Active Break's)
         juce::Array<Section*> slicing, sound;
-        for (int k = 0; k < 3; ++k)
+        for (int k = 0; k < tg::BreakData::kBreaks; ++k)
         {
             const auto bp = breakParams (k);
             auto* sl = sec (page, "Break " + juce::String (k + 1) + " Slicing & Tempo", breakColour (k));
@@ -2480,7 +2497,7 @@ void MegaSynthEditor::buildPages()
                 *lastActive = a; *selected = 0;
                 selector->setLocal (a); selector->setColour (breakColour (a));
                 wave->setSlot (MegaSynthProcessor::breakSlot (a)); wave->setColour (breakColour (a));
-                for (int k = 0; k < 3; ++k) { slicing[k]->setVisible (k == a); sound[k]->setVisible (k == a); }
+                for (int k = 0; k < tg::BreakData::kBreaks; ++k) { slicing[k]->setVisible (k == a); sound[k]->setVisible (k == a); }
                 ed->colour = breakColour (a); smp->colour = breakColour (a);
                 ed->repaint(); smp->repaint();
             }
@@ -2507,9 +2524,9 @@ void MegaSynthEditor::buildPages()
         {
             const int g = 10, W = page->getWidth();
             smp->setBounds (g, g, W - 2 * g, 238);
-            selector->setBounds (g + 10, g + 34, 270, 26);
-            const int mx = g + 290, mw = (W - 2 * g - 300) / 3;
-            for (int k = 0; k < 3; ++k) minis[k]->setBounds (mx + k * mw, g + 34, mw - 6, 26);
+            selector->setBounds (g + 10, g + 34, 330, 26);
+            const int mx = g + 350, mw = (W - 2 * g - 360) / 4;
+            for (int k = 0; k < tg::BreakData::kBreaks; ++k) minis[k]->setBounds (mx + k * mw, g + 34, mw - 6, 26);
             wave->setBounds (g + 10, g + 66, W - 2 * g - 20, 84);
             scroll->setBounds (g + 10, g + 151, W - 2 * g - 20, 11);
             on->setBounds (g + 10, g + 168, 56, 28);
@@ -2746,7 +2763,7 @@ void MegaSynthEditor::buildPages()
         };
     }
 
-    // ---------------------------------------------------------------- Oscillators > Break React
+    // ---------------------------------------------------------------- Breaks > Break React
     {
         auto* page = addPage ("Break React");
         const auto c = juce::Colour (0xffffb347);
@@ -2782,10 +2799,12 @@ void MegaSynthEditor::buildPages()
             });
         };
         auto* trg = sec (page, "Triggers", c);
-        trg->addInfo ("Where hits come from. Breaks: every slice the Break Sequencer, the slice keys or a fill plays. Note: a key of your own "
+        trg->addInfo ("Where hits come from. Breaks: every slice the Break Sequencer, the slice keys or a fill plays (Sequencer: the main "
+                      "Break Sequencer's hits, the layer's, or both). Note: a key of your own "
                       "(it isn't played) - put it in a MIDI clip to fire the reactions anywhere; it's a hit for every row that's on. Sidechain: "
                       "drum hits found in the host's sidechain input (a rough guess at kick / snare / hat from its low and high end).");
         trg->add (new ParamToggle (proc, P_rxFromBreaks, "Breaks", c), 80, 40);
+        trg->choice (P_rxFrom, "Sequencer", 130)->box.setTooltip ("Which Break Sequencer's hits count: the main one, the layer, or both (slice keys and fills always count)");
         trg->add (new ParamToggle (proc, P_rxFromNote, "Note", c), 70, 40);
         auto* kNote = trg->knob (P_rxNote, "Key", 64);
         trg->add (new ParamToggle (proc, P_rxFromSc, "Sidechain", c), 96, 40);
@@ -2904,64 +2923,126 @@ void MegaSynthEditor::buildPages()
         };
     }
 
-    // ---------------------------------------------------------------- Sequencers > Break Sequencer
+    // ---------------------------------------------------------------- Breaks > Break Sequencer
+    // Two sequencers on one page: the main one and the layer (e.g. hats or a shaker from another break). Main / Layer picks which
+    // one the controls, the grid and the Step section edit; both keep playing whichever is shown.
     {
         auto* page = addPage ("Break Sequencer");
+        breakSeqPage = page;
         auto* ticker = page->own (new StoreTicker());
-        auto* top = sec (page, "Patterns  (Eight patterns, A-H, of 16 or 32 sixteenth steps, locked to the song while it plays (and to the synth's "
-                               "tempo when it doesn't). Pick the pattern to edit and play here, or from 8 keys (Pattern Keys); a new pattern starts "
-                               "on the next step, beat or bar (Switch). Chain plays patterns in order, e.g. AABA. Each step plays a slice of the "
-                               "Break Chopper's break, with its own velocity, accent, pitch, reverse, roll (2, 3 or 4 hits in the step), probability "
-                               "or tie (let the last slice ring on). Step, pattern and slice are Mod Matrix sources.)", col::seq);
-        auto* pat = new Segmented (proc, P_bsPattern, { "A", "B", "C", "D", "E", "F", "G", "H" }, col::seq);
-        top->add (new ParamToggle (proc, P_bsOn, "Run", col::seq), 70, 40);
-        top->add (pat, 240, 30);
-        top->choice (P_bsSteps, "Length", 90);
-        top->choice (P_bsSwitch, "Switch", 100);
-        top->choice (P_bsKeys, "Pattern Keys", 150);
-        top->knob (P_bsSwing, "Swing", 62);
-        top->knob (P_bsAmount, "Amount", 62);
-        auto* patBreak = new StoreKnob ("Pattern Break", 0, 3, 1, col::seq,
-                                        [this] { const auto d = proc.breakStore.get(); return (float) d.patBreak[juce::jlimit (0, 7, juce::roundToInt (proc.param (P_bsPattern)->convertFrom0to1 (proc.param (P_bsPattern)->getValue())))]; },
-                                        [this] (float v) { const int p = juce::jlimit (0, 7, juce::roundToInt (proc.param (P_bsPattern)->convertFrom0to1 (proc.param (P_bsPattern)->getValue())));
-                                                           proc.breakStore.edit ([p, v] (tg::BreakData& d) { d.patBreak[p] = juce::roundToInt (v); }); },
-                                        [] (double v) { return v < 0.5 ? juce::String ("keep") : "Break " + juce::String (juce::roundToInt (v)); });
-        patBreak->setTooltip ("When this pattern starts, it makes this break the Active Break (keep: no change)");
-        top->add (patBreak, 84, 84);
-        top->knob (P_bsVarAmount, "Variation", 66);
-        top->choice (P_bsToolSource, "Tools draw from", 168);
-        top->newRow();
-        top->add (new ParamToggle (proc, P_bsChainOn, "Chain", col::seq), 76, 40);
-        auto* chainEd = new juce::TextEditor();
-        chainEd->setTooltip ("Patterns to play in order, e.g. AABA (up to 16)");
-        chainEd->setInputRestrictions (16, "ABCDEFGHabcdefgh");
-        chainEd->onTextChange = [this, chainEd] { const auto t = chainEd->getText(); proc.breakStore.edit ([t] (tg::BreakData& d) { tg::BreakStore::setChain (d, t); }); };
-        top->add (chainEd, 130, 26);
-        juce::Array<juce::TextButton*> tools;
-        for (auto* n : { "Original", "Reverse", "Shuffle", "Jungle", "Franken", "Swap", "Copy", "Paste", "Clear" }) { auto* b = new juce::TextButton (n); tools.add (b); top->add (b, 64, 26); }
-        top->choice (P_bsAlternate, "Alternate", 150);
-        top->choice (P_bsAltBreak, "With", 96);
-        top->newRow();
-        // the Stage 4 tools: each press applies straight away (a new seed each time) and Undo takes it back
-        juce::Array<juce::TextButton*> newTools;
-        for (int t = 0; t < tg::breaktools::kNumTools; ++t) { auto* b = new juce::TextButton (tg::breaktools::toolName (t)); newTools.add (b); top->add (b, 76, 26); }
         auto* grid = page->own (new BreakStepGrid (proc));
+        auto editLayer = std::make_shared<bool> (false);
         auto clip = std::make_shared<std::vector<tg::BreakStep>>();
-        auto edited = [grid] { return grid->editedPattern(); };
-        auto activeBreak = [this] { return juce::jlimit (0, 2, juce::roundToInt (proc.param (P_bcActive)->convertFrom0to1 (proc.param (P_bcActive)->getValue())) - 1); };
-        auto amount = [this] { return proc.param (P_bsAmount)->convertFrom0to1 (proc.param (P_bsAmount)->getValue()); };
-        tools[0]->onClick = [this, grid, edited, activeBreak] { const int a = activeBreak(); proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::original (d, edited(), grid->numSteps(), a); }); };
-        tools[1]->onClick = [this, grid, edited] { proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::reverseOrder (d, edited(), grid->numSteps()); }); };
-        tools[2]->onClick = [this, grid, edited] { proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::shuffle (d, edited(), grid->numSteps(), d.seed++); }); };
-        tools[3]->onClick = [this, grid, edited, activeBreak] { const int a = activeBreak(); proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::jungle (d, edited(), grid->numSteps(), d.seed++, a); }); };
-        tools[4]->onClick = [this, grid, edited, activeBreak, amount] { const int a = activeBreak(); const float am = amount(); proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::frankenbreak (d, edited(), grid->numSteps(), d.seed++, am, a); }); };
-        tools[5]->onClick = [this, grid, edited, activeBreak] { const int a = activeBreak(); proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::swapBreak (d, edited(), grid->numSteps(), a); }); };
-        tools[6]->onClick = [this, edited, clip] { const auto d = proc.breakStore.get(); clip->assign (d.step[edited()], d.step[edited()] + tg::BreakData::kSteps); setStatus ("Pattern copied"); };
-        tools[7]->onClick = [this, edited, clip] { if (clip->empty()) return; proc.breakStore.edit ([&] (tg::BreakData& d) { std::copy (clip->begin(), clip->end(), d.step[edited()]); }); };
-        tools[8]->onClick = [this, edited] { proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::clear (d, edited()); }); };
-        tools[4]->setTooltip ("Frankenbreak: the Active Break's groove, with its kicks, snares and hats each taken from a different loaded break (Amount: how many hits are swapped; each press a new mix)");
-        tools[5]->setTooltip ("Swap Break: the same pattern, played with the Active Break's slices at the same places");
+        auto plainOf = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+        // the pattern a sequencer edits: the main's selected one; the layer's own (or the main's letter while it follows the main)
+        auto patFor = [plainOf] (bool layer)
         {
+            const bool own = layer && plainOf (P_bsLFollow) > 0.5f;
+            return juce::jlimit (0, 7, juce::roundToInt (plainOf (own ? P_bsLPattern : P_bsPattern)));
+        };
+        juce::Array<StoreKnob*> knobs; juce::Array<StoreToggle*> toggles;
+        juce::Array<juce::TextButton*> editButtons;
+        struct ChainEd { juce::TextEditor* ed; bool layer; };
+        std::vector<ChainEd> chains;
+        Section* tops[2] {};
+        for (int li = 0; li < 2; ++li)
+        {
+            const bool layer = li == 1;
+            const juce::Colour c = layer ? col::complex : col::seq;
+            auto* top = sec (page, layer
+                ? juce::String ("Layer Sequencer  (A second Break Sequencer with everything the main one has, for a layer such as hats or a shaker "
+                                "from another break. Follow main: it plays its own pattern of the same letter as the main, starting and switching "
+                                "with it (and its chain). Own: its own pattern, Switch, Pattern Keys and chain. Its hits choke only each other "
+                                "(their own choke groups), and it has its own Mixer strip (Break Layer: level, pan, mute, solo, swing). Each of its "
+                                "patterns can own its break too. Break React can listen to it (Sequencer: Layer or Both). Layer Seq Step and Layer "
+                                "Seq Pattern are Mod Matrix sources.)")
+                : juce::String ("Main Sequencer  (Eight patterns, A-H, of 16 or 32 sixteenth steps, locked to the song while it plays (and to the "
+                                "synth's tempo when it doesn't). Pick the pattern to edit and play here, or from 8 keys (Pattern Keys); a new pattern "
+                                "starts on the next step, beat or bar (Switch). Chain plays patterns in order, e.g. AABA. Each pattern owns its break "
+                                "(Pattern Break: Break 1-4; Active follows the Active Break, as before): Original and the tools use it, and when the "
+                                "pattern starts it becomes the Active Break. Each step plays a slice, with its own velocity, accent, pitch, reverse, "
+                                "roll, probability or tie. Step, pattern and slice are Mod Matrix sources.)"),
+                c);
+            tops[li] = top;
+            // title row: which sequencer to edit, and where the tools draw from
+            for (int e = 0; e < 2; ++e)
+            {
+                auto* b = new juce::TextButton (e == 0 ? "Main" : "Layer");
+                b->setTooltip ("Edit the main sequencer or the layer sequencer (both play whichever you're editing)");
+                b->setColour (juce::TextButton::buttonOnColourId, e == 0 ? col::seq : col::complex);
+                b->onClick = [this, e] { if (breakEditLayerFn) breakEditLayerFn (e == 1); };
+                editButtons.add (b);
+                top->addTitleChip (b, 54);
+            }
+            auto* tdLabel = new juce::Label ({}, "Tools draw from");
+            tdLabel->setColour (juce::Label::textColourId, col::muted);
+            tdLabel->setFont (juce::Font (juce::FontOptions (11.5f)));
+            top->addTitleChip (tdLabel, 92);
+            auto* td = new BareChoice (proc, P_bsToolSource);
+            td->box.setTooltip ("This pattern's break: the tools use the edited pattern's break (or the Active Break when it's set to Active). All four breaks: they mix in hits from every loaded break");
+            top->addTitleChip (td, 170);
+            if (layer) top->addTitleChip (new ModSourceChip (MS_LsStep, "Step"), 40);
+            if (layer) top->addTitleChip (new ModSourceChip (MS_LsPattern, "Pattern"), 56);
+            // row 1
+            top->add (new ParamToggle (proc, layer ? P_bsLOn : P_bsOn, "Run", c), 70, 40);
+            top->add (new Segmented (proc, layer ? P_bsLPattern : P_bsPattern, { "A", "B", "C", "D", "E", "F", "G", "H" }, c), 240, 30);
+            top->choice (layer ? P_bsLSteps : P_bsSteps, "Length", 90);
+            top->choice (layer ? P_bsLSwitch : P_bsSwitch, "Switch", 100);
+            top->choice (layer ? P_bsLKeys : P_bsKeys, "Pattern Keys", layer ? 130 : 150);
+            if (layer) top->choice (P_bsLFollow, "Plays", 112)->box.setTooltip ("Follow main: the pattern of the same letter as the main, in step with it. Own: its own pattern, switching and chain");
+            top->knob (layer ? P_bsLSwing : P_bsSwing, "Swing", 62);
+            if (layer) top->knob (P_bsLLevel, "Level", 62);
+            top->knob (P_bsAmount, "Amount", 62);
+            auto* patBreak = new StoreKnob ("Pattern Break", 0, 4, 1, c,
+                                            [this, patFor, layer] { const auto d = proc.breakStore.get(); const int p = patFor (layer); return (float) (layer ? d.lpatBreak[p] : d.patBreak[p]); },
+                                            [this, patFor, layer] (float v) { const int p = patFor (layer); proc.breakStore.edit ([p, v, layer] (tg::BreakData& d) { (layer ? d.lpatBreak : d.patBreak)[p] = juce::roundToInt (v); }); },
+                                            [] (double v) { return v < 0.5 ? juce::String ("Active") : "Break " + juce::String (juce::roundToInt (v)); });
+            patBreak->setTooltip (layer ? "The break this layer pattern plays (Active: whichever is active). Original and the tools use it."
+                                        : "The break this pattern plays: Original and the tools use it, and it becomes the Active Break when the pattern starts (Active: no change, as before)");
+            top->add (patBreak, 84, 84);
+            knobs.add (patBreak);
+            top->knob (P_bsVarAmount, "Variation", 66);
+            top->newRow();
+            // row 2: chain, the pattern tools, Alternate
+            top->add (new ParamToggle (proc, layer ? P_bsLChainOn : P_bsChainOn, "Chain", c), 76, 40);
+            auto* chainEd = new juce::TextEditor();
+            chainEd->setTooltip ("Patterns to play in order, e.g. AABA (up to 16)");
+            chainEd->setInputRestrictions (16, "ABCDEFGHabcdefgh");
+            chainEd->onTextChange = [this, chainEd, layer] { const auto t = chainEd->getText(); proc.breakStore.edit ([t, layer] (tg::BreakData& d) { tg::BreakStore::setChain (layer ? d.lchain : d.chain, t); }); };
+            top->add (chainEd, 130, 26);
+            chains.push_back ({ chainEd, layer });
+            auto run = [this, patFor, layer] (int tool, const juce::String& name)
+            {
+                const int b = proc.runBreakTool (tool, layer, patFor (layer));
+                setStatus (name + " on " + (layer ? "layer " : "") + "pattern " + juce::String::charToString ((juce::juce_wchar) ('A' + patFor (layer)))
+                           + ", from Break " + juce::String (b + 1) + " (Undo takes it back)");
+            };
+            struct T { const char* name; int tool; const char* tip; };
+            const T oldTools[] = {
+                { "Original", MegaSynthProcessor::BtOriginal, "The pattern's break as it was: its slices in order, each on the step where it falls (its own break's timing)" },
+                { "Reverse", MegaSynthProcessor::BtReverse, "The pattern back to front" },
+                { "Shuffle", MegaSynthProcessor::BtShuffle, "The same slices in a new order (each press a new shuffle)" },
+                { "Jungle", MegaSynthProcessor::BtJungle, "A jungle edit of the original: snare ghosts and swaps, a kick double, a reversed hit, a cut-up and a snare roll (each press a new one)" },
+                { "Franken", MegaSynthProcessor::BtFranken, "Frankenbreak: the pattern's break's groove, with its kicks, snares and hats each taken from a different loaded break (Amount: how many hits are swapped)" },
+                { "Swap", MegaSynthProcessor::BtSwap, "Swap Break: the same pattern, played with the pattern's break's slices at the same places" } };
+            for (auto& t : oldTools)
+            {
+                auto* b = new juce::TextButton (t.name); b->setTooltip (t.tip);
+                const int tool = t.tool; const juce::String nm (t.name);
+                b->onClick = [run, tool, nm] { run (tool, nm); };
+                top->add (b, 64, 26);
+            }
+            auto* copyB = new juce::TextButton ("Copy"); copyB->setTooltip ("Copy this pattern (paste it into any pattern of either sequencer)");
+            copyB->onClick = [this, clip, patFor, layer] { const auto d = proc.breakStore.get(); const auto* src = layer ? d.lstep[patFor (layer)] : d.step[patFor (layer)]; clip->assign (src, src + tg::BreakData::kSteps); setStatus ("Pattern copied"); };
+            auto* pasteB = new juce::TextButton ("Paste"); pasteB->setTooltip ("Paste the copied pattern here");
+            pasteB->onClick = [this, clip, patFor, layer] { if (clip->empty()) return; const int p = patFor (layer); proc.breakStore.edit ([&] (tg::BreakData& d) { std::copy (clip->begin(), clip->end(), layer ? d.lstep[p] : d.step[p]); }); };
+            auto* clearB = new juce::TextButton ("Clear"); clearB->setTooltip ("Clear this pattern");
+            clearB->onClick = [run] { run (MegaSynthProcessor::BtClear, "Clear"); };
+            for (auto* b : { copyB, pasteB, clearB }) top->add (b, 64, 26);
+            top->choice (layer ? P_bsLAlternate : P_bsAlternate, "Alternate", 150);
+            top->choice (layer ? P_bsLAltBreak : P_bsAltBreak, "With", 96);
+            top->newRow();
+            // row 3: the Stage 4 tools: each press applies straight away (a new seed each time) and Undo takes it back
             static const char* tips[] = {
                 "Rollers: quiet 16th ghost snares around the backbeat (Amount: how many)",
                 "Two-Step: kick on 1 and the 'and' of 2, snares on 2 and 4, the rest from the pattern (Amount: how many of its other kicks go)",
@@ -2977,59 +3058,59 @@ void MegaSynthEditor::buildPages()
                 "Humanise: small changes to velocity, and hits played a little late within the swing (Amount: how much)",
                 "Pitch Dive: the pitch falls over the last beat, down to an octave (Amount: how far)",
                 "Variation: small random changes to the pattern as it is (the Variation knob: how many)" };
-            for (int t = 0; t < newTools.size(); ++t)
+            for (int t = 0; t < tg::breaktools::kNumTools; ++t)
             {
-                newTools[t]->setTooltip (juce::String (tips[t]) + ". Applied straight away, a new result each press; Undo takes it back.");
-                newTools[t]->onClick = [this, t, grid, edited, activeBreak, amount]
-                {
-                    const int a = activeBreak();
-                    const float am = t == tg::breaktools::ToolVariation ? proc.param (P_bsVarAmount)->convertFrom0to1 (proc.param (P_bsVarAmount)->getValue()) : amount();
-                    const bool all = proc.param (P_bsToolSource)->getValue() > 0.5f;
-                    const int steps = grid->numSteps(), pat = edited();
-                    proc.breakStore.edit ([&] (tg::BreakData& d) { tg::breaktools::applyTool (t, d, pat, steps, d.seed++, am, a, all); });
-                    setStatus (juce::String (tg::breaktools::toolName (t)) + " applied (Undo takes it back)");
-                };
+                auto* b = new juce::TextButton (tg::breaktools::toolName (t));
+                b->setTooltip (juce::String (tips[t]) + ". From the pattern's break; applied straight away, a new result each press; Undo takes it back.");
+                const juce::String nm (tg::breaktools::toolName (t));
+                b->onClick = [run, t, nm] { run (t, nm); };
+                top->add (b, 76, 26);
             }
         }
-        tools[0]->setTooltip ("The break as it was: its slices in order, each on the step where it falls");
-        tools[1]->setTooltip ("The pattern back to front");
-        tools[2]->setTooltip ("The same slices in a new order (each press a new shuffle)");
-        tools[3]->setTooltip ("A jungle edit of the original: snare ghosts and swaps, a kick double, a reversed hit, a cut-up and a snare roll (each press a new one)");
-
+        // ---- the selected step (of the sequencer being edited)
         auto* stepSec = sec (page, "Step", col::seq);
         {
             auto* ke = new ParamToggle (proc, P_bsKeyEntry, "Key Entry", col::seq);
             ke->setTooltip ("Key Entry: a slice key (keyboard, pads or the on-screen keys) puts that slice on the selected step, switched on, "
-                            "with the key's velocity and pinned to its break, and you still hear it. Hold Shift (or the sustain pedal) to add it "
-                            "as the step's Layer hit instead. Advance moves the selection on after each key.");
+                            "with the key's velocity (or the fixed one) and pinned to its break, and you still hear it. The keys play the edited "
+                            "pattern's own break, so changing pattern changes the keys. Hold Shift (or the sustain pedal) to add it as the step's "
+                            "Layer hit instead. Advance moves the selection on after each key.");
             stepSec->addTitleChip (ke, 100);
             auto* adv = new BareChoice (proc, P_bsAdvance);
             adv->box.setTooltip ("Advance: after each Key Entry, move the selection on by this many steps (wrapping round the pattern)");
             stepSec->addTitleChip (adv, 112);
+            auto* fx = new ParamToggle (proc, P_bsKeyFixed, "Fixed vel", col::seq);
+            fx->setTooltip ("Fixed velocity: every hit Key Entry puts in gets the velocity set beside it, however hard the key was played");
+            stepSec->addTitleChip (fx, 84);
+            auto* kv = new BareSlider (proc, P_bsKeyVel, col::seq);
+            kv->s.setTooltip ("The fixed Key Entry velocity");
+            stepSec->addTitleChip (kv, 64);
         }
         auto& store = proc.breakStore;
-        auto stepGet = [&store, grid] (auto fn) { return [&store, grid, fn] { const auto d = store.get(); return fn (d.step[grid->editedPattern()][juce::jlimit (0, 31, grid->selected)]); }; };
-        auto stepSet = [&store, grid] (auto fn) { return [&store, grid, fn] (auto v) { store.edit ([&] (tg::BreakData& d) { fn (d.step[grid->editedPattern()][juce::jlimit (0, 31, grid->selected)], v); }); }; };
-        juce::Array<StoreKnob*> knobs; juce::Array<StoreToggle*> toggles;
+        auto stepGet = [&store, grid] (auto fn) { return [&store, grid, fn] { const auto d = store.get(); const int p = grid->editedPattern(), i = juce::jlimit (0, 31, grid->selected);
+                                                                              return fn (grid->layer ? d.lstep[p][i] : d.step[p][i]); }; };
+        auto stepSet = [&store, grid] (auto fn) { return [&store, grid, fn] (auto v) { const int p = grid->editedPattern(), i = juce::jlimit (0, 31, grid->selected), lay = grid->layer;
+                                                                                       store.edit ([&] (tg::BreakData& d) { fn (lay ? d.lstep[p][i] : d.step[p][i], v); }); }; };
         toggles.add (new StoreToggle ("On", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.on; }), stepSet ([] (tg::BreakStep& x, bool v) { x.on = v; })));
-        knobs.add (new StoreKnob ("Slice", 1, 32, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) (x.slice + 1); }), stepSet ([] (tg::BreakStep& x, float v) { x.slice = juce::roundToInt (v) - 1; x.on = true; }), [] (double v) { return juce::String (juce::roundToInt (v)); }));
-        knobs.add (new StoreKnob ("Velocity", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.vel; }), stepSet ([] (tg::BreakStep& x, float v) { x.vel = v; }), [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; }));
+        juce::Array<StoreKnob*> stepKnobs;
+        stepKnobs.add (new StoreKnob ("Slice", 1, 32, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) (x.slice + 1); }), stepSet ([] (tg::BreakStep& x, float v) { x.slice = juce::roundToInt (v) - 1; x.on = true; }), [] (double v) { return juce::String (juce::roundToInt (v)); }));
+        stepKnobs.add (new StoreKnob ("Velocity", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.vel; }), stepSet ([] (tg::BreakStep& x, float v) { x.vel = v; }), [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; }));
         toggles.add (new StoreToggle ("Accent", col::supersaw, stepGet ([] (const tg::BreakStep& x) { return x.accent; }), stepSet ([] (tg::BreakStep& x, bool v) { x.accent = v; })));
-        knobs.add (new StoreKnob ("Pitch", -24, 24, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.pitch; }), stepSet ([] (tg::BreakStep& x, float v) { x.pitch = v; }), [] (double v) { return (v > 0 ? "+" : "") + juce::String (juce::roundToInt (v)) + " st"; }));
+        stepKnobs.add (new StoreKnob ("Pitch", -24, 24, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.pitch; }), stepSet ([] (tg::BreakStep& x, float v) { x.pitch = v; }), [] (double v) { return (v > 0 ? "+" : "") + juce::String (juce::roundToInt (v)) + " st"; }));
         toggles.add (new StoreToggle ("Reverse", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.reverse; }), stepSet ([] (tg::BreakStep& x, bool v) { x.reverse = v; })));
-        knobs.add (new StoreKnob ("Roll", 1, 4, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.roll; }), stepSet ([] (tg::BreakStep& x, float v) { x.roll = juce::roundToInt (v); }), [] (double v) { return v < 1.5 ? juce::String ("off") : "x" + juce::String (juce::roundToInt (v)); }));
-        knobs.add (new StoreKnob ("Probability", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.prob; }), stepSet ([] (tg::BreakStep& x, float v) { x.prob = v; }), [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; }));
+        stepKnobs.add (new StoreKnob ("Roll", 1, 4, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.roll; }), stepSet ([] (tg::BreakStep& x, float v) { x.roll = juce::roundToInt (v); }), [] (double v) { return v < 1.5 ? juce::String ("off") : "x" + juce::String (juce::roundToInt (v)); }));
+        stepKnobs.add (new StoreKnob ("Probability", 0, 1, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.prob; }), stepSet ([] (tg::BreakStep& x, float v) { x.prob = v; }), [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; }));
         toggles.add (new StoreToggle ("Tie", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.tie; }), stepSet ([] (tg::BreakStep& x, bool v) { x.tie = v; })));
-        auto* brkKnob = new StoreKnob ("Break", 0, 3, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.brk; }), stepSet ([] (tg::BreakStep& x, float v) { x.brk = juce::roundToInt (v); }),
-                                       [] (double v) { return v < 0.5 ? juce::String ("Active") : "Break " + juce::String (juce::roundToInt (v)); });
+        auto* brkKnob = new StoreKnob ("Break", 0, 4, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.brk; }), stepSet ([] (tg::BreakStep& x, float v) { x.brk = juce::roundToInt (v); }),
+                                       [] (double v) { return v < 0.5 ? juce::String ("Pattern") : "Break " + juce::String (juce::roundToInt (v)); });
+        brkKnob->setTooltip ("Which break this step plays: Pattern (the pattern's break, or the Active Break when that's Active) or always Break 1-4");
         auto* layerT = new StoreToggle ("Layer", col::seq, stepGet ([] (const tg::BreakStep& x) { return x.layer; }), stepSet ([] (tg::BreakStep& x, bool v) { x.layer = v; }));
-        auto* lb = new StoreKnob ("Layer Break", 1, 3, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.layerBrk; }), stepSet ([] (tg::BreakStep& x, float v) { x.layerBrk = juce::roundToInt (v); x.layer = true; }),
+        auto* lb = new StoreKnob ("Layer Break", 1, 4, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.layerBrk; }), stepSet ([] (tg::BreakStep& x, float v) { x.layerBrk = juce::roundToInt (v); x.layer = true; }),
                                   [] (double v) { return "Break " + juce::String (juce::roundToInt (v)); });
         auto* ls = new StoreKnob ("Layer Slice", 1, 32, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) (x.layerSlice + 1); }), stepSet ([] (tg::BreakStep& x, float v) { x.layerSlice = juce::roundToInt (v) - 1; x.layer = true; }),
                                   [] (double v) { return juce::String (juce::roundToInt (v)); });
         auto* ll = new StoreKnob ("Layer Level", 0, 1.5, 0.01, col::seq, stepGet ([] (const tg::BreakStep& x) { return x.layerLevel; }), stepSet ([] (tg::BreakStep& x, float v) { x.layerLevel = v; }),
                                   [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; });
-        brkKnob->setTooltip ("Which break this step plays: Active (whichever is active) or always Break 1, 2 or 3");
         auto* stStretch = new StoreKnob ("Stretch", 0, 3, 1, col::seq, stepGet ([] (const tg::BreakStep& x) { return (float) x.stretch; }), stepSet ([] (tg::BreakStep& x, float v) { x.stretch = juce::roundToInt (v); }),
                                          [] (double v) { static const char* n[] = { "Default", "Repitch", "Akai", "Clean" }; return juce::String (n[juce::jlimit (0, 3, juce::roundToInt (v))]); });
         stStretch->setTooltip ("This hit's stretch: Default (the slice's, else the break's), Repitch, Akai Cyclic or Clean");
@@ -3041,81 +3122,98 @@ void MegaSynthEditor::buildPages()
         stLate->setTooltip ("How late this hit plays, as a share of a step (Humanise sets it)");
         stepSec->add (toggles[0], 56, 40);
         stepSec->add (brkKnob, 70, 84);
-        for (auto* k : knobs) stepSec->add (k, 70, 84);
+        for (auto* k : stepKnobs) stepSec->add (k, 70, 84);
         for (auto* k : { stStretch, stCycle, stLate }) stepSec->add (k, 70, 84);
         stepSec->newRow();
         for (int i = 1; i < toggles.size(); ++i) stepSec->add (toggles[i], 80, 40);
         stepSec->add (layerT, 72, 40);
         for (auto* k : { lb, ls, ll }) stepSec->add (k, 70, 84);
-        knobs.add (brkKnob); knobs.add (lb); knobs.add (ls); knobs.add (ll); knobs.add (patBreak); toggles.add (layerT);
+        for (auto* k : stepKnobs) knobs.add (k);
+        knobs.add (brkKnob); knobs.add (lb); knobs.add (ls); knobs.add (ll); toggles.add (layerT);
         knobs.add (stStretch); knobs.add (stCycle); knobs.add (stLate);
         auto* stepName = page->own (new juce::Label());
         stepName->setColour (juce::Label::textColourId, col::text);
         stepName->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        stepName->setJustificationType (juce::Justification::centredRight);
         grid->onSelect = [] (int) {};
-        // ---- fills
-        auto* fillSec = sec (page, "Fill", juce::Colour (0xffff9f43));
-        fillSec->addInfo ("Fill plays a fill, then the pattern comes back exactly where it would have been, as if it had kept running "
-                          "underneath (or, with Restart, from its first step). Chains carry on underneath too. Start: on the next beat, the next bar, "
-                          "or timed to end with the pattern. One-shot plays the set Length; Held plays while you hold it. Each pattern has its own "
-                          "Fill Source: Auto (one of Snare Build, Stutter, Rollers, Pitch Dive or Frankenbreak, chosen per pattern and made from it; "
-                          "New Fills picks again) or the last steps of a pattern A-H. Fill Break plays the fill from another break. Auto Fill plays one "
-                          "every 4, 8 or 16 bars, by Chance, ending with the phrase. Fill Active is a Mod Matrix source.");
-        fillSec->add (new FillButton (proc), 64, 40);
-        fillSec->choice (P_bsFillMode, "Mode", 92);
-        fillSec->choice (P_bsFillLen, "Length", 86);
+        // ---- fills: one Fill Pattern for the whole project, called from any pattern
+        const juce::Colour fc (0xffff9f43);
+        auto* fillSec = sec (page, "Fill", fc);
+        fillSec->addInfo ("Fill plays the Fill Pattern (one of A-H, the same whichever pattern is playing: e.g. write your fill in H and call it "
+                          "from A-G), then the pattern comes back exactly where it would have been, as if it had kept running underneath (or, "
+                          "with Restart, from its first step). Chains carry on underneath too. The fill plays the Fill Pattern's own break. "
+                          "Start: on the next beat, the next bar, or timed to end with the pattern. Size: the whole Fill Pattern, or its last "
+                          "1 beat, 2 beats or 1 bar. Mode: Trigger plays it once; Hold plays while you hold the pad. Calling it while the Fill "
+                          "Pattern itself is playing does nothing. The Fill pad: press Learn, then hit a pad (or move a CC) on your controller; "
+                          "that note isn't played, and the pad is saved with the project. Auto Fill plays the Fill Pattern every 4, 8 or 16 bars, "
+                          "by Chance, ending with the phrase. The layer can keep going under a fill, or play its own pattern of the Fill Pattern's "
+                          "letter. Fill Active is a Mod Matrix source.");
+        auto* padLabel = new juce::Label();
+        padLabel->setColour (juce::Label::textColourId, col::text);
+        padLabel->setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+        fillSec->addTitleChip (padLabel, 190);
+        fillSec->add (new FillButton (proc), 56, 40);
+        auto* learnB = new juce::TextButton ("Learn");
+        learnB->setTooltip ("Learn the Fill pad: press, then hit a pad (a note) or move a button / CC on your controller");
+        learnB->setClickingTogglesState (false);
+        learnB->setColour (juce::TextButton::buttonOnColourId, fc);
+        learnB->onClick = [this] { proc.fillPadLearn = ! proc.fillPadLearn.load(); };
+        auto* clearPad = new juce::TextButton ("Clear");
+        clearPad->setTooltip ("Forget the Fill pad");
+        clearPad->onClick = [this] { proc.fillPadLearn = false; proc.fillPadKind = 0; proc.fillPadNum = -1; setStatus ("Fill pad cleared"); };
+        fillSec->add (learnB, 60, 26);
+        fillSec->add (clearPad, 52, 26);
+        fillSec->choice (P_bsLFill, "Layer during fill", 168);
+        fillSec->newRow();
+        fillSec->choice (P_bsFillPat, "Fill Pattern", 104);
+        fillSec->choice (P_bsFillSize, "Size", 108);
         fillSec->choice (P_bsFillStart, "Start", 112);
         fillSec->newRow();
-        auto patOf = [this] { return juce::jlimit (0, 7, juce::roundToInt (proc.param (P_bsPattern)->convertFrom0to1 (proc.param (P_bsPattern)->getValue()))); };
-        auto* fSrc = new StoreKnob ("Fill Source", 0, 8, 1, juce::Colour (0xffff9f43),
-                                    [this, patOf] { return (float) proc.breakStore.get().fillSrc[patOf()]; },
-                                    [this, patOf] (float v) { const int p = patOf(); proc.breakStore.edit ([p, v] (tg::BreakData& d) { d.fillSrc[p] = juce::roundToInt (v); }); },
-                                    [this, patOf] (double v)
-                                    {
-                                        const int n = juce::roundToInt (v);
-                                        if (n > 0) return "Pattern " + juce::String::charToString ((juce::juce_wchar) ('A' + n - 1));
-                                        static const char* tn[] = { "Build", "Stutter", "Rollers", "Dive", "Franken" };
-                                        return "Auto " + juce::String (tn[juce::jlimit (0, 4, proc.breakStore.get().autoFillTool[patOf()])]);
-                                    });
-        fSrc->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, true, 84, 18);
-        fSrc->setTooltip ("Where this pattern's fill comes from: Auto (made from the pattern by a tool) or the last steps of pattern A-H");
-        auto* fBrk = new StoreKnob ("Fill Break", 0, 3, 1, juce::Colour (0xffff9f43),
-                                    [this, patOf] { return (float) proc.breakStore.get().fillBrk[patOf()]; },
-                                    [this, patOf] (float v) { const int p = patOf(); proc.breakStore.edit ([p, v] (tg::BreakData& d) { d.fillBrk[p] = juce::roundToInt (v); }); },
-                                    [] (double v) { return v < 0.5 ? juce::String ("as steps") : "Break " + juce::String (juce::roundToInt (v)); });
-        fBrk->setTooltip ("The break the fill plays (for its Active steps): e.g. a fill from Break 2 over a groove from Break 1");
-        fillSec->add (fSrc, 84, 84);
-        fillSec->add (fBrk, 70, 84);
-        fillSec->knob (P_bsAutoFillProb, "Chance", 60);
-        fillSec->knob (P_bsFillKey, "Fill Key", 64);
-        auto* newFills = new juce::TextButton ("New Fills");
-        newFills->setTooltip ("New Auto fills for every pattern (a new fill seed; Undo goes back)");
-        newFills->onClick = [this] { proc.breakStore.edit ([] (tg::BreakData& d) { ++d.fillSeed; }); };
-        fillSec->add (newFills, 72, 26);
-        fillSec->newRow();
-        fillSec->choice (P_bsFillReturn, "When it ends", 164);
-        fillSec->choice (P_bsAutoFill, "Auto Fill", 128);
-        knobs.add (fSrc); knobs.add (fBrk);
-        ticker->tick = [this, grid, knobs, toggles, chainEd, stepName]
+        fillSec->choice (P_bsFillMode, "Mode", 80);
+        fillSec->choice (P_bsFillReturn, "When it ends", 132);
+        fillSec->choice (P_bsAutoFill, "Auto Fill", 96);
+        fillSec->knob (P_bsAutoFillProb, "Chance", 52);
+        // which sequencer is being edited
+        breakEditLayerFn = [this, editLayer, grid, tops, editButtons] (bool l)
+        {
+            *editLayer = l; grid->layer = l; proc.keyEntryLayer = l;
+            tops[0]->setVisible (! l); tops[1]->setVisible (l);
+            for (int i = 0; i < editButtons.size(); ++i) editButtons[i]->setToggleState ((i % 2 == 1) == l, juce::dontSendNotification);
+            grid->refresh(); grid->repaint();
+        };
+        breakEditLayerFn (false);
+        ticker->tick = [this, grid, knobs, toggles, chains, stepName, padLabel, learnB, editLayer, patFor]
         {
             breakKeyEntry (*grid);
             grid->refresh();
             for (auto* k : knobs) k->refresh();
             for (auto* t : toggles) t->refresh();
             const auto d = proc.breakStore.get();
-            if (! chainEd->hasKeyboardFocus (true) && chainEd->getText() != juce::String (d.chain)) chainEd->setText (juce::String (d.chain), false);
-            stepName->setText ("Step " + juce::String (grid->selected + 1) + " of pattern " + juce::String::charToString ((juce::juce_wchar) ('A' + grid->editedPattern())),
-                               juce::dontSendNotification);
+            for (auto& ce : chains)
+            {
+                const juce::String txt (ce.layer ? d.lchain : d.chain);
+                if (! ce.ed->hasKeyboardFocus (true) && ce.ed->getText() != txt) ce.ed->setText (txt, false);
+            }
+            const bool l = *editLayer;
+            const int p = patFor (l), pb = l ? d.lpatBreak[p] : d.patBreak[p];
+            // the slice keys play the edited pattern's own break (the Active Break when it's set to Active)
+            proc.keyBreakOverride = pb > 0 ? pb - 1 : -1;
+            stepName->setText ("Step " + juce::String (grid->selected + 1) + " of " + (l ? "layer " : "") + "pattern " + juce::String::charToString ((juce::juce_wchar) ('A' + p))
+                               + (pb > 0 ? "  (Break " + juce::String (pb) + ")" : juce::String ("  (Active Break)")), juce::dontSendNotification);
+            const bool learning = proc.fillPadLearn.load();
+            const juce::String pt = learning ? juce::String ("Pad: hit a pad or move a CC...") : "Pad: " + proc.fillPadText();
+            if (padLabel->getText() != pt) padLabel->setText (pt, juce::dontSendNotification);
+            learnB->setToggleState (learning, juce::dontSendNotification);
         };
         ticker->tick();
         breakGridForTests = grid;
-        page->onResize = [page, top, grid, stepSec, stepName, fillSec]
+        page->onResize = [page, tops, grid, stepSec, stepName, fillSec]
         {
             const int g = 10, W = page->getWidth();
-            top->setBounds (g, g, W - 2 * g, 210);
+            for (auto* t : tops) t->setBounds (g, g, W - 2 * g, 210);
             grid->setBounds (g + 4, g + 216, W - 2 * g - 8, 140);
             stepSec->setBounds (g, g + 362, 772, 226);
-            stepName->setBounds (g + 290, g + 368, 300, 20);
+            stepName->setBounds (g + 470, g + 368, 292, 20);
             fillSec->setBounds (g + 780, g + 362, W - 2 * g - 780, 226);
         };
     }
@@ -3139,7 +3237,8 @@ void MegaSynthEditor::buildPages()
             { "Break", P_bcLevel, P_bcPitch, "Pitch", -1, col::complex },
             { "Reese", P_rsLevel, P_rsWidth, "Width", 99, juce::Colour (0xffff7a59) },
             { "Core A", tg::coreParam (0, tg::CS_Level), tg::coreParam (0, tg::CS_Bright), "Bright", 99, juce::Colour (0xff59d0ff) },
-            { "Core B", tg::coreParam (1, tg::CS_Level), tg::coreParam (1, tg::CS_Bright), "Bright", 99, juce::Colour (0xffb98cff) } };   // (99: lit only when the pitch envelope moves all)
+            { "Core B", tg::coreParam (1, tg::CS_Level), tg::coreParam (1, tg::CS_Bright), "Bright", 99, juce::Colour (0xffb98cff) },   // (99: lit only when the pitch envelope moves all)
+            { "Brk Layer", P_bsLLevel, P_bsLSwing, "Swing", -1, col::complex } };
         juce::Array<ChannelStrip*> stripList;
         for (int k = 0; k < kMxStrips; ++k)
             stripList.add (page->own (new ChannelStrip (proc, k, strips[k].name, strips[k].level, strips[k].extra, strips[k].extraCap, strips[k].pEnv, strips[k].c)));
@@ -4846,7 +4945,11 @@ void MegaSynthEditor::timerCallback()
         auto plainOf = [this] (int i) { return proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
         // (Slice Keys Off, or Auto while the Break Sequencer runs: the keys play the synth, so no zone)
         const bool on = plainOf (P_bcOn) > 0.5f && proc.sliceKeysTakeNotes(), sel = plainOf (P_bcSelKeys) > 0.5f;
-        const int kb = juce::roundToInt (plainOf (P_bcKeyBase)), a = juce::jlimit (0, 2, juce::roundToInt (plainOf (P_bcActive)) - 1);
+        // (the Break Sequencer page, or Key Entry: the edited pattern's own break)
+        auto pageShown = [this] (juce::Component* c) { if (c == nullptr) return false; for (; c != nullptr && c != this; c = c->getParentComponent()) if (! c->isVisible()) return false; return true; };
+        if (! pageShown (breakSeqPage) && plainOf (P_bsKeyEntry) < 0.5f) proc.keyBreakOverride = -1;
+        const int ov = proc.keyBreakOverride.load();
+        const int kb = juce::roundToInt (plainOf (P_bcKeyBase)), a = ov >= 0 ? juce::jlimit (0, tg::BreakData::kBreaks - 1, ov) : juce::jlimit (0, tg::BreakData::kBreaks - 1, juce::roundToInt (plainOf (P_bcActive)) - 1);
         const int ns = on ? proc.breakStore.get().brk[a].nSlices : 0;
         juce::String key; key << (on ? 1 : 0) << (sel ? 1 : 0) << kb << a << ns;
         if (key != lastZoneKey)
@@ -4856,7 +4959,7 @@ void MegaSynthEditor::timerCallback()
             {
                 if (! on) return juce::Colours::transparentBlack;
                 if (n >= kb && n < kb + ns) return breakColour (a);
-                if (sel && n >= kb - 3 && n < kb) return breakColour (n - (kb - 3)).withMultipliedAlpha (0.8f);
+                if (sel && n >= kb - 4 && n < kb) return breakColour (n == kb - 4 ? 3 : n - (kb - 3)).withMultipliedAlpha (0.8f);
                 return juce::Colours::transparentBlack;
             };
             keyboard.repaint();
@@ -4868,6 +4971,8 @@ void MegaSynthEditor::timerCallback()
         if (proc.getSample (MegaSynthProcessor::kSlotGranular) != nullptr) t << "   grains playing: " << proc.getEngine().granGrainsShown.load();
         granInfo->setText (t, juce::dontSendNotification);
     }
+    // an older project's fills, converted when it loaded (v0.1.69): say what was done
+    if (proc.lastFillConversion.isNotEmpty()) { setStatus (proc.lastFillConversion); proc.lastFillConversion.clear(); }
     if (proc.getPatchName() != lastShownName) refreshPatchList();
     undoBtn.setEnabled (proc.canUndo() || proc.lastHistoryLabel().isNotEmpty());
     redoBtn.setEnabled (proc.canRedo());
@@ -4990,7 +5095,7 @@ void MegaSynthEditor::breakKeyEntry (BreakStepGrid& grid)
     const bool shift = juce::ModifierKeys::currentModifiers.isShiftDown();
     for (auto& k : entries)
     {
-        proc.applyKeyEntry (grid.editedPattern(), grid.selected, k, shift || k.sustain);
+        proc.applyKeyEntry (grid.editedPattern(), grid.selected, k, shift || k.sustain, grid.layer);
         if (adv > 0) grid.selected = (grid.selected + adv) % grid.numSteps();
     }
     if (grid.onSelect) grid.onSelect (grid.selected);

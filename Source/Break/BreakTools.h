@@ -231,7 +231,7 @@ struct Picker
 
 inline Kind stepKind (const BreakData& d, const BreakStep& s, int activeBrk)
 {
-    return Picker::kindOf (d.brk[s.brk > 0 ? std::clamp (s.brk - 1, 0, 2) : activeBrk], s.slice);
+    return Picker::kindOf (d.brk[s.brk > 0 ? std::clamp (s.brk - 1, 0, BreakData::kBreaks - 1) : activeBrk], s.slice);
 }
 
 // Rollers: 16th ghost snares at low velocity around the backbeat

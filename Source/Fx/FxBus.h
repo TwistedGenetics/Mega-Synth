@@ -6,6 +6,7 @@
 #include "RackFx.h"
 #include "SpaceFx.h"
 #include "ModFx.h"
+#include "VastFx.h"
 
 namespace tg
 {
@@ -108,6 +109,7 @@ private:
 
     DubDelay dub; SpringReverb spring; GatedReverb gated; PlateReverb plate; MicroWidener widen; DimensionChorus dim; IrReverb irRev;
     EnsembleChorus ens; BbdChorus bbd; MultiChorus multi; ScriptPhase script; ColourPhase colour; DualPhaser dual; BarberPhaser barber; VibeFx vibe;   // (v0.1.72)
+    VastReverb vast;   // (v0.1.74)
     SpaceDucker duckers[SD_COUNT];
     std::vector<float> duckBuf[SD_COUNT];
     std::vector<char> scHitBuf, hitBuf;

@@ -32,7 +32,7 @@ void FxBus::prepare (double sampleRate, int block)
     for (int c = 0; c < 2; ++c) { dryBuf[c].assign ((size_t) maxBlock + 16, 0.0f); runBuf[c].assign ((size_t) maxBlock + 16, 0.0f); }
     multiband.prepare (sr); sampler.prepare (sr); stutter.prepare (sr); flanger.prepare (sr); stereo.prepare (sr);
     dub.prepare (sr); spring.prepare (sr); gated.prepare (sr); plate.prepare (sr); widen.prepare (sr); dim.prepare (sr); irRev.prepare (sr, maxBlock);
-    ens.prepare (sr); bbd.prepare (sr); multi.prepare (sr); script.prepare (sr); colour.prepare (sr); dual.prepare (sr); barber.prepare (sr); vibe.prepare (sr);
+    vast.prepare (sr); ens.prepare (sr); bbd.prepare (sr); multi.prepare (sr); script.prepare (sr); colour.prepare (sr); dual.prepare (sr); barber.prepare (sr); vibe.prepare (sr);
     for (auto& d : duckBuf) d.assign ((size_t) maxBlock + 16, 1.0f);
     scHitBuf.assign ((size_t) maxBlock + 16, 0); hitBuf.assign ((size_t) maxBlock + 16, 0);
     for (auto& b : frzBuf) b.assign ((size_t) (sr * 2.0) + 16, 0.0f);
@@ -49,7 +49,7 @@ void FxBus::reset()
     conv.reset();
     multiband.reset(); sampler.reset(); stutter.reset(); flanger.reset(); shaper.reset(); stereo.reset();
     dub.reset(); spring.reset(); gated.reset(); plate.reset(); widen.reset(); dim.reset(); irRev.reset();
-    ens.reset(); bbd.reset(); multi.reset(); script.reset(); colour.reset(); dual.reset(); barber.reset(); vibe.reset();
+    vast.reset(); ens.reset(); bbd.reset(); multi.reset(); script.reset(); colour.reset(); dual.reset(); barber.reset(); vibe.reset();
     for (auto& a : slotActivity) a.store (0.0f);
     for (auto& d : duckers) d.reset();
     duckSc.reset(); pendingHits = 0;
@@ -395,6 +395,7 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
                 case FS_Dual: dual.reset(); break;
                 case FS_Barber: barber.reset(); break;
                 case FS_Vibe: vibe.reset(); break;
+                case FS_Vast: vast.reset(); break;
                 default: break;
             }
         // insert effect: process a copy, then blend by the (ramped) slot gain
@@ -422,6 +423,7 @@ void FxBus::process (float* L, float* R, int n, const Snapshot& s, const ModStat
             case FS_Dual:      dual.process (L, R, n, s.v, ctx); break;
             case FS_Barber:    barber.process (L, R, n, s.v, ctx); break;
             case FS_Vibe:      vibe.process (L, R, n, s.v, ctx); break;
+            case FS_Vast:      vast.process (L, R, n, s.v, ctx, duckFor (SD_Vast)); break;
             default: break;
         }
         // (v0.1.72) how much the effect is adding (its wet level, for the pages' activity lights)

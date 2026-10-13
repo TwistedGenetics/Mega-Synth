@@ -101,6 +101,7 @@ public:
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
     const int slot, levelParam;
+    std::function<void (int slot)> onOpen;   // (v0.1.74) a click on the name: that effect's page
 private:
     void timerCallback() override { if (isShowing()) repaint(); }
     MegaSynthProcessor& proc;
@@ -120,7 +121,9 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
-    void sortByGroup();   // (v0.1.72) puts the effects in group order (Delays, Reverbs, Chorus, Phase, Width, Dirt, Motion)
+    void sortByGroup();
+    void mouseDoubleClick (const juce::MouseEvent&) override;   // (v0.1.74) a row's name: that effect's page
+    std::function<void (int slot)> onOpen;   // (v0.1.72) puts the effects in group order (Delays, Reverbs, Chorus, Phase, Width, Dirt, Motion)
     static constexpr int kRowH = 23, kTop = 30;   // (24 slots since v0.1.72)
 private:
     void timerCallback() override;

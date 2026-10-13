@@ -26,15 +26,15 @@ public:
         units.push_back ({ "Granular", "Bus Mutation", BX_Gran, col::fx, [busOn] { return busOn (0); } });
         units.push_back ({ "Spectral", "Bus Mutation", BX_Spec, col::fx, [busOn] { return busOn (1); } });
         units.push_back ({ "Feedback", "Bus Mutation", BX_Fb, col::fx, [busOn] { return busOn (2); } });
-        static const int order[] = { FS_Delay, FS_Dub, FS_Reverb, FS_Plate, FS_Gated, FS_Spring, FS_Ir, FS_Chorus, FS_Dim, FS_Ens, FS_Bbd, FS_Multi,
+        static const int order[] = { FS_Delay, FS_Dub, FS_Reverb, FS_Plate, FS_Gated, FS_Spring, FS_Ir, FS_Vast, FS_Chorus, FS_Dim, FS_Ens, FS_Bbd, FS_Multi,
                                      FS_Flanger, FS_Script, FS_Colour, FS_Dual, FS_Barber, FS_Vibe, FS_Stereo, FS_Widen, FS_Sampler, FS_Multiband, FS_Stutter, FS_Shaper };
         static const char* shortName[FS_COUNT] = { "Beat Repeat", "Vintage Sampler", "Flanger / Phaser", "Tape Delay", "Juno Chorus", "90s Reverbs", "Volume Shaper",
                                                    "Multiband", "Stereo Tools", "Dub Delay", "Spring", "Gated", "Plate", "Widener", "Dimension", "IR Reverb",
-                                                   "Ensemble", "BBD Chorus", "Multi-Chorus", "Script", "Colour", "Dual", "Barber-pole", "Vibe" };
+                                                   "Ensemble", "BBD Chorus", "Multi-Chorus", "Script", "Colour", "Dual", "Barber-pole", "Vibe", "Vastness" };
         for (int s : order)
         {
             const int g = fxSlotGroup (s);
-            units.push_back ({ shortName[s], kFxGroupNames[g], BX_Rack0 + s, fxGroupColour (g), [this, s] { return proc.param (fxOnParam (s))->getValue() > 0.5f && proc.param (fxMixParam (s))->getValue() > 0.0f; } });
+            units.push_back ({ shortName[s], kFxGroupNames[g], bxRackBit (s), fxGroupColour (g), [this, s] { return proc.param (fxOnParam (s))->getValue() > 0.5f && proc.param (fxMixParam (s))->getValue() > 0.0f; } });
         }
         units.push_back ({ "Performance FX", "Perf FX", BX_Perf, col::accent, [] { return true; } });
         units.push_back ({ "Master Filter", "Master", BX_MF, col::filter, [this] { return proc.param (P_mfOn)->getValue() > 0.5f; } });
@@ -54,7 +54,7 @@ public:
             for (int s = 0; s < FS_COUNT; ++s)
             {
                 const int g = fxSlotGroup (s);
-                if (k == 2 ? (g == FG_Delays || g == FG_Reverbs || g == FG_Width) : g == FG_Dirt) m |= 1u << (BX_Rack0 + s);
+                if (k == 2 ? (g == FG_Delays || g == FG_Reverbs || g == FG_Width) : g == FG_Dirt) m |= 1u << bxRackBit (s);
             }
         }
         for (int b = 0; b < 4; ++b) proc.fxRack.setBreakFx (b, m);
@@ -196,6 +196,12 @@ public:
         if (u < 0) return {};
         const auto& un = units[(size_t) u];
         return juce::String (un.name) + (un.isOn() ? "" : " (off now: a tick takes effect once it's on)") + (p.y < kGroupH ? "  -  click: the whole group, on or off, for every break" : "");
+    }
+    std::function<void (int bit)> onOpen;   // (v0.1.74) double-click a stage's name: its page
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        const int u = unitAt (e.x);
+        if (u >= 0 && e.y >= kGroupH && e.y < kGroupH + kNameH && onOpen) onOpen (units[(size_t) u].bit);
     }
     juce::String getTooltip() override { return getTooltipFor (getMouseXYRelative()); }
     int numUnits() const { return (int) units.size(); }

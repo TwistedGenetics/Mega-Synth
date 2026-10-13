@@ -4,6 +4,9 @@
 #include <thread>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "WtTools.h"
+#include "UI/CoreTools.h"
+#include "Fx/VastFx.h"
 #include "ParamFormat.h"
 #include "Registry.h"
 #include "Mut/Mutator.h"
@@ -2296,6 +2299,10 @@ int main()
               std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os, 44100.0, 2, 16, {}, 0)); w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()); }
             p->loadSampleData (mb, "Made-up pad.wav", MegaSynthProcessor::kSlotGranular);
             setP (*p, P_gsOn, 1.0f); setP (*p, P_gsScan, 0.4f);
+            // (v0.1.74) the same pad on WT 1, as a sampler: Start / End, a ping-pong loop with a crossfade
+            p->loadSampleData (mb, "Made-up pad.wav", 0);
+            setP (*p, P_osc4LoopMode, 4.0f); setP (*p, P_wt1SmpStart, 0.04f); setP (*p, P_wt1SmpEnd, 0.92f); setP (*p, P_osc4LoopStart, 0.3f); setP (*p, P_osc4LoopEnd, 0.62f);
+            setP (*p, P_wt1LoopType, 1.0f); setP (*p, P_wt1Xfade, 0.1f);
             // and the demo break for the Break Chopper / Sequencer pages
             setP (*p, P_bcOn, 1.0f); setP (*p, P_bcSliceMode, 0.0f); setP (*p, P_bsSteps, 1.0f);
             p->loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, 0), 44100.0), "Mega Break 170 (synthesised).wav", MegaSynthProcessor::kSlotBreak);
@@ -2658,7 +2665,8 @@ int main()
         {
             // (v0.1.72) every Space effect, switched on through the host as a DAW does, at its default settings, changes the sound
             juce::String line = "  VST3 Space effects on (default settings), output change vs off:";
-            for (int k = FS_Dub; k <= FS_Ir; ++k)   // (the Space effects: they add a tail or width; the choruses and phasers are checked in the harness)
+            std::vector<int> spaceSlots; for (int k = FS_Dub; k <= FS_Ir; ++k) spaceSlots.push_back (k); spaceSlots.push_back (FS_Vast);   // (v0.1.74: and Vastness)
+            for (int k : spaceSlots)   // (the Space effects: they add a tail or width; the choruses and phasers are checked in the harness)
             {
                 double diffDb = -300.0;
                 std::vector<float> offL, offR;
@@ -8704,6 +8712,301 @@ int main()
         std::cout << "PADDEMO bars (main/layer):" << bars << std::endl;
         return 0;
     }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_WETDIAG", {}).isNotEmpty())
+    {
+        // each Space effect's wet sound (on minus off, the same render) over 2.5 s from a 0.4 s note, at its defaults
+        for (int k : { (int) FS_Dub, (int) FS_Spring, (int) FS_Plate, (int) FS_Gated, (int) FS_Ir, (int) FS_Vast })
+        {
+            juce::AudioBuffer<float> c[2];
+            for (int on = 0; on < 2; ++on)
+            {
+                auto p = make(); for (int i : { P_reverbMix, P_delayMix, P_chorusMix, P_shimmerMix, P_reverseMix }) setP (*p, i, 0.0f);
+                if (on) { setP (*p, fxOnParam (k), 1.0f); if (k == FS_Ir) { p->updateIrImpulse (true); for (int w = 0; w < 40 && ! p->getEngine().fx().irReady(); ++w) { render (*p, 0.01, {}); juce::Thread::sleep (25); } } }
+                tg::resetVoiceRandom(); render (*p, 2.5, chord (0.1, 0.4, { 48 }), &c[on]);
+            }
+            double e = 0, d = 0; for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < c[0].getNumSamples(); ++i) { const double x = c[1].getSample (ch, i) - c[0].getSample (ch, i); e += x * x; d += (double) c[0].getSample (ch, i) * c[0].getSample (ch, i); }
+            std::cout << "WET " << kFxSlotNames[k] << " " << juce::String (10.0 * std::log10 (e / d), 1) << " dB (next to the dry note)" << std::endl;
+        }
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RINGDIAG", {}).isNotEmpty())
+    {
+        auto run = [&] (bool init, float amt, float wet, float o3gain, int src, int dst)
+        {
+            auto p = make(); if (init) p->loadInitPatch();
+            for (int i : { P_reverbMix, P_delayMix, P_chorusMix }) setP (*p, i, 0.0f);
+            setP (*p, P_ringSlot1Amt, amt); setP (*p, P_ringMix, wet); setP (*p, P_ringSlot1Source, (float) src); setP (*p, P_ringSlot1Dest, (float) dst);
+            if (o3gain >= 0) setP (*p, P_osc3Gain, o3gain);
+            juce::AudioBuffer<float> c; tg::resetVoiceRandom(); render (*p, 0.6, chord (0.0, 0.5, { 48 }), &c);
+            return c;
+        };
+        auto diffDb = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b) { double d = 0, r = 0; for (int i = 0; i < a.getNumSamples(); ++i) { const double x = a.getSample (0, i), y = b.getSample (0, i); d += (x - y) * (x - y); r += y * y; } return 10.0 * std::log10 (d / std::max (1e-30, r) + 1e-30); };
+        for (int init = 0; init < 2; ++init)
+            for (float wet : { 0.0f, 0.5f })
+            {
+                const auto off = run (init, 0.0f, wet, -1, 2, 0), on = run (init, 1.0f, wet, -1, 2, 0), on2 = run (init, 1.0f, wet, 0.5f, 2, 0);
+                std::cout << (init ? "Init" : "Default") << " wet " << wet << ": amount 1 vs 0 " << juce::String (diffDb (on, off), 1) << " dB; with osc3 gain .5 " << juce::String (diffDb (on2, off), 1) << " dB" << std::endl;
+            }
+        for (int init = 0; init < 2; ++init)
+        {
+            auto fm = [&] (float amt) { auto p = make(); if (init) p->loadInitPatch(); setP (*p, P_fmSlot1Amt, amt); juce::AudioBuffer<float> c; tg::resetVoiceRandom(); render (*p, 0.6, chord (0.0, 0.5, { 48 }), &c); return c; };
+            std::cout << (init ? "Init" : "Default") << " FM slot 1 at 300 vs 0: " << juce::String (diffDb (fm (300.0f), fm (0.0f)), 1) << " dB" << std::endl;
+            auto p = make(); if (init) p->loadInitPatch();
+            std::cout << "  ringGain " << p->param (P_ringGain)->convertFrom0to1 (p->param (P_ringGain)->getValue()) << " ringMix " << p->param (P_ringMix)->convertFrom0to1 (p->param (P_ringMix)->getValue()) << " osc3 " << p->param (P_osc3Gain)->convertFrom0to1 (p->param (P_osc3Gain)->getValue()) << std::endl;
+        }
+        std::cout << "osc3Gain default " << make()->param (P_osc3Gain)->convertFrom0to1 (make()->param (P_osc3Gain)->getValue()) << std::endl;
+        return 0;
+    }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_V174DEMO", {}).isNotEmpty())
+    {
+        // v0.1.74 reel, 172 BPM, 16 bars and a 2-bar frozen tail: five parts, each its own Mega Synth (as five tracks in a DAW), mixed.
+        //  the break: Dub Delay throws on the last beat of bars 1-8 (at the new level), the Spring from bar 9
+        //  a pad: a made-up string chord recording on WT 1 as a sampler - a ping-pong loop with a 25% crossfade
+        //  a bell (bars 5-16): Core B from a DX7-format test voice made here (algorithm 5: ratios 4.5 and 7 over 1)
+        //  a bass: Core A from Randomise, Bass, Controlled (seed 1207)
+        //  a lead (bars 9-16): through Vastness (Shimmer Swell), Freeze on at the last beat, held for 2 bars
+        struct Head : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+        const double bpm = 172.0, inc = bpm / 60.0 / sr;
+        const int bars = 16, extra = 2;
+        const int total = (int) ((bars + extra) * 4.0 / inc);
+        juce::AudioBuffer<float> mix (2, total); mix.clear();
+        auto silence = [&] (MegaSynthProcessor& p)
+        {
+            for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain, P_osc4Gain, P_wt2Gain, P_ringGain,
+                           P_reverbMix, P_delayMix, P_chorusMix, P_shimmerMix, P_reverseMix }) setP (p, i, 0.0f);
+            setP (p, P_gsOn, 0.0f);
+        };
+        auto part = [&] (std::function<void (MegaSynthProcessor&)> setup, std::function<void (MegaSynthProcessor&, int, juce::MidiBuffer&)> onBeat, float gain, juce::AudioBuffer<float>* own = nullptr)
+        {
+            auto p = make(); silence (*p);
+            setup (*p);
+            Head head; p->prepareToPlay (sr, 256); p->setPlayHead (&head);
+            { juce::AudioBuffer<float> b (2, 256); juce::MidiBuffer m; head.info.setIsPlaying (false); p->processBlock (b, m); juce::Thread::sleep (400); p->processBlock (b, m); }
+            juce::AudioBuffer<float> buf (2, 256);
+            if (own != nullptr) { own->setSize (2, total); own->clear(); }
+            double ppq = 0.0; int lastBeat = -1;
+            for (int pos = 0; pos < total; pos += 256)
+            {
+                const int n = std::min (256, total - pos);
+                const int beat = (int) std::floor (ppq), bar = beat / 4;
+                juce::MidiBuffer m;
+                if (beat != lastBeat) { lastBeat = beat; onBeat (*p, beat, m); }
+                head.info.setIsPlaying (bar < bars); head.info.setBpm (bpm); head.info.setPpqPosition (ppq); head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+                buf.setSize (2, n, false, false, true); buf.clear(); p->processBlock (buf, m);
+                for (int c = 0; c < 2; ++c) { mix.addFrom (c, pos, buf, c, 0, n, gain); if (own != nullptr) own->addFrom (c, pos, buf, c, 0, n, gain); }
+                ppq += n * inc;
+            }
+            p->setPlayHead (nullptr);
+        };
+        // the break
+        part ([&] (MegaSynthProcessor& p)
+        {
+            setP (p, P_bcOn, 1.0f); setP (p, P_bcSliceMode, 3.0f); setP (p, P_bcLevel, 0.8f); setP (p, P_bsOn, 1.0f); setP (p, P_bcSliceKeys, 1.0f); setP (p, P_bcSync, 1.0f);
+            p.loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, 0), 44100.0), "Mega Break.wav", MegaSynthProcessor::kSlotBreak);
+            p.refreshBreakAnalysis (true);
+            setP (p, P_bsSteps, 1.0f);
+            p.breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::original (d, 0, 32); });
+            setP (p, P_sxOnDub, 1.0f); setP (p, P_sxMixDub, 0.5f); setP (p, P_sxDubMode, 0.0f); setP (p, P_sxDubSync, 6.0f); setP (p, P_sxDubFb, 0.7f);
+            setP (p, P_sxDubHP, 300.0f); setP (p, P_sxDubLP, 2800.0f); setP (p, P_sxDubDrive, 0.35f);
+        },
+        [&] (MegaSynthProcessor& p, int beat, juce::MidiBuffer&)
+        {
+            const int bar = beat / 4, bib = beat % 4;
+            if (bar < 8) setP (p, P_sxDubThrow, bib == 3 ? 1.0f : 0.0f);
+            if (beat == 32) { setP (p, P_sxDubThrow, 0.0f); setP (p, P_sxOnSpring, 1.0f); setP (p, P_sxMixSpring, 0.35f); setP (p, P_sxSprTension, 0.65f); }
+        }, 0.8f);
+        // the pad: WT 1 as a sampler, a ping-pong loop with a crossfade
+        juce::MemoryBlock padWav;
+        {
+            // (a made-up "recording": a slightly detuned saw chord with a slow swell, so a plain loop would bump and click)
+            juce::AudioBuffer<float> b (2, (int) (4.0 * 44100));
+            const double f[4] = { 220.0, 261.63, 329.63, 392.0 };
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const double t = i / 44100.0; double x = 0.0;
+                for (int k = 0; k < 4; ++k) for (int d = -1; d <= 1; ++d)
+                {
+                    const double ph = std::fmod ((f[k] * (1.0 + d * 0.004 + c * 0.001)) * t + 0.13 * k + 0.3 * d, 1.0);
+                    for (int h = 1; h <= 10; ++h) x += std::sin (2.0 * kPi * h * ph) / h * (h > 4 ? 0.5 : 1.0);
+                }
+                b.setSample (c, i, (float) (0.05 * x * std::min (1.0, t / 0.6) * (0.8 + 0.2 * std::sin (2.0 * kPi * 0.35 * t))));
+            }
+            auto* os = new juce::MemoryOutputStream (padWav, false); juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os, 44100.0, 2, 16, {}, 0)); w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        }
+        part ([&] (MegaSynthProcessor& p)
+        {
+            p.loadSampleData (padWav, "Made-up strings A minor.wav", 0);
+            setP (p, P_osc4Gain, 0.55f); setP (p, P_osc4LoopMode, 4.0f); setP (p, P_osc4Normalize, 1.0f);
+            setP (p, P_wt1SmpStart, 0.0f); setP (p, P_wt1SmpEnd, 1.0f); setP (p, P_osc4LoopStart, 0.25f); setP (p, P_osc4LoopEnd, 0.55f);
+            setP (p, P_wt1LoopType, 1.0f); setP (p, P_wt1Xfade, 0.25f);
+            setP (p, P_osc4Root, 57.0f);
+            setP (p, P_ampA, 0.5f); setP (p, P_ampS, 1.0f); setP (p, P_ampR, 1.2f); setP (p, P_filterCutoff, 3200.0f); setP (p, P_fEnvAmt, 0.0f); setP (p, P_polyphony, 4.0f);
+            setP (p, P_reverbMix, 0.2f);
+        },
+        [&] (MegaSynthProcessor&, int beat, juce::MidiBuffer& m)
+        {
+            static const int roots[4] = { 57, 53, 48, 55 };   // (one note of the chord recording, played at four roots: Am, F, C, G)
+            if (beat % 16 != 0) return;
+            const int bar = beat / 4;
+            if (bar > 0) m.addEvent (juce::MidiMessage::noteOff (1, roots[((bar - 4) / 4) % 4]), 0);
+            if (bar < bars) m.addEvent (juce::MidiMessage::noteOn (1, roots[(bar / 4) % 4], (juce::uint8) 85), 2);
+        }, 0.55f);
+        // the bell: Core B from a DX7-format voice
+        tg::dx7::Voice bell;
+        {
+            bell.name = "MEGA BELL"; bell.algorithm = 4; bell.feedback = 5; bell.transpose = 24;
+            for (int k = 0; k < 6; ++k)
+            {
+                auto& o = bell.op[k];
+                const bool car = (k % 2) == 0;
+                o.rate[0] = 99; o.rate[1] = car ? 28 : 35; o.rate[2] = 20; o.rate[3] = 45;
+                o.level[0] = 99; o.level[1] = car ? 75 : 60; o.level[2] = 0; o.level[3] = 0;
+                o.outLevel = car ? (k == 0 ? 99 : 82) : (k == 1 ? 78 : 62);
+                o.coarse = car ? 1 : (k == 1 ? 3 : 7); o.fine = car ? 0 : (k == 1 ? 50 : 0); o.detune = k == 2 ? 9 : 7; o.kvs = 3;
+            }
+        }
+        part ([&] (MegaSynthProcessor& p)
+        {
+            p.loadDx7Voice (1, bell);
+            setP (p, P_cBLevel, 0.5f);
+            setP (p, P_ampA, 0.001f); setP (p, P_ampS, 1.0f); setP (p, P_ampR, 1.5f); setP (p, P_filterCutoff, 16000.0f); setP (p, P_fEnvAmt, 0.0f); setP (p, P_polyphony, 6.0f);
+            setP (p, P_sxOnPlate, 1.0f); setP (p, P_sxMixPlate, 0.25f);
+        },
+        [&] (MegaSynthProcessor&, int beat, juce::MidiBuffer& m)
+        {
+            static const int mel[16] = { 81, -1, 76, 79, -1, 76, 72, -1, 77, -1, 76, 72, 74, -1, 79, -1 };
+            const int bar = beat / 4;
+            const int nPrev = mel[(beat + 15) % 16];
+            if (nPrev >= 0 && bar >= 4 && bar <= bars) m.addEvent (juce::MidiMessage::noteOff (1, nPrev), 0);
+            if (bar < 4 || bar >= bars) return;
+            if (mel[beat % 16] >= 0) m.addEvent (juce::MidiMessage::noteOn (1, mel[beat % 16], (juce::uint8) 95), 2);
+        }, 0.45f);
+        // the bass: Core A from Randomise, Bass, Controlled
+        juce::String bassWhat;
+        part ([&] (MegaSynthProcessor& p)
+        {
+            tg::coregen::Options o; o.type = tg::coregen::T_Bass; o.crazy = 0.0f; o.seed = 1207;
+            bassWhat = p.randomiseCore (0, o);
+            setP (p, P_ampA, 0.002f); setP (p, P_ampS, 1.0f); setP (p, P_ampR, 0.08f); setP (p, P_filterCutoff, 2500.0f); setP (p, P_fEnvAmt, 0.0f); setP (p, P_polyphony, 1.0f);
+        },
+        [&] (MegaSynthProcessor&, int beat, juce::MidiBuffer& m)
+        {
+            static const int roots[4] = { 33, 29, 36, 31 };
+            const int bar = beat / 4, bib = beat % 4;
+            const int r = roots[(bar / 4) % 4], rp = roots[((beat - 1) / 16) % 4];
+            if (beat > 0) for (int nn : { rp, rp + 12, r, r + 12 }) m.addEvent (juce::MidiMessage::noteOff (1, nn), 0);
+            if (bar >= bars) return;
+            if (bib == 0) m.addEvent (juce::MidiMessage::noteOn (1, r, (juce::uint8) 110), 2);
+            if (bib == 2 && (bar % 2) == 1) m.addEvent (juce::MidiMessage::noteOn (1, r + 12, (juce::uint8) 90), 2);
+        }, 0.7f);
+        std::cout << "  Core A bass (Randomise, Bass, Controlled, seed 1207): " << bassWhat << std::endl;
+        // the lead: through Vastness, Freeze at the end
+        part ([&] (MegaSynthProcessor& p)
+        {
+            setP (p, P_osc1Gain, 0.45f); setP (p, P_osc2Gain, 0.25f); setP (p, P_ampA, 0.01f); setP (p, P_ampS, 0.8f); setP (p, P_ampR, 0.3f);
+            setP (p, P_filterCutoff, 3800.0f); setP (p, P_fEnvAmt, 1200.0f); setP (p, P_polyphony, 1.0f); setP (p, P_porta, 0.03f);
+            p.applyVastPreset (3);   // Shimmer Pad
+            setP (p, P_vsMix, 0.5f);
+        },
+        [&] (MegaSynthProcessor& p, int beat, juce::MidiBuffer& m)
+        {
+            static const int riff[8] = { 76, -1, 72, 74, 76, -1, 79, 81 };
+            const int bar = beat / 4;
+            const int pn = riff[(beat + 7) % 8];
+            if (pn >= 0 && bar >= 8) m.addEvent (juce::MidiMessage::noteOff (1, pn), 0);
+            if (beat == bars * 4 - 1) setP (p, P_vsFreeze, 1.0f);   // (the last beat: Freeze holds the cloud)
+            if (bar < 8 || bar >= bars) { if (bar == bars && beat % 4 == 0) for (int nn : { 72, 74, 76, 79, 81 }) m.addEvent (juce::MidiMessage::noteOff (1, nn), 0); return; }
+            if (riff[beat % 8] >= 0) m.addEvent (juce::MidiMessage::noteOn (1, riff[beat % 8], (juce::uint8) 90), 2);
+        }, 0.45f);
+        // a 1.5 s fade at the very end (the frozen cloud would hold for ever)
+        { const int fl = (int) (1.5 * sr); for (int c = 0; c < 2; ++c) mix.applyGainRamp (c, total - fl, fl, 1.0f, 0.0f); }
+        const float pk = mix.getMagnitude (0, total);
+        if (pk > 0.0f) mix.applyGain (juce::Decibels::decibelsToGain (-1.0f) / pk);
+        writeWav (mix, sr, "v174_demo_172.wav");
+        std::cout << "V174DEMO written, " << juce::String (total / sr, 1) << " s, peak was " << juce::String (juce::Decibels::gainToDecibels (pk), 1) << " dBFS (normalised to -1)" << std::endl;
+
+        // before / after: the Dub Delay and the Spring on a stab (v0.1.73: their repeats/tail 4 dB lower - the same sound scaled, so it's rendered exactly)
+        {
+            auto stab = [&] (int slot, bool on, juce::AudioBuffer<float>& out)
+            {
+                auto p = make(); silence (*p);
+                setP (*p, P_supersawGain, 0.3f); setP (*p, P_ampA, 0.002f); setP (*p, P_ampS, 0.0f); setP (*p, P_ampD, 0.25f); setP (*p, P_ampR, 0.1f); setP (*p, P_fEnvAmt, 0.0f); setP (*p, P_filterCutoff, 3000.0f);
+                if (on) setP (*p, fxOnParam (slot), 1.0f);
+                if (slot == FS_Dub) { setP (*p, P_sxDubSync, 6.0f); setP (*p, P_sxDubFb, 0.6f); }
+                tg::resetVoiceRandom();
+                std::vector<std::pair<double, juce::MidiMessage>> ev;
+                for (int k = 0; k < 2; ++k) for (int nn : { 57, 64, 69 }) { ev.push_back ({ k * 2.8, juce::MidiMessage::noteOn (1, nn, (juce::uint8) 100) }); ev.push_back ({ k * 2.8 + 0.2, juce::MidiMessage::noteOff (1, nn) }); }
+                render (*p, 5.6, ev, &out);
+            };
+            juce::AudioBuffer<float> both (2, 0);
+            for (int slot : { FS_Dub, FS_Spring })
+            {
+                juce::AudioBuffer<float> dry, wet; stab (slot, false, dry); stab (slot, true, wet);
+                const int n = dry.getNumSamples(), half = (int) (2.8 * sr);
+                juce::AudioBuffer<float> ab (2, n);
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < n; ++i)
+                {
+                    const float d = dry.getSample (c, i), w = wet.getSample (c, i) - d;
+                    ab.setSample (c, i, d + (i < half ? w / 1.585f : w));   // (first stab: as v0.1.73; second: v0.1.74)
+                }
+                const int at = both.getNumSamples(); both.setSize (2, at + n, true, true);
+                for (int c = 0; c < 2; ++c) both.copyFrom (c, at, ab, c, 0, n);
+            }
+            writeWav (both, sr, "v174_dub_spring_before_after.wav");
+        }
+        // before / after: the ring matrix from Init (v0.1.73: the Amount alone - Ring Level and Wet/Dry at 0, Osc 3 at Level 0 - so nothing;
+        // v0.1.74: the FM & Ring page's Ring Level / Wet/Dry knobs, raised for you when you first turn an Amount up, and Osc 3's Level)
+        {
+            juce::AudioBuffer<float> both (2, 0);
+            for (int up = 0; up < 2; ++up)
+            {
+                auto p = make(); p->loadInitPatch();
+                setP (*p, P_ringSlot1Amt, 1.0f);
+                if (up) { setP (*p, P_ringGain, 0.5f); setP (*p, P_ringMix, 0.5f); setP (*p, P_osc3Gain, 0.4f); setP (*p, P_mxOsc1Pan + kMxStride * 2 + 1, 1.0f); }
+                juce::AudioBuffer<float> c; tg::resetVoiceRandom(); render (*p, 2.0, chord (0.0, 1.5, { 48, 55 }), &c);
+                const int at = both.getNumSamples(); both.setSize (2, at + c.getNumSamples(), true, true);
+                for (int ch = 0; ch < 2; ++ch) both.copyFrom (ch, at, c, ch, 0, c.getNumSamples());
+            }
+            writeWav (both, sr, "v174_ring_before_after.wav");
+        }
+        // snapshots: the Core randomiser and the DX7 browser (as their call-outs show them), the Reverbs page after a Mixer click on Vastness
+        {
+            auto p = make();
+            p->loadDx7Voice (1, bell);
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            ed->setSize (1200, 890);
+            auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+            struct Backing : juce::Component { void paint (juce::Graphics& g) override { g.fillAll (tgui::col::panel); g.setColour (tgui::col::border); g.drawRect (getLocalBounds()); } };
+            auto save = [&] (juce::Component& c, const juce::String& name)
+            {
+                auto img = c.createComponentSnapshot (c.getLocalBounds(), true, 1.0f);
+                auto f = juce::File::getCurrentWorkingDirectory().getChildFile ("renders").getChildFile (name); f.deleteFile();
+                juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+            };
+            {
+                tgui::CoreRandState st; st.type = tg::coregen::T_Bass; st.crazy = 0.0f; st.seed = 1207;
+                Backing b; tgui::CoreRandomPanel panel (*p, 0, st, nullptr);
+                b.setSize (panel.getWidth() + 8, panel.getHeight() + 8); b.addAndMakeVisible (panel); panel.setTopLeftPosition (4, 4);
+                ed->addAndMakeVisible (b); save (b, "v174_core_randomise.png"); ed->removeChildComponent (&b);
+            }
+            {
+                std::vector<tg::dx7::Voice> vs;
+                static const char* names[32] = { "MEGA BELL", "GLASS EP", "TINE KEYS", "SUB BASS", "HOLLOW PAD", "BRASS STAB", "WOOD PLUCK", "STEEL DRUM", "CHIME", "FM GROWL",
+                                                 "SYNC LEAD", "MARIMBA", "VOX PAD", "CLAV", "NOISE HIT", "ORGAN", "BELL PAD", "TOY PIANO", "METAL", "KALIMBA",
+                                                 "DX BASS", "SOFT EP", "HARP", "WIND", "GONG", "SAW-ISH", "ZAP", "CHOIR", "STRINGS", "SITAR", "PERC", "LAST ONE" };
+                for (int k = 0; k < 32; ++k) { auto v = bell; v.name = names[k]; v.algorithm = (k * 7) % 32; vs.push_back (v); }
+                Backing b; tgui::Dx7Browser br (*p, vs, "Made-up test bank.syx", {}, nullptr);
+                b.setSize (br.getWidth() + 8, br.getHeight() + 8); b.addAndMakeVisible (br); br.setTopLeftPosition (4, 4);
+                ed->addAndMakeVisible (b); save (b, "v174_dx7_browser.png"); ed->removeChildComponent (&b);
+            }
+            e->showPage ("Core B"); save (*ed, "v174_core_b_dx7.png");
+            setP (*p, P_vsOn, 1.0f); p->applyVastPreset (1);
+            e->showPage ("Mixer"); e->showEffect (FS_Vast); save (*ed, "v174_mixer_click_vastness.png");
+            e->showPage ("Mixer"); e->openMixerStripForTests (4); save (*ed, "v174_mixer_click_wt1.png");
+        }
+        return 0;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_V172DEMO", {}).isNotEmpty())
     {
         // v0.1.72 reel, 172 BPM: four parts, each its own Mega Synth (as four tracks in a DAW), mixed.
@@ -8845,7 +9148,7 @@ int main()
             setP (p, P_sxOnDub, 1.0f); setP (p, P_sxMixDub, 0.4f); setP (p, P_sxDubMode, 2.0f); setP (p, P_sxDubSync, 4.0f); setP (p, P_sxDubFb, 0.5f);
             setP (p, P_fxOnSampler, 1.0f); setP (p, P_smpModel, 0.0f);
             p.fxRack.setBreakFx (0, 0u);                                                   // Break 1: dry
-            p.fxRack.setBreakFx (1, 1u << (BX_Rack0 + FS_Sampler));                        // Break 2: the Vintage Sampler only
+            p.fxRack.setBreakFx (1, 1u << bxRackBit (FS_Sampler));                        // Break 2: the Vintage Sampler only
         },
         [&] (MegaSynthProcessor&, int beat, juce::MidiBuffer& m)
         {
@@ -9985,7 +10288,8 @@ int main()
             std::cout << line << std::endl;
             // the Barber-pole seems to rise for ever: its notches keep moving up, with no sweep back down (the three sweeps' sum stays level)
             {
-                auto v = std::vector<float> ((size_t) P_COUNT); for (int i = 0; i < P_COUNT; ++i) v[(size_t) i] = meta (i).def;
+                juce::ScopedNoDenormals noDenormals;   // (as in the plug-in's processBlock)
+            auto v = std::vector<float> ((size_t) P_COUNT); for (int i = 0; i < P_COUNT; ++i) v[(size_t) i] = meta (i).def;
                 v[P_cpBarSpeed] = 0.25f; v[P_cpBarFb] = 0.0f;
                 FxContext ctx; ctx.sr = fs; ctx.tempo = 172.0;
                 BarberPhaser bp; bp.prepare (fs);
@@ -10004,7 +10308,8 @@ int main()
             }
             // CPU: each effect alone on 10 s of stereo noise, 512-sample blocks (the quickest of three runs)
             {
-                auto v = std::vector<float> ((size_t) P_COUNT); for (int i = 0; i < P_COUNT; ++i) v[(size_t) i] = meta (i).def;
+                juce::ScopedNoDenormals noDenormals;   // (as in the plug-in's processBlock)
+            auto v = std::vector<float> ((size_t) P_COUNT); for (int i = 0; i < P_COUNT; ++i) v[(size_t) i] = meta (i).def;
                 v[P_cpMulVoices] = 4.0f;   // (8 voices: the most it can cost)
                 FxContext ctx; ctx.sr = fs; ctx.tempo = 172.0;
                 std::vector<float> nL ((size_t) (10.0 * fs)), nR;
@@ -10194,7 +10499,7 @@ int main()
                 auto tailOf = [&] (bool ticked)
                 {
                     auto p = withBreak (false); setP (*p, P_sxOnPlate, 1.0f); setP (*p, P_sxMixPlate, 0.8f);
-                    if (! ticked) p->fxRack.setBreakFx (0, kBxAll & ~(1u << (BX_Rack0 + FS_Plate)));
+                    if (! ticked) p->fxRack.setBreakFx (0, kBxAll & ~(1u << bxRackBit (FS_Plate)));
                     const auto o = play (*p, 2.0, { { 0.05, juce::MidiMessage::noteOn (1, juce::roundToInt (p->param (P_bcKeyBase)->convertFrom0to1 (p->param (P_bcKeyBase)->getValue())), (juce::uint8) 110) },
                                                     { 0.15, juce::MidiMessage::noteOff (1, juce::roundToInt (p->param (P_bcKeyBase)->convertFrom0to1 (p->param (P_bcKeyBase)->getValue()))) } });
                     double e = 0; for (int i = (int) (0.9 * fs); i < (int) (1.9 * fs); ++i) e += (double) o.getSample (0, i) * o.getSample (0, i);
@@ -10216,7 +10521,7 @@ int main()
                 std::vector<float> last { 0, 0 };
                 const auto o = play (*p, 6.0, {}, [&] (int bi)
                 {
-                    if (bi == 200) p->fxRack.setBreakFx (0, kBxAll & ~(1u << (BX_Rack0 + FS_Multiband)));
+                    if (bi == 200) p->fxRack.setBreakFx (0, kBxAll & ~(1u << bxRackBit (FS_Multiband)));
                     if (bi == 600) p->fxRack.setBreakFx (0, kBxAll);
                     if (bi == 400) lanesSeen = p->getEngine().breakLanesShown.load();
                 });
@@ -10244,7 +10549,7 @@ int main()
                     for (int k = 1; k < 4; ++k)
                         p->loadSampleData (wav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, k % 3), 44100.0), "b.wav", MegaSynthProcessor::breakSlot (k));
                     p->refreshBreakAnalysis();
-                    for (int k = 0; k < lanesWanted; ++k) p->fxRack.setBreakFx (k, kBxAll & ~(1u << (BX_Rack0 + k)));   // (each a different stage left out)
+                    for (int k = 0; k < lanesWanted; ++k) p->fxRack.setBreakFx (k, kBxAll & ~(1u << bxRackBit (k)));   // (each a different stage left out)
                     // all four breaks play: each step a different break, with another stacked on it
                     play (*p, 0.5);
                     double best = 1e9;
@@ -10306,6 +10611,362 @@ int main()
             CHECK (fresh->keysPadKind.load() == 0, "a new project has no Keys pad");
         }
     };
+    // ------------------------------------------------------------------ v0.1.74
+    auto v174Tests = [&]
+    {
+        std::cout << "v0.1.74: Dub and Spring levels, the ring matrix, the wavetables' sampler, Core Randomise, DX7 voices, Vastness, click-through" << std::endl;
+        const double fs = sr;
+        auto noFx = [&] (MegaSynthProcessor& p) { for (int i : { P_reverbMix, P_delayMix, P_chorusMix, P_shimmerMix, P_reverseMix }) setP (p, i, 0.0f); };
+        auto only = [&] (MegaSynthProcessor& p) { for (int i : { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_subGain, P_complexGain, P_supersawGain, P_osc4Gain, P_wt2Gain, P_ringGain }) setP (p, i, 0.0f); noFx (p); };
+        auto wetDb = [&] (int slot)
+        {
+            juce::AudioBuffer<float> c[2];
+            for (int on = 0; on < 2; ++on)
+            {
+                auto p = make(); noFx (*p);
+                if (on) setP (*p, fxOnParam (slot), 1.0f);
+                tg::resetVoiceRandom(); render (*p, 2.5, chord (0.1, 0.4, { 48 }), &c[on]);
+            }
+            double e = 0, d = 0;
+            for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < c[0].getNumSamples(); ++i) { const double x = c[1].getSample (ch, i) - c[0].getSample (ch, i); e += x * x; d += (double) c[0].getSample (ch, i) * c[0].getSample (ch, i); }
+            return 10.0 * std::log10 (e / d);
+        };
+        // ---- 1. Dub and Spring level with the Plate
+        {
+            const double dub = wetDb (FS_Dub), spr = wetDb (FS_Spring), pl = wetDb (FS_Plate), vs = wetDb (FS_Vast);
+            std::cout << "  wet level next to the dry note (a 0.4 s note, 2.5 s): Dub " << juce::String (dub, 1) << " dB, Spring " << juce::String (spr, 1) << " dB, Plate " << juce::String (pl, 1)
+                      << " dB, Vastness " << juce::String (vs, 1) << " dB (v0.1.73: Dub -8.8, Spring -8.5)" << std::endl;
+            CHECK (std::abs (dub - pl) < 2.0 && std::abs (spr - pl) < 2.0, "the Dub Delay and the Spring are as loud as the Plate, within 2 dB");
+        }
+        // ---- 2. the ring matrix: from Init (Ring Level and Wet/Dry at 0, Osc 3 at Level 0) it's silent; with them up, it rings
+        {
+            auto ring = [&] (bool up, float amt)
+            {
+                auto p = make(); p->loadInitPatch(); noFx (*p);
+                setP (*p, P_ringSlot1Amt, amt);
+                if (up) { setP (*p, P_ringGain, 0.5f); setP (*p, P_ringMix, 0.5f); setP (*p, P_osc3Gain, 0.4f); setP (*p, P_mxOsc1Pan + kMxStride * 2 + 1, 1.0f); }   // (Osc 3 muted: only the modulator)
+                juce::AudioBuffer<float> c; tg::resetVoiceRandom(); render (*p, 0.6, chord (0.0, 0.5, { 48 }), &c);
+                return c;
+            };
+            auto diffDb = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b) { double d = 0, r = 0; for (int i = 0; i < a.getNumSamples(); ++i) { const double x = a.getSample (0, i), y = b.getSample (0, i); d += (x - y) * (x - y); r += y * y; } return 10.0 * std::log10 (d / std::max (1e-30, r) + 1e-30); };
+            const double initDb = diffDb (ring (false, 1.0f), ring (false, 0.0f)), upDb = diffDb (ring (true, 1.0f), ring (true, 0.0f));
+            std::cout << "  ring slot 1 (Osc 3 rings Osc 1) on vs off: from Init " << juce::String (initDb, 1) << " dB; with Ring Level / Wet 50% and Osc 3 at Level 0.4, muted " << juce::String (upDb, 1) << " dB" << std::endl;
+            CHECK (upDb > -15.0, "the ring matrix rings once Ring Level and Wet/Dry are up and its source has a level (muted is fine)");
+            auto fm = [&] (float amt) { auto p = make(); p->loadInitPatch(); noFx (*p); setP (*p, P_fmSlot1Amt, amt); juce::AudioBuffer<float> c; tg::resetVoiceRandom(); render (*p, 0.6, chord (0.0, 0.5, { 48 }), &c); return c; };
+            CHECK (diffDb (fm (300.0f), fm (0.0f)) > -15.0, "the FM matrix works from Init");
+        }
+        // ---- 3. the wavetables' sampler
+        {
+            auto sineWav = [&] (double hz, double seconds)
+            {
+                juce::AudioBuffer<float> b (1, (int) (seconds * 44100.0));
+                for (int i = 0; i < b.getNumSamples(); ++i) b.setSample (0, i, 0.7f * (float) std::sin (2.0 * kPi * hz * i / 44100.0));
+                juce::MemoryBlock mb;
+                { auto* os = new juce::MemoryOutputStream (mb, false); juce::WavAudioFormat wav;
+                  std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os, 44100.0, 1, 24, {}, 0)); w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()); }
+                return mb;
+            };
+            // the biggest step between samples, next to a plain sine's at that pitch (2 pi f / sr x amplitude)
+            auto play = [&] (std::function<void (MegaSynthProcessor&)> set, std::function<void (MegaSynthProcessor&, int)> perBlock, double seconds)
+            {
+                auto p = make(); only (*p);
+                p->loadSampleData (sineWav (440.0, 1.0), "sine.wav", 0);
+                setP (*p, P_osc4Gain, 0.8f); setP (*p, P_osc4LoopMode, 4.0f); setP (*p, P_osc4Normalize, 1.0f);
+                setP (*p, P_filterCutoff, 20000.0f); setP (*p, P_fEnvAmt, 0.0f); setP (*p, P_ampS, 1.0f);
+                set (*p);
+                juce::AudioBuffer<float> out ((int) 1, (int) (seconds * fs) / 256 * 256), buf (2, 256);
+                for (int pos = 0, bi = 0; pos + 256 <= out.getNumSamples(); pos += 256, ++bi)
+                {
+                    if (perBlock) perBlock (*p, bi);
+                    juce::MidiBuffer m; if (pos == 0) m.addEvent (juce::MidiMessage::noteOn (1, 69, (juce::uint8) 100), 0);
+                    buf.clear(); p->processBlock (buf, m);
+                    out.copyFrom (0, pos, buf, 0, 0, 256);
+                }
+                float jump = 0, peak = 0; int at = 0;
+                for (int i = (int) (0.05 * fs); i < out.getNumSamples(); ++i) { const float j = std::abs (out.getSample (0, i) - out.getSample (0, i - 1)); if (j > jump) { jump = j; at = i; } peak = std::max (peak, std::abs (out.getSample (0, i))); }
+                if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_JUMPAT", {}).isNotEmpty())
+                {
+                    std::cout << "\n    [jump at " << at << ": ";
+                    for (int i = std::max (1, at - 6); i < std::min (out.getNumSamples(), at + 6); ++i) std::cout << juce::String (out.getSample (0, i), 3) << " ";
+                    std::cout << "]";
+                }
+                const float sineStep = peak * (float) (2.0 * kPi * 440.0 / fs);
+                return jump / std::max (1.0e-6f, sineStep);
+            };
+            // (a loop whose length isn't a whole number of cycles: the place a plain loop would click)
+            auto loopAt = [&] (MegaSynthProcessor& p, int type, float xf) { setP (p, P_osc4LoopStart, 0.2f); setP (p, P_osc4LoopEnd, 0.2f + 0.0517f); setP (p, P_wt1LoopType, (float) type); setP (p, P_wt1Xfade, xf); };
+            const float pp = play ([&] (MegaSynthProcessor& p) { loopAt (p, 1, 0.0f); }, nullptr, 3.0);
+            std::cout << "  WT sampler, the biggest step as a share of the sine's own: ping-pong " << juce::String (pp, 2);
+            CHECK (pp < 1.3f, "a ping-pong loop has no discontinuity at its turns (" + juce::String (pp, 2) + ")");
+            for (float xf : { 0.0f, 0.1f, 0.3f, 0.5f })
+            {
+                const float f = play ([&] (MegaSynthProcessor& p) { loopAt (p, 0, xf); }, nullptr, 2.0);
+                std::cout << ", forward with crossfade " << juce::roundToInt (xf * 100) << "% " << juce::String (f, 2);
+                CHECK (f < 1.6f, "a forward loop with crossfade " + juce::String (juce::roundToInt (xf * 100)) + "% doesn't click (" + juce::String (f, 2) + ")");
+            }
+            const float rv = play ([&] (MegaSynthProcessor& p) { loopAt (p, 2, 0.1f); }, nullptr, 2.0);
+            std::cout << ", reverse " << juce::String (rv, 2);
+            CHECK (rv < 1.6f, "a reverse loop doesn't click");
+            const float moved = play ([&] (MegaSynthProcessor& p) { loopAt (p, 0, 0.0f); }, [&] (MegaSynthProcessor& p, int bi)
+            {
+                // the markers dragged while it plays: the loop end swept back and forth, the start too
+                setP (p, P_osc4LoopEnd, 0.3f + 0.25f * (float) std::sin (bi * 0.11)); setP (p, P_osc4LoopStart, 0.1f + 0.08f * (float) std::sin (bi * 0.07));
+            }, 3.0);
+            std::cout << ", markers moving " << juce::String (moved, 2) << std::endl;
+            CHECK (moved < 1.6f, "moving the markers while a note plays doesn't click (" + juce::String (moved, 2) + ")");
+            // Stretch: the same length at any pitch (a one-shot of 1 s lasts 1 s an octave up and down)
+            for (int note : { 57, 81 })
+            {
+                auto p = make(); only (*p);
+                p->loadSampleData (sineWav (440.0, 1.0), "sine.wav", 0);
+                setP (*p, P_osc4Gain, 0.8f); setP (*p, P_osc4LoopMode, 4.0f); setP (*p, P_wt1LoopType, 3.0f); setP (*p, P_wt1Stretch, 1.0f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.01f);
+                juce::AudioBuffer<float> c; render (*p, 1.6, { { 0.0, juce::MidiMessage::noteOn (1, note, (juce::uint8) 100) } }, &c);
+                int last = 0; for (int i = 0; i < c.getNumSamples(); ++i) if (std::abs (c.getSample (0, i)) > 0.01f) last = i;
+                CHECK (std::abs (last / fs - 1.0 * 44100.0 / 44100.0) < 0.12, "Stretch keeps a 1 s sample 1 s long at note " + juce::String (note) + " (" + juce::String (last / fs, 2) + " s)");
+            }
+            // root detection, velocity and random start, old modes unchanged
+            {
+                juce::AudioBuffer<float> b (1, 44100);
+                for (int i = 0; i < b.getNumSamples(); ++i) b.setSample (0, i, 0.5f * (float) (std::sin (2.0 * kPi * 220.0 * i / 44100.0) + 0.4 * std::sin (2.0 * kPi * 440.0 * i / 44100.0)));
+                tg::WaveSample w; w.length = b.getNumSamples(); w.sampleRate = 44100.0; w.ch[0].assign (b.getReadPointer (0), b.getReadPointer (0) + w.length);
+                double clarity = 0; const double hz = tg::wttools::detectPitchHz (w, &clarity);
+                CHECK (std::abs (1200.0 * std::log2 (hz / 220.0)) < 5.0, "Detect root finds 220 Hz (" + juce::String (hz, 2) + ")");
+            }
+            // CPU: the sampler with Stretch, 8 notes
+            {
+                auto cpuOf = [&] (bool stretch)
+                {
+                    auto p = make(); only (*p);
+                    p->loadSampleData (sineWav (440.0, 2.0), "sine.wav", 0);
+                    setP (*p, P_osc4Gain, 0.5f); setP (*p, P_osc4LoopMode, 4.0f); setP (*p, P_wt1LoopType, 1.0f); setP (*p, P_osc4LoopStart, 0.3f); setP (*p, P_osc4LoopEnd, 0.6f);
+                    setP (*p, P_wt1Xfade, 0.2f); setP (*p, P_wt1Stretch, stretch ? 1.0f : 0.0f);
+                    double best = 1e9;
+                    for (int r = 0; r < 3; ++r) { double secs = 0; render (*p, 2.0, chord (0.0, 1.9, { 48, 52, 55, 60, 64, 67, 72, 76 }), nullptr, &secs); best = std::min (best, secs / 2.0 * 100.0); }
+                    return best;
+                };
+                const double plain = cpuOf (false), st = cpuOf (true);
+                std::cout << "  WT sampler CPU, 8 notes: " << juce::String (plain, 1) << "% of a core; with Stretch " << juce::String (st, 1) << "%" << std::endl;
+                CHECK (st < 30.0, "the sampler with Stretch stays light (8 notes)");
+            }
+        }
+        // ---- 4. Core Randomise
+        {
+            int silent = 0, loud = 0, bad = 0, n = 0; float maxPk = 0.0f, minPk = 10.0f;
+            for (int t = 0; t < tg::coregen::T_COUNT; ++t)
+                for (int sd = 1; sd <= 200; ++sd)
+                {
+                    auto p = make(); only (*p);
+                    tg::coregen::Options o; o.type = t; o.crazy = (sd % 3) * 0.5f; o.seed = sd * 7919 + t;
+                    p->randomiseCore (0, o);
+                    tg::resetVoiceRandom();
+                    const auto st = render (*p, 0.35, chord (0.0, 0.3, { 57 }));
+                    ++n; if (! st.finite) ++bad;
+                    if (st.peak < 0.003f) ++silent;
+                    if (st.peak > 1.5f) ++loud;
+                    maxPk = std::max (maxPk, st.peak); minPk = std::min (minPk, st.peak);
+                }
+            std::cout << "  Core Randomise: " << n << " rolls (200 per type, controlled to crazy): " << silent << " silent, " << loud << " above 1.5, " << bad << " not finite; peaks "
+                      << juce::String (minPk, 3) << " to " << juce::String (maxPk, 2) << std::endl;
+            CHECK (silent == 0 && loud == 0 && bad == 0, "every Randomise roll is heard, finite and not clipping hard");
+            // controlled pitched types stay harmonic; the same seed gives the same patch
+            bool harmonic = true;
+            for (int t : { tg::coregen::T_Bass, tg::coregen::T_EPiano, tg::coregen::T_Brass, tg::coregen::T_Pluck, tg::coregen::T_Lead })
+                for (int sd = 1; sd <= 50; ++sd)
+                {
+                    tg::CorePlain z; juce::String what;
+                    tg::coregen::Options o; o.type = t; o.crazy = 0.0f; o.seed = sd;
+                    const auto pl = tg::coregen::randomise (z, o, what);
+                    for (int k = 0; k < 6; ++k)
+                    {
+                        const float r = pl.op[k][CO_Ratio];
+                        const bool whole = std::abs (r * 2.0f - std::round (r * 2.0f)) < 1.0e-4f;   // (whole numbers and halves)
+                        harmonic = harmonic && whole && pl.op[k][CO_Fixed] < 0.5f && std::abs (pl.op[k][CO_Fine]) < 1.0e-4f;
+                    }
+                }
+            CHECK (harmonic, "Controlled rolls of the pitched types stay harmonic (whole or half ratios, no detune, no fixed operators)");
+            auto a = make(), b = make();
+            tg::coregen::Options o; o.type = tg::coregen::T_Bell; o.crazy = 0.4f; o.seed = 4242;
+            a->randomiseCore (1, o); b->randomiseCore (1, o);
+            bool same = true; for (int i = tg::coreParam (1, 0); i < tg::coreParam (1, 0) + kCoreSlotStride; ++i) same = same && a->param (i)->getValue() == b->param (i)->getValue();
+            CHECK (same && a->corePatchName[1].contains ("4242"), "the same seed and settings give the same patch");
+            // locks keep what they lock
+            auto c = make(); c->applyCoreAlgorithm (0, 3);
+            const auto before = c->coreSettings (0);
+            o.locks = tg::coregen::L_Algorithm | tg::coregen::L_Ratios; o.seed = 77;
+            c->randomiseCore (0, o);
+            const auto after = c->coreSettings (0);
+            bool kept = true; for (int k = 0; k < 6; ++k) { kept = kept && after.op[k][CO_Ratio] == before.op[k][CO_Ratio] && after.op[k][CO_Out] == before.op[k][CO_Out]; for (int j = 0; j < 6; ++j) if (j != k) kept = kept && (after.op[k][CO_M1 + j] > 0.0f) == (before.op[k][CO_M1 + j] > 0.0f); }
+            CHECK (kept, "Keep Algorithm and Ratios: the routing and the ratios stay");
+        }
+        // ---- 5. DX7 voices
+        {
+            // a made-up bank: voice v has algorithm v, op 1 a ratio of 1, op 2 coarse 14, op 3 fixed (coarse 2: 100 Hz), names "TEST 01".."TEST 32"
+            std::vector<uint8_t> bank (4104, 0);
+            bank[0] = 0xF0; bank[1] = 0x43; bank[2] = 0x00; bank[3] = 0x09; bank[4] = 0x20; bank[5] = 0x00;
+            for (int vv = 0; vv < 32; ++vv)
+            {
+                uint8_t* b = bank.data() + 6 + vv * 128;
+                for (int f = 0; f < 6; ++f)
+                {
+                    uint8_t* o = b + f * 17; const int opn = 6 - f;   // (stored 6 first)
+                    o[0] = 99; o[1] = 60; o[2] = 40; o[3] = 50; o[4] = 99; o[5] = 80; o[6] = 70; o[7] = 0;
+                    o[12] = (uint8_t) (7 << 3); o[13] = (uint8_t) (3 << 2); o[14] = (uint8_t) (opn == 1 ? 99 : opn == 2 ? 80 : 0);
+                    o[15] = (uint8_t) ((opn == 3 ? 1 : 0) | ((opn == 1 ? 1 : opn == 2 ? 14 : opn == 3 ? 2 : 1) << 1)); o[16] = 0;
+                }
+                for (int i = 0; i < 4; ++i) { b[102 + i] = 99; b[106 + i] = 50; }
+                b[110] = (uint8_t) vv; b[111] = (uint8_t) (5 | (1 << 3)); b[117] = 24;
+                const juce::String nm = "TEST " + juce::String (vv + 1).paddedLeft ('0', 2);
+                for (int i = 0; i < 10; ++i) b[118 + i] = (uint8_t) (i < nm.length() ? nm[i] : ' ');
+            }
+            int sum = 0; for (int i = 0; i < 4096; ++i) sum += bank[(size_t) (6 + i)];
+            bank[4102] = (uint8_t) ((128 - (sum & 127)) & 127); bank[4103] = 0xF7;
+            juce::MemoryBlock mb (bank.data(), bank.size());
+            juce::String err;
+            const auto voices = tg::dx7::parse (mb, err);
+            bool ok = voices.size() == 32 && err.isEmpty();
+            for (int vv = 0; vv < (int) voices.size(); ++vv)
+                ok = ok && voices[(size_t) vv].algorithm == vv && voices[(size_t) vv].name == "TEST " + juce::String (vv + 1).paddedLeft ('0', 2)
+                        && voices[(size_t) vv].op[1].coarse == 14 && voices[(size_t) vv].op[2].mode == 1 && voices[(size_t) vv].feedback == 5 && voices[(size_t) vv].op[0].kvs == 3;
+            CHECK (ok, "a 32-voice bank reads back exactly (names, algorithms, operators)");
+            // each algorithm's structure in the Core: carriers heard, modulators connected as the table says
+            bool algosOk = true;
+            for (int vv = 0; vv < 32; ++vv)
+            {
+                juce::StringArray ap;
+                const auto pl = tg::coregen::fromDx7 (voices[(size_t) vv], ap);
+                const auto& al = tg::dx7::kAlgos[vv];
+                for (int k = 0; k < 6; ++k)
+                {
+                    const bool car = juce::String (al.carriers).containsChar ((juce::juce_wchar) ('1' + k));
+                    algosOk = algosOk && ((pl.op[k][CO_Out] > 0.0f) == car);
+                    for (int j = 0; j < 6; ++j)
+                        if (j != k)
+                        {
+                            const juce::String pair = juce::String::charToString ((juce::juce_wchar) ('1' + k)) + juce::String::charToString ((juce::juce_wchar) ('1' + j));
+                            algosOk = algosOk && ((pl.op[k][CO_M1 + j] > 0.0f) == juce::String (al.edges).contains (pair));
+                        }
+                }
+                algosOk = algosOk && pl.op[al.fbOp - 1][CO_M1 + al.fbOp - 1] > 0.0f;
+            }
+            CHECK (algosOk, "all 32 algorithms map onto the right carriers, modulators and feedback operator");
+            juce::StringArray ap;
+            const auto pl = tg::coregen::fromDx7 (voices[0], ap);
+            CHECK (std::abs (pl.op[0][CO_Ratio] - 1.0f) < 1.0e-4f && std::abs (pl.op[1][CO_Ratio] - 14.0f) < 1.0e-4f && pl.op[2][CO_Fixed] > 0.5f && std::abs (pl.op[2][CO_Hz] - 100.0f) < 0.5f
+                   && std::abs (pl.op[0][CO_Level] - 1.0f) < 1.0e-3f && pl.op[3][CO_Level] == 0.0f && std::abs (pl.op[0][CO_Vel] - 3.0f / 7.0f) < 1.0e-3f,
+                   "a known voice gives the expected ratios, fixed frequency, levels and velocity");
+            // loaded into a slot, it plays; the name shows; it's saved
+            auto p = make(); only (*p);
+            const auto approx = p->loadDx7Voice (0, voices[4]);
+            const auto st = render (*p, 0.5, chord (0.0, 0.4, { 60 }));
+            CHECK (st.finite && st.peak > 0.01f && p->corePatchName[0] == "DX7: TEST 05" && ! approx.isEmpty(), "a DX7 voice loaded into Core A plays, its name shows, and the approximations are listed");
+            juce::MemoryBlock state; p->getStateInformation (state);
+            auto q = make(); q->setStateInformation (state.getData(), (int) state.getSize());
+            CHECK (q->corePatchName[0] == "DX7: TEST 05", "the Core's patch name is saved with the project");
+            // bad files are refused, never a crash
+            for (auto badData : { std::vector<uint8_t> { 0x00, 0x01 }, std::vector<uint8_t> { 0xF0, 0x43, 0x00, 0x09, 0x20, 0x00, 1, 2, 3 }, std::vector<uint8_t> (200, 0xF0), std::vector<uint8_t> { 0xF0, 0x43, 0x00, 0x05, 0x00, 0x10, 0, 0, 0, 0, 0xF7 } })
+            {
+                juce::String e2; const auto v2 = tg::dx7::parse (juce::MemoryBlock (badData.data(), badData.size()), e2);
+                CHECK (v2.empty() && e2.isNotEmpty(), "a corrupt or short file is refused with a message (" + e2 + ")");
+            }
+        }
+        // ---- 6. Vastness
+        {
+            juce::ScopedNoDenormals noDenormals;   // (as in the plug-in's processBlock)
+            auto v = std::vector<float> ((size_t) P_COUNT); for (int i = 0; i < P_COUNT; ++i) v[(size_t) i] = meta (i).def;
+            FxContext ctx; ctx.sr = fs; ctx.tempo = 172.0;
+            uint32_t rng = 5u; auto noise = [&] { rng = rng * 1664525u + 1013904223u; return (float) ((rng >> 8) & 0xffff) / 32768.0f - 1.0f; };
+            juce::String line = "  Vastness at full feedback for 60 s (peak), and CPU (% of a core, stereo) by mode:";
+            for (int mode = 0; mode < 8; ++mode)
+            {
+                v[P_vsMode] = (float) mode; v[P_vsFeedback] = 1.0f; v[P_vsFreeze] = 0.0f;
+                VastReverb vr; vr.prepare (fs);
+                std::vector<float> L (512), R (512);
+                float peak = 0.0f; bool finite = true;
+                const auto t0 = juce::Time::getMillisecondCounterHiRes();
+                for (int b = 0; b < (int) (60.0 * fs / 512); ++b)
+                {
+                    for (int i = 0; i < 512; ++i) { const float x = b < 20 ? 0.5f * noise() : 0.0f; L[(size_t) i] = x; R[(size_t) i] = x; }
+                    vr.process (L.data(), R.data(), 512, v.data(), ctx, nullptr);
+                    for (int i = 0; i < 512; ++i) { peak = std::max (peak, std::abs (L[(size_t) i])); finite = finite && std::isfinite (L[(size_t) i]); }
+                }
+                const double cpu = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0 / 60.0 * 100.0;
+                line << "\n    " << kVsModeLabels[mode] << ": peak " << juce::String (peak, 2) << ", " << juce::String (cpu, 2) << "%";
+                CHECK (finite && peak < 2.0f, juce::String ("Vastness ") + kVsModeLabels[mode] + " stays bounded at full feedback");
+                CHECK (cpu < 3.0, juce::String ("Vastness ") + kVsModeLabels[mode] + " costs under 3% of a core");
+            }
+            std::cout << line << std::endl;
+            // Freeze holds within 1 dB
+            {
+                v[P_vsMode] = 0.0f; v[P_vsFeedback] = 0.7f;
+                VastReverb vr; vr.prepare (fs);
+                std::vector<float> L (512), R (512);
+                double e[2] = { 0, 0 };
+                for (int b = 0; b < (int) (8.0 * fs / 512); ++b)
+                {
+                    const double t = b * 512.0 / fs;
+                    v[P_vsFreeze] = t > 1.5 ? 1.0f : 0.0f;
+                    for (int i = 0; i < 512; ++i) { const float x = t < 1.2 ? 0.3f * noise() : 0.0f; L[(size_t) i] = x; R[(size_t) i] = x; }
+                    vr.process (L.data(), R.data(), 512, v.data(), ctx, nullptr);
+                    const int w = t > 2.0 && t < 3.0 ? 0 : (t > 7.0 ? 1 : -1);
+                    if (w >= 0) for (int i = 0; i < 512; ++i) e[w] += (double) L[(size_t) i] * L[(size_t) i];
+                }
+                const double holdDb = 10.0 * std::log10 (e[1] / e[0]);
+                std::cout << "  Vastness Freeze: " << juce::String (holdDb, 2) << " dB over 5 s" << std::endl;
+                CHECK (std::abs (holdDb) < 1.0, "Vastness Freeze holds its tail within 1 dB");
+            }
+            // moving every setting while it rings: no zipper (the biggest step stays near the plain sound's)
+            {
+                auto p = make(); noFx (*p); setP (*p, P_vsOn, 1.0f);
+                juce::AudioBuffer<float> c, part; c.setSize (2, (int) (3.0 * fs)); c.clear();
+                int at = 0; float jumpBefore = 0, jumpAfter = 0;
+                for (int seg = 0; seg < 6; ++seg)
+                {
+                    if (seg >= 3) { setP (*p, P_vsDelay, 100.0f + 150.0f * seg); setP (*p, P_vsWarp, 0.2f * seg - 0.4f); setP (*p, P_vsHighCut, 3000.0f + 1000.0f * seg); setP (*p, P_vsModDepth, 0.15f * seg); setP (*p, P_vsMode, (float) seg); }
+                    render (*p, 0.5, seg == 0 ? chord (0.0, 2.8, { 48, 55, 60 }) : std::vector<std::pair<double, juce::MidiMessage>> {}, &part);
+                    for (int i = 1; i < part.getNumSamples(); ++i) (seg < 3 ? jumpBefore : jumpAfter) = std::max (seg < 3 ? jumpBefore : jumpAfter, std::abs (part.getSample (0, i) - part.getSample (0, i - 1)));
+                    for (int ch = 0; ch < 2; ++ch) c.copyFrom (ch, at, part, ch, 0, std::min (part.getNumSamples(), c.getNumSamples() - at));
+                    at += part.getNumSamples();
+                }
+                CHECK (jumpAfter < jumpBefore * 1.8f + 0.02f, "Vastness: moving its settings while it rings makes no zipper (" + juce::String (jumpAfter, 3) + " vs " + juce::String (jumpBefore, 3) + ")");
+            }
+            // presets and the Rack: one undo step; an older 24-slot rack gets Vastness after it; old Break FX masks tick it
+            auto p = make(); setP (*p, P_reverbMix, 0.5f);
+            p->applyVastPreset (3);
+            CHECK (p->param (P_vsOn)->getValue() > 0.5f && std::abs (p->param (P_reverbMix)->convertFrom0to1 (p->param (P_reverbMix)->getValue()) - 0.5f) < 0.01f, "a Vastness preset sets only Vastness");
+            {
+                FxRackStore st; juce::DynamicObject::Ptr o = new juce::DynamicObject();
+                juce::StringArray ord; for (int k = 23; k >= 0; --k) ord.add (juce::String (k));
+                o->setProperty ("order", ord.joinIntoString (","));
+                o->setProperty ("breakFx", "1fffffff,0,1fffffff,8");   // (v0.1.73: everything; nothing; everything; only the Gran... bit 3)
+                st.fromVar (juce::var (o.get()));
+                const auto order = st.getOrder();
+                CHECK (order[0] == 23 && order[23] == 0 && order[24] == FS_Vast, "a v0.1.73 rack keeps its order, Vastness after it");
+                CHECK (st.breakFx (0) == kBxAll && st.breakFx (2) == kBxAll && ((st.breakFx (1) >> bxRackBit (FS_Vast)) & 1u) == 1u && ((st.breakFx (3) >> 3) & 1u) == 1u,
+                       "v0.1.73 Break FX ticks load as they were, with Vastness ticked (so \"everything\" is still everything)");
+            }
+        }
+        // ---- 7. click-through
+        {
+            auto p = make();
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+            ed->setSize (1200, 890);
+            auto* e = dynamic_cast<MegaSynthEditor*> (ed.get());
+            bool ok = e != nullptr;
+            const char* want[kMxStrips] = { "Osc 1-3 & Sub", "Osc 1-3 & Sub", "Osc 1-3 & Sub", "Osc 1-3 & Sub", "Wavetables", "Wavetables", "Complex & SuperSaw", "Complex & SuperSaw",
+                                            "FM & Ring", "Granular Synth", "Break Chopper", "Reese", "Core A", "Core B", "Break Sequencer" };
+            for (int k = 0; ok && k < kMxStrips; ++k) { e->showPage ("Mixer"); e->openMixerStripForTests (k); ok = ok && e->shownPageForTests() == want[k]; }
+            CHECK (ok, "a click on each Mixer strip's name opens its source's page");
+            bool fxOk = e != nullptr;
+            for (int s = 0; fxOk && s < FS_COUNT; ++s) { e->showPage ("Mixer"); e->showEffect (s); fxOk = fxOk && e->shownPageForTests() == MegaSynthEditor::effectPage (s); }
+            CHECK (fxOk, "every effect's click-through opens its page (" + (e != nullptr ? e->shownPageForTests() : juce::String()) + ")");
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_V174ONLY", {}).isNotEmpty())
+    {
+        v174Tests();
+        std::cout << (failures == 0 ? "V174 TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_V172ONLY", {}).isNotEmpty())
     {
         v172Tests();
@@ -10375,12 +11036,12 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.73.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.74.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         // (v0.1.69: the Fill Key and Fill Length are replaced by the Fill pad and Size, as asked; they're kept, hidden, for older projects)
         for (auto& id : before) if (ids.count (id) == 0 && id != "bsFillKey" && id != "bsFillLen") lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.73 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React, the Core A / B slots, Core Envelope, Key Entry, Slice Keys and the Break React rows added, the Breaks tab, Break 4, the layer sequencer, the Fill Pattern and pad, Fixed velocity and Break React Sequencer added; the Fill Key and Fill Length replaced by the pad and Size, the v0.1.70 Space effects, ducking and Reese additions added, the Snare Roll settings and Edit pair added, the v0.1.72 choruses and phasers and Glide Mode added; v0.1.71's 1212 and v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.74 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React, the Core A / B slots, Core Envelope, Key Entry, Slice Keys and the Break React rows added, the Breaks tab, Break 4, the layer sequencer, the Fill Pattern and pad, Fixed velocity and Break React Sequencer added; the Fill Key and Fill Length replaced by the pad and Size, the v0.1.70 Space effects, ducking and Reese additions added, the Snare Roll settings and Edit pair added, the v0.1.72 choruses and phasers and Glide Mode added, the v0.1.74 sampler settings and Vastness added; v0.1.71's 1212 and v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Breaks", "Mixer", "Filters", "Envelopes",
@@ -11798,6 +12459,7 @@ int main()
     breakTests();
     spaceTests();
     v172Tests();
+    v174Tests();
     hardTests();
     lfoTests();
     arpTests();

@@ -94,7 +94,11 @@ enum SrcKind { K_NONE, K_LFO, K_ENV, K_MIDI, K_MPE, K_RAND, K_NOTE, K_FOLLOW, K_
     X(SnareHit,    "Snare Hit",         K_ENV,    false) \
     X(HatHit,      "Hat Hit",           K_ENV,    false) \
     X(LsStep,      "Layer Seq Step",    K_SEQ,    false) \
-    X(LsPattern,   "Layer Seq Pattern", K_SEQ,    false)
+    X(LsPattern,   "Layer Seq Pattern", K_SEQ,    false) \
+    X(Wt1Pos,      "WT 1 Playhead",     K_LFO,    false) \
+    X(Wt1Loop,     "WT 1 Loop Phase",   K_LFO,    false) \
+    X(Wt2Pos,      "WT 2 Playhead",     K_LFO,    false) \
+    X(Wt2Loop,     "WT 2 Loop Phase",   K_LFO,    false)
 
 enum ModSource
 {

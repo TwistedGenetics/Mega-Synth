@@ -41,6 +41,7 @@ namespace
         if (id.startsWith ("osc3")) return "Oscillator 3";
         if (id.startsWith ("osc4")) return "Wavetable 1";
         if (id.startsWith ("wt2")) return "Wavetable 2";
+        if (id.startsWith ("wt1")) return "Wavetable 1";
         if (id.startsWith ("sub")) return "Sub Oscillator";
         if (id.startsWith ("complex")) return "Complex";
         if (id.startsWith ("supersaw")) return "SuperSaw";
@@ -61,6 +62,7 @@ namespace
         if (id.startsWith ("rx")) return "Break React";
         if (id.startsWith ("sx")) return "Space";
         if (id.startsWith ("cp")) return "Chorus & Phase";
+        if (id.startsWith ("vs") && ! id.startsWith ("vsh")) return "Vastness";
         if (id.startsWith ("res")) return "Resonator";
         if (id.startsWith ("gr")) return "Granular";
         if (id.startsWith ("sp")) return "Spectral";
@@ -203,7 +205,11 @@ namespace
             if (id.startsWith ("cA") || id.startsWith ("cB")) { m.category = Category::Osc; m.group = MutGroup::None; }   // the Core slots: not mutated   // the Reese engine: not mutated (old patches mutate as before)
             if (id.startsWith ("rx")) { m.category = Category::Osc; m.group = MutGroup::None; }   // Break-Reactive mode: not mutated
             if (id.startsWith ("sx")) { m.category = Category::Fx; m.group = MutGroup::None; }   // the Space effects (v0.1.70): on the bus; not mutated
-            if (id.startsWith ("cp")) { m.category = Category::Fx; m.group = MutGroup::None; }   // the choruses and phasers (v0.1.72): the same
+            if (id.startsWith ("cp")) { m.category = Category::Fx; m.group = MutGroup::None; }
+            if (isAny (id, { "wt1SmpStart", "wt1SmpEnd", "wt1LoopType", "wt1Xfade", "wt1VelStart", "wt1RandStart", "wt1Stretch",
+                             "wt2SmpStart", "wt2SmpEnd", "wt2LoopType", "wt2Xfade", "wt2VelStart", "wt2RandStart", "wt2Stretch" }))
+                { m.category = Category::Wavetable; m.group = MutGroup::None; }   // (v0.1.74: the sampler settings; not mutated)   // the choruses and phasers (v0.1.72): the same
+            if (id.startsWith ("vs") && ! id.startsWith ("vsh")) { m.category = Category::Fx; m.group = MutGroup::None; }   // (v0.1.74) Vastness: not mutated
             if (id == "portaMode") { m.category = Category::Performance; m.group = MutGroup::None; }
             if (id.startsWith ("bc")) { m.category = Category::Fx; m.group = MutGroup::None; }    // Break Chopper: on the bus, before the effects
             if (id.startsWith ("bs")) { m.category = Category::Seq; m.group = MutGroup::None; }
@@ -224,6 +230,8 @@ namespace
                        : (id == "sxDubHP" || id == "sxDubLP" || id == "sxSprTone" || id == "sxGateTone" || id == "sxWidLowCut" || id == "sxIrLP" || id == "sxIrHP") ? "Hz"
                        : id == "sxWidCents" ? "cents" : id == "sxGateThr" ? "dB" : id == "sxDuckNote" ? "note" : juce::String();
             if (id.startsWith ("cp")) m.unit = (id.endsWith ("Rate") || id.endsWith ("Speed") || id.endsWith ("RateA") || id.endsWith ("RateB")) && id != "cpEnsSpeed" ? "Hz" : id == "cpEnsTone" ? "Hz" : juce::String();
+            if (id.startsWith ("vs") && ! id.startsWith ("vsh"))
+                m.unit = (id == "vsDelay" || id == "vsDuckAtt" || id == "vsDuckRel") ? "ms" : (id == "vsModRate" || id == "vsLowCut" || id == "vsHighCut") ? "Hz" : juce::String();
             if (id == "rsFmtShift" || id == "rsPdAmt" || id == "rsCpOffset") m.unit = "st";
             if (id == "rsBloom" || id == "rsPdTime") m.unit = "s";
             if (id == "rsSplitFreq" || id == "rsHighTone" || id == "rsCpRate" || id == "rsPwmRate" || id == "rsDriftRate") m.unit = "Hz";

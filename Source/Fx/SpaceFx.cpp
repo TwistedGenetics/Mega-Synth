@@ -8,6 +8,7 @@ double syncSeconds (const ChoiceList& list, int idx, double tempo, double fallba
 
 namespace
 {
+    constexpr float kDubOut = 1.585f;   // (v0.1.74: the Dub Delay's repeats 4 dB louder; the loop itself is unchanged)
     inline float softLimit (float x, float ceiling) { return ceiling * std::tanh (x / ceiling); }
     inline uint32_t xorshift (uint32_t& s) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
     inline float noise (uint32_t& s) { return (float) (xorshift (s) & 0xffffff) / 8388608.0f - 1.0f; }
@@ -63,8 +64,8 @@ void DubDelay::process (float* L, float* R, int n, const float* v, const FxConte
         const float fL = fbPath (yL, 0) * fb, fR = fbPath (yR, 1) * fb;
         dl[0].push (in + fR); dl[1].push (fL);   // (ping-pong: in on the left, then across and back)
         const float g = duck != nullptr ? duck[i] : 1.0f;
-        L[i] += (yL * wa + yR * wb) * g;
-        R[i] += (yR * wa + yL * wb) * g;
+        L[i] += (yL * wa + yR * wb) * g * kDubOut;
+        R[i] += (yR * wa + yL * wb) * g * kDubOut;
     }
 }
 
@@ -112,7 +113,7 @@ void SpringReverb::process (float* L, float* R, int n, const float* v, const FxC
     const double lfoInc = 0.7 / sr;
     float g[kSprings];
     for (int j = 0; j < ns; ++j) g[j] = (float) std::pow (10.0, -3.0 * (spr[0][j].baseDelay / sr) / decay);
-    const float outScale = 1.4f / std::sqrt ((float) ns);   // (v0.1.72: about 8 dB up, so its tail is as loud as the Plate's at the same Return)
+    const float outScale = 2.22f / std::sqrt ((float) ns);   // (v0.1.72: about 8 dB up; v0.1.74: 4 dB more)
     for (int i = 0; i < n; ++i)
     {
         freezeS += ((freeze ? 1.0f : 0.0f) - freezeS) * fc;

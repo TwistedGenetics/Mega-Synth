@@ -2101,6 +2101,7 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("fillPadNum", fillPadNum.load(), nullptr);
     state.setProperty ("throwPadKind", throwPadKind.load(), nullptr);
     state.setProperty ("throwPadNum", throwPadNum.load(), nullptr);
+    for (int c = 0; c < 2; ++c) if (corePatchName[c].isNotEmpty()) state.setProperty (c == 0 ? "coreNameA" : "coreNameB", corePatchName[c], nullptr);
     if (keysPadKind.load() != 0) { state.setProperty ("keysPadKind", keysPadKind.load(), nullptr); state.setProperty ("keysPadNum", keysPadNum.load(), nullptr); }
     {
         juce::StringArray pads;
@@ -2162,6 +2163,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 30) setV30DefaultsForOldPatch();
     if (version < 31) setV31DefaultsForOldPatch();
     if (version < 32) setV32DefaultsForOldPatch();
+    if (version < 33) setV33DefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -2218,6 +2220,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     }
     throwPadNum = (int) tree.getProperty ("throwPadNum", -1);
     keysPadKind = juce::jlimit (0, 2, (int) tree.getProperty ("keysPadKind", 0));
+    corePatchName[0] = tree.getProperty ("coreNameA").toString(); corePatchName[1] = tree.getProperty ("coreNameB").toString();
     keysPadNum = (int) tree.getProperty ("keysPadNum", -1);
     if (version < 29) { const auto r = convertOldFills (false); if (r.isNotEmpty()) lastFillConversion = "Older project: " + r; }
     lastEuclid[0] = -1;   // don't re-flow the restored sequence
@@ -2424,6 +2427,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("sxOnDub")) setV30DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bsRollLen")) setV31DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("cpOnEns")) setV32DefaultsForOldPatch();
+        if (extra == nullptr || ! extra->hasProperty ("vsOn")) setV33DefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2734,6 +2738,44 @@ void MegaSynthProcessor::applyCoreAlgorithm (int slot, int algorithm)
     pushHistory ("Core algorithm");
 }
 
+tg::CorePlain MegaSynthProcessor::coreSettings (int slot) const
+{
+    tg::CorePlain p;
+    slot = juce::jlimit (0, 1, slot);
+    for (int i = 0; i < tg::kCoreSlotHead; ++i) p.head[i] = params[(size_t) tg::coreParam (slot, i)]->convertFrom0to1 (params[(size_t) tg::coreParam (slot, i)]->getValue());
+    for (int k = 0; k < tg::kCoreOps; ++k)
+        for (int w = 0; w < tg::kCoreOpStride; ++w) { auto* prm = params[(size_t) tg::coreOpParam (slot, k, w)]; p.op[k][w] = prm->convertFrom0to1 (prm->getValue()); }
+    return p;
+}
+
+void MegaSynthProcessor::setCoreSettings (int slot, const tg::CorePlain& p, const juce::String& undoLabel)
+{
+    slot = juce::jlimit (0, 1, slot);
+    auto set = [this] (int i, float plain) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (plain)); prm->endChangeGesture(); };
+    for (int i = 0; i < tg::kCoreSlotHead; ++i) set (tg::coreParam (slot, i), p.head[i]);
+    for (int k = 0; k < tg::kCoreOps; ++k)
+        for (int w = 0; w < tg::kCoreOpStride; ++w) set (tg::coreOpParam (slot, k, w), p.op[k][w]);
+    pushHistory (undoLabel);
+}
+
+juce::String MegaSynthProcessor::randomiseCore (int slot, const tg::coregen::Options& o)
+{
+    juce::String what;
+    const auto p = tg::coregen::randomise (coreSettings (slot), o, what);
+    corePatchName[juce::jlimit (0, 1, slot)] = "Random: " + what;
+    setCoreSettings (slot, p, "Core Randomise");
+    return what;
+}
+
+juce::StringArray MegaSynthProcessor::loadDx7Voice (int slot, const tg::dx7::Voice& v)
+{
+    juce::StringArray approx;
+    const auto p = tg::coregen::fromDx7 (v, approx);
+    corePatchName[juce::jlimit (0, 1, slot)] = "DX7: " + v.name;
+    setCoreSettings (slot, p, "Load DX7 voice");
+    return approx;
+}
+
 void MegaSynthProcessor::resetCoreSlot (int slot)
 {
     if (slot < 0 || slot > 1) return;
@@ -2909,6 +2951,42 @@ void MegaSynthProcessor::setV31DefaultsForOldPatch()
         auto* prm = params[(size_t) i];
         prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
     }
+}
+
+void MegaSynthProcessor::setV33DefaultsForOldPatch()
+{
+    for (int i = P_wt1SmpStart; i <= P_vsDuckSrc; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+}
+
+const char* MegaSynthProcessor::vastPresetName (int k)
+{
+    static const char* n[kNumVastPresets] = { "Off (defaults)", "Huge Hall", "Dub Cascade", "Shimmer Pad", "Dark Drone", "Bloom Snare", "Endless Freeze", "Metal Comb", "Tape Space" };
+    return n[juce::jlimit (0, kNumVastPresets - 1, k)];
+}
+
+void MegaSynthProcessor::applyVastPreset (int k)
+{
+    using namespace tg;
+    auto set = [this] (int i, float plain) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (plain)); prm->endChangeGesture(); };
+    for (int i = P_vsOn; i <= P_vsDuckSrc; ++i) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture(); }
+    if (k > 0) set (P_vsOn, 1);
+    switch (k)
+    {
+        case 1: set (P_vsMode, 0); set (P_vsDelay, 320.0f); set (P_vsFeedback, 0.82f); set (P_vsWarp, 0.8f); set (P_vsMix, 0.35f); break;
+        case 2: set (P_vsMode, 1); set (P_vsSync, 6.0f); set (P_vsFeedback, 0.7f); set (P_vsWarp, 0.3f); set (P_vsHighCut, 3500.0f); set (P_vsLowCut, 250.0f); set (P_vsMix, 0.4f); break;
+        case 3: set (P_vsMode, 2); set (P_vsDelay, 400.0f); set (P_vsFeedback, 0.88f); set (P_vsModDepth, 0.5f); set (P_vsMix, 0.45f); break;
+        case 4: set (P_vsMode, 3); set (P_vsDelay, 600.0f); set (P_vsFeedback, 0.9f); set (P_vsModDepth, 0.6f); set (P_vsModRate, 0.15f); set (P_vsMix, 0.5f); break;
+        case 5: set (P_vsMode, 4); set (P_vsDelay, 160.0f); set (P_vsFeedback, 0.75f); set (P_vsMix, 0.55f); break;
+        case 6: set (P_vsMode, 5); set (P_vsDelay, 700.0f); set (P_vsFeedback, 1.0f); set (P_vsMix, 0.4f); break;
+        case 7: set (P_vsMode, 6); set (P_vsDelay, 120.0f); set (P_vsFeedback, 0.9f); set (P_vsWarp, 0.9f); set (P_vsMix, 0.3f); break;
+        case 8: set (P_vsMode, 7); set (P_vsDelay, 280.0f); set (P_vsFeedback, 0.78f); set (P_vsModDepth, 0.4f); set (P_vsHighCut, 6000.0f); set (P_vsMix, 0.4f); break;
+        default: break;
+    }
+    pushHistory (juce::String ("Vastness: ") + vastPresetName (k));
 }
 
 void MegaSynthProcessor::setV32DefaultsForOldPatch()

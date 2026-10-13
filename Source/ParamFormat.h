@@ -167,6 +167,19 @@ inline juce::String formatParam (int idx, float v)
         if (id == "rsShpSym" || id == "rsCpFb" || id == "rsFmEnvAmt") return spct();
         return pct();
     }
+    // ---- v0.1.74: Vastness
+    if (id.startsWith ("vs") && ! id.startsWith ("vsh"))
+    {
+        if (id == "vsDelay") return v >= 1000.0f ? fixed (v / 1000.0f, 2) + " s" : fixed (v, 0) + " ms";
+        if (id == "vsModRate") return fixed (v, 2) + " Hz";
+        if (id == "vsLowCut" || id == "vsHighCut") return formatHz (v);
+        if (id == "vsDuckAtt" || id == "vsDuckRel") return v >= 1000.0f ? fixed (v / 1000.0f, 2) + " s" : fixed (v, v < 10.0f ? 1 : 0) + " ms";
+        if (id == "vsFeedback") return v >= 0.999f ? juce::String ("endless") : juce::String (juce::roundToInt (v * 100.0f)) + "%";
+        return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+    }
+    // ---- v0.1.74: the wavetables' sampler settings
+    if ((id.startsWith ("wt1") || id.startsWith ("wt2")) && (id.endsWith ("SmpStart") || id.endsWith ("SmpEnd") || id.endsWith ("Xfade") || id.endsWith ("VelStart") || id.endsWith ("RandStart")))
+        return fixed (v * 100.0f, v < 0.1f ? 1 : 0) + "%";
     // ---- v0.1.72: the choruses and phasers
     if (id.startsWith ("cp"))
     {

@@ -40,7 +40,7 @@ private:
 };
 
 // One source's strip
-class ChannelStrip : public juce::Component
+class ChannelStrip : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     ChannelStrip (MegaSynthProcessor& p, int strip, const juce::String& name, int levelParam, int extraParam, const juce::String& extraCaption, int pEnvTarget, juce::Colour c)
@@ -64,6 +64,9 @@ public:
         addAndMakeVisible (meter);
     }
     Knob* levelKnob() const { return level.get(); }
+    std::function<void()> onOpen;   // (v0.1.74) a click on the name: that source's page
+    void mouseDown (const juce::MouseEvent& e) override { if (e.y < 34 && ! e.mods.isPopupMenu() && onOpen) onOpen(); }
+    void mouseMove (const juce::MouseEvent& e) override { setMouseCursor (e.y < 34 && onOpen ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor); }
     void pushMeter (float pk) { meter.push (pk); }
     void refresh()
     {

@@ -143,7 +143,7 @@ struct PresetBuilder
     PresetBuilder& rackOrder (std::initializer_list<int> order)
     {
         int i = 0; for (int s : order) if (i < FS_COUNT) rack[(size_t) i++] = s;
-        if (i == kFxSlotsBefore70 || i == kFxSlotsBefore72) for (int k = i; k < FS_COUNT; ++k) rack[(size_t) i++] = k;   // (an order from before v0.1.70: the new slots after it)
+        if (i == kFxSlotsBefore70 || i == kFxSlotsBefore72 || i == kFxSlotsBefore74) for (int k = i; k < FS_COUNT; ++k) rack[(size_t) i++] = k;   // (an order from before v0.1.70: the new slots after it)
         rackSet = i == FS_COUNT;
         jassert (rackSet);
         return *this;

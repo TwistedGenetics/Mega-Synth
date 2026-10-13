@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PatchMeta.h"
 #include "Params.h"
+#include "CoreGen.h"
 #include "Engine.h"
 #include "Break/BreakAnalysis.h"
 #include "Break/BreakTools.h"
@@ -225,6 +226,9 @@ public:
     static constexpr int kNumSpacePresets = 6, kNumReesePresets = 6, kNumChorusPresets = 9;
     static const char* spacePresetName (int k);
     static const char* chorusPresetName (int k);
+    static constexpr int kNumVastPresets = 9;
+    static const char* vastPresetName (int k);
+    void applyVastPreset (int k);   // (v0.1.74) the Vastness presets: they set only Vastness
     void applyChorusPreset (int k);   // (v0.1.72) the Chorus & Phase presets: they set only the new choruses and phasers
     static const char* reesePresetName (int k);
     void applySpacePreset (int k);
@@ -334,7 +338,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 32;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows, 29: Break 4, layer sequencer, fill pattern; 30: the Space effects, the Reese additions; 31: snare roll, pattern pads, layer pairs; 32: choruses and phasers, Glide Mode, Break FX, Keys pad
+    static constexpr int kStateVersion = 33;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows, 29: Break 4, layer sequencer, fill pattern; 30: the Space effects, the Reese additions; 31: snare roll, pattern pads, layer pairs; 32: choruses and phasers, Glide Mode, Break FX, Keys pad; 33: the wavetables' Sampler mode, Vastness, Core names
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -344,6 +348,12 @@ public:
     // the Core slots: write one of the starting routings (CoreAlgorithms.h) into a slot's matrix; reset a slot
     // to its defaults (the engine choice kept). Both are ordinary parameter changes, one undo step each.
     void applyCoreAlgorithm (int slot, int algorithm);
+    // (v0.1.74) Core Randomise and DX7 voices
+    tg::CorePlain coreSettings (int slot) const;
+    void setCoreSettings (int slot, const tg::CorePlain&, const juce::String& undoLabel);
+    juce::String randomiseCore (int slot, const tg::coregen::Options&);                 // its description
+    juce::StringArray loadDx7Voice (int slot, const tg::dx7::Voice&);                    // what was approximated
+    juce::String corePatchName[2];   // what the slot came from ("DX7: E.PIANO 1", "Random: Bell, controlled, seed 12"); saved
     void resetCoreSlot (int slot);
     void markOriginal();                             // the current state becomes "the original"
     // ---- A/B compare: two versions of the patch to switch between (both start as the loaded patch)
@@ -390,6 +400,7 @@ private:
     void setV27DefaultsForOldPatch();
     void setV28DefaultsForOldPatch();
     void setV30DefaultsForOldPatch();
+    void setV33DefaultsForOldPatch();       // (v0.1.74) the wavetables' sampler settings, Vastness
     void setV32DefaultsForOldPatch();       // (v0.1.72) choruses / phasers, Glide Mode
     void setV31DefaultsForOldPatch();       // ... and from before the Snare Roll's settings       // ... and from before the new Space effects / Reese additions
     void setV29DefaultsForOldPatch();       // ... and from before Break 4 / the layer sequencer / the fill pattern       // ... and from before Slice Keys / the Break React rows       // ... and from before the Core envelope mode / key entry

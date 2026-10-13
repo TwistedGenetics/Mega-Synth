@@ -56,23 +56,23 @@ public:
         uint32_t seen = 0; for (int s : o) if (s >= 0 && s < FS_COUNT) seen |= 1u << s;
         std::array<int, FS_COUNT> use = o;
         if (seen != (1u << FS_COUNT) - 1) for (int i = 0; i < FS_COUNT; ++i) use[(size_t) i] = i;
-        uint64_t p[2] = { 0, 0 };   // (v0.1.72: 24 slots, 5 bits each, 12 to a word)
+        uint64_t p[kWords] = {};   // (5 bits a slot, 12 to a word)
         for (int i = 0; i < FS_COUNT; ++i) p[i / 12] |= (uint64_t) use[(size_t) i] << (5 * (i % 12));
         const juce::SpinLock::ScopedLockType sl (writeLock);
         seq.fetch_add (1);   // (odd: being written)
-        packed[0].store (p[0]); packed[1].store (p[1]);
+        for (int w = 0; w < kWords; ++w) packed[w].store (p[w]);
         seq.fetch_add (1);
         version.fetch_add (1);
     }
     std::array<int, FS_COUNT> getOrder() const
     {
-        uint64_t p[2];
+        uint64_t p[kWords];
         read (p);
         std::array<int, FS_COUNT> o;
         for (int i = 0; i < FS_COUNT; ++i) o[(size_t) i] = (int) ((p[i / 12] >> (5 * (i % 12))) & 31u);
         return o;
     }
-    uint64_t orderKey() const { uint64_t p[2]; read (p); return (p[0] ^ (p[1] * 0x9E3779B97F4A7C15ull)) | 1u; }
+    uint64_t orderKey() const { uint64_t p[kWords]; read (p); uint64_t h = 0; for (int w = 0; w < kWords; ++w) h = (h * 0x9E3779B97F4A7C15ull) ^ p[w]; return h | 1u; }
     void move (int from, int to)   // positions in the order
     {
         auto o = getOrder();
@@ -125,6 +125,7 @@ public:
         {
             juce::StringArray m; for (auto& b : brkFx) m.add (juce::String::toHexString ((int) b.load()));
             o->setProperty ("breakFx", m.joinIntoString (","));
+            o->setProperty ("breakFxV", 2);   // (v0.1.74: the bits for the effects added since; older masks get them ticked)
         }
         return juce::var (o);
     }
@@ -135,10 +136,17 @@ public:
         if (! v.isObject()) return;
         {
             juce::StringArray m; m.addTokens (v["breakFx"].toString(), ",", {});
-            if (m.size() == 4) for (int i = 0; i < 4; ++i) brkFx[(size_t) i].store ((uint32_t) m[i].getHexValue32() & kBxAll);
+            const bool before74 = (int) v.getProperty ("breakFxV", 1) < 2;
+            if (m.size() == 4)
+                for (int i = 0; i < 4; ++i)
+                {
+                    uint32_t x = (uint32_t) m[i].getHexValue32();
+                    if (before74) x = (x & kBxAllBefore74) | (kBxAll & ~kBxAllBefore74);   // (effects added since: ticked)
+                    brkFx[(size_t) i].store (x & kBxAll);
+                }
         }
         juce::StringArray ord; ord.addTokens (v["order"].toString(), ",", {});
-        if (ord.size() == kFxSlotsBefore70 || ord.size() == kFxSlotsBefore72)
+        if (ord.size() == kFxSlotsBefore70 || ord.size() == kFxSlotsBefore72 || ord.size() == kFxSlotsBefore74)
             for (int k = ord.size(); k < FS_COUNT; ++k) ord.add (juce::String (k));   // (an order from before v0.1.70 / v0.1.72: the new slots after it)
         if (ord.size() == FS_COUNT) { std::array<int, FS_COUNT> o; for (int i = 0; i < FS_COUNT; ++i) o[(size_t) i] = ord[i].getIntValue(); setOrder (o); }
         juce::StringArray c; c.addTokens (v["shaperCurve"].toString(), ",", {});
@@ -154,7 +162,8 @@ public:
     const std::atomic<uint32_t>* breakFxMasks() const { return brkFx.data(); }
 
 private:
-    std::atomic<uint64_t> packed[2] { { 0 }, { 0 } };
+    static constexpr int kWords = (FS_COUNT + 11) / 12;
+    std::atomic<uint64_t> packed[kWords] {};
     std::atomic<uint32_t> seq { 0 };
     juce::SpinLock writeLock;
     void read (uint64_t* p) const   // (a consistent pair: retried if a write was under way)
@@ -162,7 +171,7 @@ private:
         for (;;)
         {
             const uint32_t s0 = seq.load();
-            if ((s0 & 1u) == 0) { p[0] = packed[0].load(); p[1] = packed[1].load(); if (seq.load() == s0) return; }
+            if ((s0 & 1u) == 0) { for (int w = 0; w < kWords; ++w) p[w] = packed[w].load(); if (seq.load() == s0) return; }
         }
     }
     std::array<std::atomic<float>, kCurve> pts;

@@ -20,8 +20,8 @@ inline const char* const kWaveBKeys[]   = { "sine","sawtooth","square","triangle
 inline const char* const kWaveBLabels[] = { "Sine","Sawtooth","Square","Triangle","Pulse 25%","Pulse 12.5%","Trapezoid","Organ","Odd Sine","Sine Fold" };
 inline const char* const kSubKeys[]   = { "square","sine","triangle","pulse25","sawtooth" };
 inline const char* const kSubLabels[] = { "Square","Sine","Triangle","Pulse 25%","Sawtooth" };
-inline const char* const kLoopKeys[]   = { "full","window","manual","oneshot" };
-inline const char* const kLoopLabels[] = { "Full Buffer Loop","Scan Window Loop","Manual Loop Start/End","One Shot" };
+inline const char* const kLoopKeys[]   = { "full","window","manual","oneshot","sampler" };
+inline const char* const kLoopLabels[] = { "Full Buffer Loop","Scan Window Loop","Manual Loop Start/End","One Shot","Sampler (Start / End / Loop)" };
 inline const char* const kDirKeys[]   = { "forward","reverse" };
 inline const char* const kDirLabels[] = { "Forward","Reverse" };
 inline const char* const kOnOffKeys[]   = { "on","off" };
@@ -251,6 +251,10 @@ inline const char* const kCpDirKeys[]        = { "up","down" };
 inline const char* const kCpDirLabels[]      = { "Up","Down" };
 inline const char* const kCpVibeModeKeys[]   = { "chorus","vibrato" };
 inline const char* const kCpVibeModeLabels[] = { "Chorus","Vibrato" };
+inline const char* const kWtLoopTypeKeys[]  = { "fwd","pingpong","rev","off" };
+inline const char* const kWtLoopTypeLabels[]= { "Forward","Ping-Pong","Reverse","Off (one shot)" };
+inline const char* const kVsModeKeys[]       = { "hall","echo","shimmer","dark","bloom","endless","comb","tape" };
+inline const char* const kVsModeLabels[]     = { "Vast Hall","Echo Cascade","Shimmer Swell","Dark Cloud","Gated Bloom","Endless","Comb Galaxy","Tape Nebula" };
 inline const char* const kPortaModeKeys[]    = { "always","legato" };
 inline const char* const kPortaModeLabels[]  = { "Always","Legato (held keys only)" };
 // ---- v0.1.70: the Space effects and the Reese additions
@@ -514,6 +518,8 @@ inline const ChoiceList kListCpDualMode = TG_LIST(kCpDualMode);
 inline const ChoiceList kListCpDir = TG_LIST(kCpDir);
 inline const ChoiceList kListCpVibeMode = TG_LIST(kCpVibeMode);
 inline const ChoiceList kListPortaMode = TG_LIST(kPortaMode);
+inline const ChoiceList kListWtLoopType = TG_LIST(kWtLoopType);
+inline const ChoiceList kListVsMode = TG_LIST(kVsMode);
 inline const ChoiceList kListSxThrow = TG_LIST(kSxThrow);
 inline const ChoiceList kListSxSprings = TG_LIST(kSxSprings);
 inline const ChoiceList kListSxGateTrig = TG_LIST(kSxGateTrig);
@@ -559,15 +565,21 @@ constexpr int kMxStrips = 15;   // ... 11 = Reese, 12 = Core A, 13 = Core B, 14 
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
 enum FxSlot { FS_Stutter, FS_Sampler, FS_Flanger, FS_Delay, FS_Chorus, FS_Reverb, FS_Shaper, FS_Multiband, FS_Stereo,
               FS_Dub, FS_Spring, FS_Gated, FS_Plate, FS_Widen, FS_Dim, FS_Ir,
-              FS_Ens, FS_Bbd, FS_Multi, FS_Script, FS_Colour, FS_Dual, FS_Barber, FS_Vibe, FS_COUNT };   // (v0.1.70: Dub..Ir; v0.1.72: Ens..Vibe; older racks list 9 / 16)
-constexpr int kFxSlotsBefore70 = 9, kFxSlotsBefore72 = 16;
+              FS_Ens, FS_Bbd, FS_Multi, FS_Script, FS_Colour, FS_Dual, FS_Barber, FS_Vibe,
+              FS_Vast, FS_COUNT };   // (v0.1.70: Dub..Ir; v0.1.72: Ens..Vibe; v0.1.74: Vast; older racks list 9 / 16 / 24)
+constexpr int kFxSlotsBefore70 = 9, kFxSlotsBefore72 = 16, kFxSlotsBefore74 = 24;
 inline const char* const kFxSlotNames[FS_COUNT] = { "Beat Repeat", "Vintage Sampler", "Flanger / Phaser", "Tape Delay", "Juno Chorus",
                                                     "Reverbs", "Volume Shaper", "Multiband", "Stereo Tools",
                                                     "Dub Delay", "Spring Reverb", "Gated Reverb", "Plate Reverb", "Micro-pitch Widener", "Dimension Chorus", "IR Reverb",
-                                                    "Ensemble", "BBD Chorus", "Multi-Chorus", "Script Phase", "Colour Phase", "Dual Phaser", "Barber-pole Phaser", "Vibe" };
+                                                    "Ensemble", "BBD Chorus", "Multi-Chorus", "Script Phase", "Colour Phase", "Dual Phaser", "Barber-pole Phaser", "Vibe",
+                                                    "Vastness" };
 // (v0.1.72) Break FX: the stages a break can be sent through or past, one bit each
-enum BreakFxUnit { BX_Gran = 0, BX_Spec = 1, BX_Fb = 2, BX_Rack0 = 3, BX_Perf = BX_Rack0 + FS_COUNT, BX_MF, BX_COUNT };
+enum BreakFxUnit { BX_Gran = 0, BX_Spec = 1, BX_Fb = 2, BX_Rack0 = 3, BX_Perf = BX_Rack0 + kFxSlotsBefore74, BX_MF, BX_Rack24, BX_COUNT = BX_Rack24 + (FS_COUNT - kFxSlotsBefore74) };
 constexpr uint32_t kBxAll = (1u << BX_COUNT) - 1u;
+constexpr uint32_t kBxAllBefore74 = (1u << (BX_MF + 1)) - 1u;   // (what "everything" was before Vastness was added)
+// each Rack slot's bit (the first 24 as they always were, then the ones added since after the Master Filter's)
+inline constexpr int bxRackBit (int slot) { return slot < kFxSlotsBefore74 ? BX_Rack0 + slot : BX_Rack24 + (slot - kFxSlotsBefore74); }
+inline uint32_t bxSlotMask (uint32_t m) { uint32_t r = 0; for (int s = 0; s < FS_COUNT; ++s) if ((m >> bxRackBit (s)) & 1u) r |= 1u << s; return r; }
 // what the old Break Effects choice (Mixer > Routing) leaves on: Through the effects, into Performance FX, into the Master Filter, after everything
 inline uint32_t bxRouteMask (int route)
 {
@@ -580,14 +592,15 @@ inline int fxSlotGroup (int s)
 {
     static const int g[] = { FG_Motion, FG_Dirt, FG_Phase, FG_Delays, FG_Chorus, FG_Reverbs, FG_Motion, FG_Dirt, FG_Width,
                              FG_Delays, FG_Reverbs, FG_Reverbs, FG_Reverbs, FG_Width, FG_Chorus, FG_Reverbs,
-                             FG_Chorus, FG_Chorus, FG_Chorus, FG_Phase, FG_Phase, FG_Phase, FG_Phase, FG_Phase };
+                             FG_Chorus, FG_Chorus, FG_Chorus, FG_Phase, FG_Phase, FG_Phase, FG_Phase, FG_Phase,
+                             FG_Reverbs };
     static_assert (sizeof (g) / sizeof (g[0]) == FS_COUNT, "a group per slot");
     return s >= 0 && s < FS_COUNT ? g[s] : FG_Motion;
 }
 // The effects that are sends (they add their output to what they hear); next to each other they share one input.
 inline bool fxSlotIsSend (int s) { return s == FS_Delay || s == FS_Chorus || s == FS_Reverb; }
 // The effects whose knob is a Return (they add what they make to what they hear): the sends, and the new delay and reverbs
-inline bool fxSlotIsReturn (int s) { return fxSlotIsSend (s) || s == FS_Dub || s == FS_Spring || s == FS_Gated || s == FS_Plate || s == FS_Ir; }
+inline bool fxSlotIsReturn (int s) { return fxSlotIsSend (s) || s == FS_Dub || s == FS_Spring || s == FS_Gated || s == FS_Plate || s == FS_Ir || s == FS_Vast; }
 
 enum FilterType { FT_LP, FT_HP, FT_BP, FT_NOTCH, FT_PEAK, FT_AP, FT_TYPE_COUNT };
 // The slope each classic model has as a low-pass (its original circuit). Low Pass at this slope
@@ -659,8 +672,8 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(osc4Position, "WT Scan Position", 0, 1, 0, 0.001, 0) \
     F(osc4Window,   "WT Scan Window", 0.001, 1, 1, 0.001, 0) \
     C(osc4LoopMode, "WT Loop Mode", kListLoop, 1) \
-    F(osc4LoopStart,"WT Loop Start", 0, 1, 0, 0.001, 0) \
-    F(osc4LoopEnd,  "WT Loop End", 0, 1, 1, 0.001, 0) \
+    F(osc4LoopStart,"WT Loop Start", 0, 1, 0, 0, 0) \
+    F(osc4LoopEnd,  "WT Loop End", 0, 1, 1, 0, 0) \
     C(osc4Direction,"WT Direction", kListDir, 0) \
     C(osc4Normalize,"WT Normalize", kListOnOff, 0) \
     F(wt2Detune,   "WT2 Detune", -50, 50, 0, 1, 0) \
@@ -669,8 +682,8 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(wt2Position, "WT2 Scan Position", 0, 1, 0, 0.001, 0) \
     F(wt2Window,   "WT2 Scan Window", 0.001, 1, 1, 0.001, 0) \
     C(wt2LoopMode, "WT2 Loop Mode", kListLoop, 1) \
-    F(wt2LoopStart,"WT2 Loop Start", 0, 1, 0, 0.001, 0) \
-    F(wt2LoopEnd,  "WT2 Loop End", 0, 1, 1, 0.001, 0) \
+    F(wt2LoopStart,"WT2 Loop Start", 0, 1, 0, 0, 0) \
+    F(wt2LoopEnd,  "WT2 Loop End", 0, 1, 1, 0, 0) \
     C(wt2Direction,"WT2 Direction", kListDir, 0) \
     C(wt2Normalize,"WT2 Normalize", kListOnOff, 0) \
     F(wt2Gain,     "WT2 Level", 0, 1, 0.4, 0.01, 0) \
@@ -1952,7 +1965,39 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(cpVibeInt, "Vibe Intensity", 0, 1, 0.7, 0.01, 0) \
     C(cpVibeMode,"Vibe Mode", kListCpVibeMode, 0) \
     C(cpVibeSync,"Vibe Sync", kListModSync, 0) \
-    C(portaMode, "Glide Mode", kListPortaMode, 0)
+    C(portaMode, "Glide Mode", kListPortaMode, 0) \
+    F(wt1SmpStart,"WT Sample Start", 0, 1, 0, 0, 0) \
+    F(wt1SmpEnd,  "WT Sample End", 0, 1, 1, 0, 0) \
+    C(wt1LoopType,"WT Loop Type", kListWtLoopType, 0) \
+    F(wt1Xfade,   "WT Loop Crossfade", 0, 0.5, 0, 0.001, 0) \
+    F(wt1VelStart,"WT Velocity to Start", 0, 1, 0, 0.01, 0) \
+    F(wt1RandStart,"WT Start Random", 0, 1, 0, 0.01, 0) \
+    B(wt1Stretch, "WT Stretch", false) \
+    F(wt2SmpStart,"WT2 Sample Start", 0, 1, 0, 0, 0) \
+    F(wt2SmpEnd,  "WT2 Sample End", 0, 1, 1, 0, 0) \
+    C(wt2LoopType,"WT2 Loop Type", kListWtLoopType, 0) \
+    F(wt2Xfade,   "WT2 Loop Crossfade", 0, 0.5, 0, 0.001, 0) \
+    F(wt2VelStart,"WT2 Velocity to Start", 0, 1, 0, 0.01, 0) \
+    F(wt2RandStart,"WT2 Start Random", 0, 1, 0, 0.01, 0) \
+    B(wt2Stretch, "WT2 Stretch", false) \
+    B(vsOn,      "Vastness On", false) \
+    F(vsMix,     "Vastness Return", 0, 1, 0.4, 0.01, 0) \
+    C(vsMode,    "Vastness Mode", kListVsMode, 0) \
+    F(vsDelay,   "Vastness Delay", 10, 1000, 220, 0.1, 150) \
+    C(vsSync,    "Vastness Delay Sync", kListDelaySync, 0) \
+    F(vsWarp,    "Vastness Warp", 0, 1, 0.6, 0.01, 0) \
+    F(vsFeedback,"Vastness Feedback", 0, 1, 0.75, 0.001, 0) \
+    F(vsDensity, "Vastness Density", 0, 1, 0.6, 0.01, 0) \
+    F(vsWidth,   "Vastness Width", 0, 1, 1, 0.01, 0) \
+    F(vsModRate, "Vastness Mod Rate", 0.01, 5, 0.3, 0.01, 0.5) \
+    F(vsModDepth,"Vastness Mod Depth", 0, 1, 0.3, 0.01, 0) \
+    F(vsLowCut,  "Vastness Low Cut", 20, 1000, 80, 1, 150) \
+    F(vsHighCut, "Vastness High Cut", 1000, 20000, 9000, 1, 5000) \
+    B(vsFreeze,  "Vastness Freeze", false) \
+    F(vsDuckAmt, "Vastness Duck Amount", 0, 1, 0, 0.01, 0) \
+    F(vsDuckAtt, "Vastness Duck Attack", 0.1, 50, 2, 0.1, 5) \
+    F(vsDuckRel, "Vastness Duck Release", 20, 2000, 250, 1, 250) \
+    C(vsDuckSrc, "Vastness Duck Source", kListSxDuckSrc, 0)
 
 enum ParamIndex
 {
@@ -1989,12 +2034,12 @@ constexpr int kMxCoreStrip = kMxSources + 3;   // Core A; Core B is the next
 constexpr int kMxLayerStrip = kMxSources + 5;  // the Break Layer
 
 // v0.1.70: the Space effects' rack slots (On, Mix / Return) and their Duck sections
-inline constexpr int fxOnParam (int slot)  { return slot < FS_Dub ? P_fxOnStutter + 2 * slot : slot < FS_Ens ? P_sxOnDub + 2 * (slot - FS_Dub) : P_cpOnEns + 2 * (slot - FS_Ens); }
-inline constexpr int fxMixParam (int slot) { return slot < FS_Dub ? P_fxMixStutter + 2 * slot : slot < FS_Ens ? P_sxMixDub + 2 * (slot - FS_Dub) : P_cpMixEns + 2 * (slot - FS_Ens); }
+inline constexpr int fxOnParam (int slot)  { return slot < FS_Dub ? P_fxOnStutter + 2 * slot : slot < FS_Ens ? P_sxOnDub + 2 * (slot - FS_Dub) : slot < FS_Vast ? P_cpOnEns + 2 * (slot - FS_Ens) : P_vsOn; }
+inline constexpr int fxMixParam (int slot) { return slot < FS_Dub ? P_fxMixStutter + 2 * slot : slot < FS_Ens ? P_sxMixDub + 2 * (slot - FS_Dub) : slot < FS_Vast ? P_cpMixEns + 2 * (slot - FS_Ens) : P_vsMix; }
 static_assert (fxOnParam (FS_Vibe) == P_cpOnVibe && fxMixParam (FS_Vibe) == P_cpMixVibe && fxMixParam (FS_Ir) == P_sxMixIr, "chorus / phaser parameter layout");
-enum SxDucker { SD_Delay, SD_Reverb, SD_Dub, SD_Spring, SD_Gated, SD_Plate, SD_Ir, SD_COUNT };
+enum SxDucker { SD_Delay, SD_Reverb, SD_Dub, SD_Spring, SD_Gated, SD_Plate, SD_Ir, SD_Vast, SD_COUNT };
 enum SxDuckField { SDF_Amt, SDF_Att, SDF_Rel, SDF_Src };
-inline constexpr int sxDuckParam (int d, int field) { return P_sxDlyDuckAmt + 4 * d + field; }
+inline constexpr int sxDuckParam (int d, int field) { return d < SD_Vast ? P_sxDlyDuckAmt + 4 * d + field : P_vsDuckAmt + field; }
 static_assert (sxDuckParam (SD_Ir, SDF_Src) == P_sxIrDuckSrc && fxMixParam (6 + 9) == P_sxMixIr, "Space parameter layout");
 
 // The Core oscillator slots: slot s (0 = A, 1 = B) starts at coreParam (s, 0); then 6 operators of kCoreOpStride

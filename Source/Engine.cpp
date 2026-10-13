@@ -263,6 +263,15 @@ void Voice::computeSources (const Snapshot& s, const GlobalModInputs* in, float 
         v[MS_Sidechain]   = in->sidechain;
         v[MS_BsStep] = in->bsStep; v[MS_BsPattern] = in->bsPattern; v[MS_BsSlice] = in->bsSlice; v[MS_BsBreak] = in->bsBreak; v[MS_BsFill] = in->bsFill; v[MS_LsStep] = in->lsStep; v[MS_LsPattern] = in->lsPattern;
         v[MS_ReesePhase] = rsRun ? (float) reese.beatPhase() : 0.0f;
+        for (int k = 0; k < 2; ++k)
+        {
+            // (v0.1.74) the wavetables' playheads (0-1 of the sample) and their place in the loop (0-1)
+            const auto& w = wt[k];
+            const double ph = wtPlayhead (k);
+            const float pos01 = ph >= 0.0 && w.wav != nullptr && w.wav->length > 1 ? (float) (ph / w.wav->length) : 0.0f;
+            const float loop01 = ph >= 0.0 && w.le > w.ls ? (float) clampv ((ph - w.ls) / (w.le - w.ls), 0.0, 1.0) : 0.0f;
+            v[k == 0 ? MS_Wt1Pos : MS_Wt2Pos] = pos01; v[k == 0 ? MS_Wt1Loop : MS_Wt2Loop] = loop01;
+        }
         v[MS_CoreAEnv] = coreRun[0] ? core[0].envelope (0) : 0.0f;
         v[MS_CoreBEnv] = coreRun[1] ? core[1].envelope (0) : 0.0f;
     }
@@ -405,6 +414,7 @@ void Voice::updateUnison (const Snapshot& s)
             {
                 WtPlayer& u = wtU[k - 3][j];
                 u.wav = w.wav; u.loop = w.loop; u.reverse = w.reverse; u.ls = w.ls; u.le = w.le; u.comp = w.comp;
+                u.sampler = w.sampler; u.loopType = w.loopType; u.xf = w.xf; u.endPos = w.endPos; u.stretch = w.stretch; u.grainLen = w.grainLen;
                 u.rate.v = w.rate.v * uniRatio[k][j];
                 if (w.loaded && w.pos >= 0.0 && u.pos < 0.0)
                 {
@@ -413,6 +423,7 @@ void Voice::updateUnison (const Snapshot& s)
                     u.pos = w.pos + off;
                     if (u.loop && u.pos >= u.le) u.pos = u.ls + std::fmod (u.pos - u.ls, std::max (1.0e-6, u.le - u.ls));
                     u.stopped = false;
+                    if (u.sampler) { u.dir = 1.0; u.sp = u.pos; u.grain[0] = { u.pos, 0.0 }; u.grain[1] = { u.pos, 0.5 * u.grainLen }; }
                 }
                 u.loaded = w.loaded && u.pos >= 0.0;
             }
@@ -600,6 +611,37 @@ void Voice::updateWt (int slot, const Snapshot& s, const ModState& mod, double b
     }
     w.le = std::max (w.ls + 0.001 * w.wav->sampleRate, w.le);
     w.reverse = s.i (P.dir) == 1;
+    w.sampler = mode == 4;
+    if (w.sampler)
+    {
+        // (v0.1.74) Sampler: Start .. End, the loop inside it (Loop Start / End), its type, crossfade and Stretch
+        static const int xp[2][7] = { { P_wt1SmpStart, P_wt1SmpEnd, P_wt1LoopType, P_wt1Xfade, P_wt1VelStart, P_wt1RandStart, P_wt1Stretch },
+                                      { P_wt2SmpStart, P_wt2SmpEnd, P_wt2LoopType, P_wt2Xfade, P_wt2VelStart, P_wt2RandStart, P_wt2Stretch } };
+        const int* X = xp[slot];
+        double a = clampv ((double) s.f (X[0]), 0.0, 1.0), b = clampv ((double) s.f (X[1]), 0.0, 1.0);
+        if (b < a) std::swap (a, b);
+        b = std::max (b, std::min (1.0, a + 0.001));
+        const double minLen = 0.002 * w.wav->sampleRate;
+        double l0 = std::min (ms, me), l1 = std::max (ms, me);
+        w.ls = clampv (len * l0, len * a, len * b);
+        w.le = clampv (len * l1, w.ls + minLen, std::max (w.ls + minLen, len * b));
+        w.le = std::min (w.le, len);
+        w.loopType = clampv (s.i (X[2]), 0, 3);
+        w.xf = clampv ((double) s.f (X[3]), 0.0, 0.5) * (w.le - w.ls);
+        w.endPos = len * b;
+        w.stretch = s.v[X[6]] > 0.5f;
+        w.grainLen = 0.06 * sr;
+        w.loop = w.loopType != 3;
+        startPos = len * a;
+        if (w.pos < 0.0)
+        {
+            const double off = (clampv ((double) s.f (X[4]), 0.0, 1.0) * velocity + clampv ((double) s.f (X[5]), 0.0, 1.0) * 0.5 * (nextRand() + 1.0)) * 0.5 * (len * (b - a));
+            startPos = std::min (len * a + off, len * b - 1.0);
+            w.dir = 1.0; w.sp = startPos; w.dcN = 0; w.lastL = w.lastR = 0.0f; w.dcLen = std::max (8, (int) (0.002 * sr));
+            w.grain[0].start = startPos; w.grain[0].age = 0.0;
+            w.grain[1].start = startPos; w.grain[1].age = 0.5 * w.grainLen;
+        }
+    }
     w.start = startPos;
     if (w.pos < 0.0) { w.pos = startPos; w.stopped = false; }
 }
@@ -1278,6 +1320,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
                             double p0 = wt[w].start + rxJump * span;
                             if (wt[w].loop && p0 >= wt[w].le) p0 = wt[w].ls + std::fmod (p0 - wt[w].ls, span);
                             wt[w].pos = p0; wt[w].stopped = false; rxDcWt[w].n = -1;
+                            if (wt[w].sampler) { wt[w].dir = 1.0; wt[w].sp = p0; for (auto& g : wt[w].grain) g.start = p0; }
                         }
                     for (int c = 0; c < 2; ++c) if (rxEngCore[c] && coreRun[c]) { coreOld[c] = core[c]; core[c].rxRestart(); coreXf[c] = 2 * rxXfLen; }
                     if (rxEngSaw && ssCount > 0) { std::copy (std::begin (ssPh0), std::end (ssPh0), std::begin (ssPh)); rxDcSaw.n = -1; }
@@ -2153,6 +2196,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
         for (auto& v : voices) if (v.active) grains += v.granGrains();
         granGrainsShown.store (grains, std::memory_order_relaxed);
         granPlayheadShown.store (newest != nullptr && newest->active ? newest->granPlayhead() : -1.0, std::memory_order_relaxed);
+        for (int k = 0; k < 2; ++k) wtPlayheadShown[k].store (newest != nullptr && newest->active ? newest->wtPlayhead (k) : -1.0, std::memory_order_relaxed);
     }
     for (int k = 0; k < 2; ++k)
     {
@@ -2468,7 +2512,7 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
                 };
                 if (fs->i (P_busOrder) == 1) { lSpec(); lGran(); }
                 else                         { lGran(); lSpec(); }
-                ln.fx.setSlotMask ((k >> BX_Rack0) & ((1u << FS_COUNT) - 1u));
+                ln.fx.setSlotMask (bxSlotMask (k));
                 float* lx[2] = { x0, x1 };
                 if (lfbOn)
                 {

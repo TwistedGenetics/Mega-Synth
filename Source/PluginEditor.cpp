@@ -4,10 +4,12 @@
 #include "UI/DnaSeqPage.h"
 #include "UI/FxPages.h"
 #include "UI/BreakFxPage.h"
+#include "UI/CoreTools.h"
 #include "UI/LfoPage.h"
 #include "UI/ArpPage.h"
 #include "ParamFormat.h"
 #include "Registry.h"
+#include "WtTools.h"
 #include "UI/Overview.h"
 #include "UI/PerfFxPage.h"
 #include "UI/SamplePages.h"
@@ -614,13 +616,20 @@ void Section::paint (juce::Graphics& g)
     auto r = getLocalBounds().toFloat().reduced (1.0f);
     g.setColour (col::panel);
     g.fillRoundedRectangle (r, 12.0f);
-    g.setColour (col::border);
-    g.drawRoundedRectangle (r, 12.0f, 1.0f);
+    g.setColour (flashing ? colour : col::border);
+    g.drawRoundedRectangle (r, 12.0f, flashing ? 3.0f : 1.0f);
     g.setColour (colour);
     g.fillRoundedRectangle (juce::Rectangle<float> (r.getX() + 12, r.getY() + 9, 4, 16), 2.0f);
     g.setColour (col::text);
     g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
     g.drawText (title, juce::Rectangle<float> (r.getX() + 22, r.getY() + 6, r.getWidth() - 30, 22), juce::Justification::centredLeft);
+}
+
+void Section::flash()
+{
+    flashing = true; repaint();
+    juce::Component::SafePointer<Section> safe (this);
+    juce::Timer::callAfterDelay (900, [safe] { if (safe != nullptr) { safe->flashing = false; safe->repaint(); } });
 }
 
 void Section::addTitleChip (juce::Component* c, int width)
@@ -1551,6 +1560,24 @@ bool MegaSynthEditor::showPage (const juce::String& nameIn)
     return true;
 }
 
+juce::String MegaSynthEditor::shownPageForTests() const
+{
+    const int t = tabs.getCurrentTabIndex();
+    juce::String whole;
+    for (auto& [name, ref] : pageIndex)
+    {
+        if (ref.tab != t || ref.page == nullptr) continue;
+        if (ref.sub < 0) { whole = name; continue; }
+        if (auto* g = dynamic_cast<GroupPage*> (tabs.getTabContentComponent (t))) if (g->current() == ref.sub) return name;
+    }
+    return whole;
+}
+
+void MegaSynthEditor::openMixerStripForTests (int strip)
+{
+    if (strip >= 0 && strip < mixerStrips.size() && mixerStrips[strip]->onOpen) mixerStrips[strip]->onOpen();
+}
+
 juce::StringArray MegaSynthEditor::allPageNames() const
 {
     juce::StringArray a;
@@ -1701,6 +1728,30 @@ namespace
         int lastCount = 0;
         float flash[4] {};
     };
+}
+
+juce::String MegaSynthEditor::effectPage (int slot)
+{
+    switch (tg::fxSlotGroup (slot))
+    {
+        case tg::FG_Delays: return "Delays";
+        case tg::FG_Reverbs: return "Reverbs";
+        case tg::FG_Chorus: case tg::FG_Phase: return "Chorus & Phase";
+        case tg::FG_Width: return "Width";
+        case tg::FG_Dirt: return "Dirt";
+        default: return "Motion";
+    }
+}
+
+void MegaSynthEditor::showEffect (int slot)
+{
+    showPage (effectPage (slot));
+    auto it = fxSections.find (slot);
+    if (it == fxSections.end() || it->second == nullptr) return;
+    auto* sec = it->second;
+    if (auto* vp = sec->findParentComponentOfClass<juce::Viewport>())
+        vp->setViewPosition (0, juce::jmax (0, sec->getY() - 6));
+    sec->flash();
 }
 
 // (v0.1.72) a page whose content is taller than the window: it scrolls (the mouse wheel or the bar on the right)
@@ -1997,15 +2048,28 @@ void MegaSynthEditor::buildPages()
         sub->newRow();
         sub->add (new ParamToggle (proc, P_subMono, "Mono below 120 Hz (dry)", col::osc), 220, 30);
 
-        // the two sample / wavetable oscillators
-        struct WtIds { int mode, dir, norm, semi, det, oct, root, pos, win, ls, le, gain; };
+        // the two sample / wavetable oscillators (v0.1.74: with a display, markers and the Sampler mode)
+        struct WtIds { int mode, dir, norm, semi, det, oct, root, pos, win, ls, le, gain, start, end, ltype, xf, vel, rnd, stretch; };
         const WtIds ids[2] = {
-            { P_osc4LoopMode, P_osc4Direction, P_osc4Normalize, P_osc4Semi, P_osc4Detune, P_osc4Oct, P_osc4Root, P_osc4Position, P_osc4Window, P_osc4LoopStart, P_osc4LoopEnd, P_osc4Gain },
-            { P_wt2LoopMode, P_wt2Direction, P_wt2Normalize, P_wt2Semi, P_wt2Detune, P_wt2Oct, P_wt2Root, P_wt2Position, P_wt2Window, P_wt2LoopStart, P_wt2LoopEnd, P_wt2Gain } };
+            { P_osc4LoopMode, P_osc4Direction, P_osc4Normalize, P_osc4Semi, P_osc4Detune, P_osc4Oct, P_osc4Root, P_osc4Position, P_osc4Window, P_osc4LoopStart, P_osc4LoopEnd, P_osc4Gain,
+              P_wt1SmpStart, P_wt1SmpEnd, P_wt1LoopType, P_wt1Xfade, P_wt1VelStart, P_wt1RandStart, P_wt1Stretch },
+            { P_wt2LoopMode, P_wt2Direction, P_wt2Normalize, P_wt2Semi, P_wt2Detune, P_wt2Oct, P_wt2Root, P_wt2Position, P_wt2Window, P_wt2LoopStart, P_wt2LoopEnd, P_wt2Gain,
+              P_wt2SmpStart, P_wt2SmpEnd, P_wt2LoopType, P_wt2Xfade, P_wt2VelStart, P_wt2RandStart, P_wt2Stretch } };
         Section* wtS[2];
         for (int k = 0; k < 2; ++k)
         {
+            const WtIds I = ids[k];
             wtS[k] = sec (pageWt, k == 0 ? "Wavetable 1  (Osc 4)" : "Wavetable 2", col::wavetable);
+            wtS[k]->addInfo ("Loop Mode Sampler (Start / End / Loop) plays it like a sampler: from Start (green) to End (red), looping between Loop "
+                             "Start and Loop End (yellow) as Loop Type says - Forward, Ping-Pong (back and forth: pads from any sustained sound), "
+                             "Reverse, or Off (once, Start to End). Crossfade blends the loop's end into its start (equal power) so a loop that "
+                             "doesn't quite match doesn't click. Drag the markers with the mouse (dragging one switches to Sampler); the wheel "
+                             "zooms, Shift+wheel scrolls, double-click zooms to the loop and back. Snap puts markers on zero crossings. Auto-loop "
+                             "finds a Loop End near yours that flows back into Loop Start, and says how well it matches. Detect root sets Root "
+                             "Note from the sample's pitch. Vel > Start starts later on harder hits; Start Random starts each note a little "
+                             "differently. Stretch keeps the sample's length whatever the note (two overlapping grains): the pitch changes, "
+                             "the length doesn't, and its formants move with the pitch (they're not preserved). The other Loop Modes work "
+                             "exactly as before.");
             auto* bar = new SampleBar();
             sampleBars[k] = bar;
             wtS[k]->add (bar, 545, 28);
@@ -2025,13 +2089,136 @@ void MegaSynthEditor::buildPages()
             };
             bar->clear.onClick = [this, k] { proc.clearSample (k); proc.pushHistory ("Clear sample"); setStatus ("Wavetable " + juce::String (k + 1) + " cleared"); };
             wtS[k]->newRow();
-            wtS[k]->choice (ids[k].mode, "Loop Mode", 180);
-            wtS[k]->choice (ids[k].dir, "Direction", 110);
-            wtS[k]->choice (ids[k].norm, "Normalize", 110);
+            // the display
+            auto* view = new SampleWaveView (proc, k, col::wavetable);
+            view->zoomable = true;
+            view->emptyText = "Load a sample: its markers show here";
+            wtViews[k] = view;
+            auto plainOf = [this] (int i) { return (double) proc.param (i)->convertFrom0to1 (proc.param (i)->getValue()); };
+            auto setPlain = [this] (int i, double v) { auto* pp = proc.param (i); pp->setValueNotifyingHost (pp->convertTo0to1 ((float) v)); };
+            view->markers = [this, I, plainOf, k]
+            {
+                std::vector<SampleWaveView::Marker> m;
+                const int mode = juce::roundToInt (plainOf (I.mode));
+                if (mode == 4)
+                {
+                    m.push_back ({ plainOf (I.start), juce::Colour (0xff7bd88f), "S", true });
+                    m.push_back ({ plainOf (I.end), juce::Colour (0xffff6b6b), "E", true });
+                }
+                if (mode == 2 || mode == 4)
+                {
+                    m.push_back ({ plainOf (I.ls), juce::Colour (0xffffd166), "LS", true });
+                    m.push_back ({ plainOf (I.le), juce::Colour (0xffffd166), "LE", true });
+                }
+                const double ph = proc.getEngine().wtPlayheadShown[k].load();
+                const auto* w = proc.getSample (k);
+                if (ph >= 0.0 && w != nullptr && w->length > 1) m.push_back ({ ph / w->length, col::text, "", false });
+                return m;
+            };
+            view->shade = [I, plainOf]
+            {
+                const int mode = juce::roundToInt (plainOf (I.mode));
+                if (mode == 2 || mode == 4) { const double a = plainOf (I.ls), b = plainOf (I.le); return juce::Range<double> (std::min (a, b), std::max (a, b)); }
+                if (mode == 1) { const double wv = plainOf (I.win), st = plainOf (I.pos) * (1.0 - wv); return juce::Range<double> (st, st + wv); }
+                return juce::Range<double>();
+            };
+            auto dragWhich = std::make_shared<int> (-1);
+            auto snapOn = std::make_shared<bool> (true);
+            view->onDragStart = [this, view, I, plainOf, dragWhich, k] (double, const juce::MouseEvent& e)
+            {
+                const int mode = juce::roundToInt (plainOf (I.mode));
+                const int cand[4] = { I.start, I.end, I.ls, I.le };
+                int best = -1; float bd = 9.0f;
+                for (int c = 0; c < 4; ++c)
+                {
+                    if (c < 2 && mode != 4) { /* Start / End: only drawn in Sampler, but can still be grabbed near their place */ }
+                    const float d = std::abs (view->xFor (plainOf (cand[c])) - e.position.x);
+                    if (d < bd) { bd = d; best = c; }
+                }
+                if (best < 0) return false;
+                *dragWhich = cand[best];
+                if (mode != 4 && ! (mode == 2 && best >= 2))
+                {
+                    auto* pm = proc.param (I.mode); pm->beginChangeGesture(); pm->setValueNotifyingHost (pm->convertTo0to1 (4.0f)); pm->endChangeGesture();
+                    setStatus ("Wavetable " + juce::String (k + 1) + ": Loop Mode set to Sampler, so the markers play");
+                }
+                proc.param (*dragWhich)->beginChangeGesture();
+                return true;
+            };
+            view->onDragMove = [this, I, dragWhich, snapOn, setPlain, k] (double frac, const juce::MouseEvent&)
+            {
+                if (*dragWhich < 0) return;
+                const auto* w = proc.getSample (k);
+                if (w != nullptr && w->length > 1 && *snapOn)
+                    frac = tg::wttools::snapToZero (*w, frac * w->length, 256) / w->length;
+                setPlain (*dragWhich, juce::jlimit (0.0, 1.0, frac));
+                juce::ignoreUnused (I);
+            };
+            view->onDragEnd = [this, dragWhich]
+            {
+                if (*dragWhich >= 0) proc.param (*dragWhich)->endChangeGesture();
+                *dragWhich = -1;
+                proc.pushHistory ("Move a sample marker");
+            };
+            view->onDoubleClick = [view, I, plainOf] (double)
+            {
+                if (view->viewLen < 0.999) { view->setView (0.0, 1.0); return; }
+                const double a = plainOf (I.ls), b = plainOf (I.le);
+                view->zoomTo ({ std::min (a, b), std::max (a, b) });
+            };
+            view->setTooltip ("Drag the markers: S Start, E End, LS / LE the loop. Wheel: zoom; Shift+wheel: scroll; double-click: zoom to the loop and back");
+            wtS[k]->add (view, 545, 108);
             wtS[k]->newRow();
-            for (auto [idx, n] : { std::pair<int, const char*> { ids[k].oct, "Octave" }, { ids[k].semi, "Semi" }, { ids[k].det, "Detune" },
-                                   { ids[k].root, "Root Note" }, { ids[k].pos, "Scan Pos" }, { ids[k].win, "Window" },
-                                   { ids[k].ls, "Loop Start" }, { ids[k].le, "Loop End" }, { ids[k].gain, "Level" } })
+            wtS[k]->choice (I.mode, "Loop Mode", 180);
+            wtS[k]->choice (I.ltype, "Loop Type", 120);
+            wtS[k]->choice (I.dir, "Direction", 96);
+            wtS[k]->choice (I.norm, "Normalize", 90);
+            wtS[k]->newRow();
+            auto* snap = new juce::TextButton ("Snap");
+            snap->setClickingTogglesState (true); snap->setToggleState (true, juce::dontSendNotification);
+            snap->setColour (juce::TextButton::buttonOnColourId, col::wavetable.withAlpha (0.7f));
+            snap->setTooltip ("Markers you drag land on zero crossings (the nearest upward one within 256 samples)");
+            snap->onClick = [snap, snapOn] { *snapOn = snap->getToggleState(); };
+            wtS[k]->add (snap, 56, 26);
+            auto* autoLoop = new juce::TextButton ("Auto-loop");
+            autoLoop->setTooltip ("Finds a Loop End near the one you've set (within 10% of the loop) whose sound flows back into Loop Start, on a zero crossing");
+            autoLoop->onClick = [this, I, plainOf, setPlain, k]
+            {
+                const auto* w = proc.getSample (k);
+                if (w == nullptr || w->length < 256) { setStatus ("Load a sample first"); return; }
+                const double a = std::min (plainOf (I.ls), plainOf (I.le)), b = std::max (plainOf (I.ls), plainOf (I.le));
+                const auto f = tg::wttools::findLoopEnd (*w, a * w->length, b * w->length);
+                auto* pm = proc.param (I.mode);
+                if (juce::roundToInt (plainOf (I.mode)) != 4) { pm->beginChangeGesture(); pm->setValueNotifyingHost (pm->convertTo0to1 (4.0f)); pm->endChangeGesture(); }
+                auto* pe = proc.param (I.le); pe->beginChangeGesture(); setPlain (I.le, f.end / w->length); pe->endChangeGesture();
+                proc.pushHistory ("Auto-loop");
+                setStatus ("Auto-loop: Loop End at " + juce::String (f.end / w->sampleRate, 3) + " s, match " + juce::String (juce::roundToInt (f.match * 100.0)) + "%"
+                           + (f.match < 0.8 ? " (not a close match: try a longer loop, or a Crossfade)" : ""));
+            };
+            wtS[k]->add (autoLoop, 84, 26);
+            auto* detect = new juce::TextButton ("Detect root");
+            detect->setTooltip ("Finds the sample's pitch and sets Root Note to it");
+            detect->onClick = [this, I, setPlain, k]
+            {
+                const auto* w = proc.getSample (k);
+                if (w == nullptr || w->length < 256) { setStatus ("Load a sample first"); return; }
+                double clarity = 0.0;
+                const double hz = tg::wttools::detectPitchHz (*w, &clarity);
+                if (hz <= 0.0) { setStatus ("No clear pitch found in this sample"); return; }
+                const double note = 69.0 + 12.0 * std::log2 (hz / 440.0);
+                const int n = juce::jlimit (24, 84, juce::roundToInt (note));
+                auto* pr = proc.param (I.root); pr->beginChangeGesture(); setPlain (I.root, (double) n); pr->endChangeGesture();
+                proc.pushHistory ("Detect root");
+                setStatus ("Detected " + juce::String (hz, 1) + " Hz: " + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + " ("
+                           + juce::String (juce::roundToInt ((note - n) * 100.0)) + " cents); Root Note set");
+            };
+            wtS[k]->add (detect, 90, 26);
+            wtS[k]->add (new ParamToggle (proc, I.stretch, "Stretch", col::wavetable), 90, 26);
+            wtS[k]->newRow();
+            for (auto [idx, n] : { std::pair<int, const char*> { I.oct, "Octave" }, { I.semi, "Semi" }, { I.det, "Detune" },
+                                   { I.root, "Root Note" }, { I.pos, "Scan Pos" }, { I.win, "Window" },
+                                   { I.ls, "Loop Start" }, { I.le, "Loop End" }, { I.gain, "Level" },
+                                   { I.start, "Start" }, { I.end, "End" }, { I.xf, "Crossfade" }, { I.vel, "Vel > Start" }, { I.rnd, "Start Rnd" } })
                 wtS[k]->knob (idx, n, 56);
         }
 
@@ -2060,8 +2247,8 @@ void MegaSynthEditor::buildPages()
         pageWt->onResize = [pageWt, wtS]
         {
             const int W = pageWt->getWidth(), g = 10, w2 = (W - g * 3) / 2;
-            wtS[0]->setBounds (g, g, w2, 208);
-            wtS[1]->setBounds (g * 2 + w2, g, w2, 208);
+            wtS[0]->setBounds (g, g, w2, 498);
+            wtS[1]->setBounds (g * 2 + w2, g, w2, 498);
         };
         pageCx->onResize = [pageCx, cx, ss]
         {
@@ -2829,6 +3016,44 @@ void MegaSynthEditor::buildPages()
         top->choice (tg::coreParam (slot, tg::CS_Retrig), "Retrigger", 90)->box.setTooltip ("Reset: every note starts the operators together (the usual for FM). Free: they run on from the last note. Random: a new start each note.");
         top->knob (tg::coreParam (slot, tg::CS_Bright), "Bright", 56);
         top->knob (tg::coreParam (slot, tg::CS_EnvSpd), "Env Speed", 60);
+        {
+            // (v0.1.74) Randomise and DX7 voices
+            auto* rnd = new juce::TextButton ("Randomise...");
+            rnd->setTooltip ("A random patch for this slot: a type (bass, e-piano, bell...), from Controlled to Crazy, keeping what you lock, from a seed you can roll again");
+            rnd->onClick = [this, slot, rnd]
+            {
+                auto panel = std::make_unique<CoreRandomPanel> (proc, slot, coreRandState[slot], [this] (const juce::String& m) { setStatus (m); });
+                juce::CallOutBox::launchAsynchronously (std::move (panel), rnd->getScreenBounds(), nullptr);
+            };
+            top->addTitleChip (rnd, 96);
+            auto* dx = new juce::TextButton ("DX7 voice...");
+            dx->setTooltip ("Load a DX7 voice or 32-voice bank (.syx) into Core A or B: its algorithm, operators, envelopes and feedback, with a list of what's approximated");
+            dx->onClick = [this, dx]
+            {
+                dxChooser = std::make_unique<juce::FileChooser> ("Choose a DX7 sysex file (a voice or a 32-voice bank)", juce::File(), "*.syx;*.SYX");
+                juce::Component::SafePointer<juce::Component> btn (dx);
+                dxChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this, btn] (const juce::FileChooser& fc)
+                {
+                    const auto f = fc.getResult();
+                    if (! f.existsAsFile()) return;
+                    juce::MemoryBlock mb;
+                    if (f.getSize() > 1 << 20 || ! f.loadFileAsData (mb)) { setStatus ("Couldn't read " + f.getFileName()); return; }
+                    juce::String err;
+                    auto voices = tg::dx7::parse (mb, err);
+                    if (voices.empty()) { setStatus (f.getFileName() + ": " + err); return; }
+                    auto browser = std::make_unique<Dx7Browser> (proc, std::move (voices), f.getFileName(), err, [this] (const juce::String& m) { setStatus (m); });
+                    if (btn != nullptr) juce::CallOutBox::launchAsynchronously (std::move (browser), btn->getScreenBounds(), nullptr);
+                });
+            };
+            top->addTitleChip (dx, 96);
+            auto* nameLbl = new juce::Label();
+            nameLbl->setColour (juce::Label::textColourId, c);
+            nameLbl->setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+            top->addTitleChip (nameLbl, 360);
+            auto* nameTicker = page->own (new StoreTicker());
+            nameTicker->tick = [this, slot, nameLbl] { const auto& t = proc.corePatchName[slot]; if (nameLbl->getText() != t) nameLbl->setText (t, juce::dontSendNotification); };
+            nameTicker->tick();
+        }
 
         auto* rt = sec (page, "Routing", c);
         rt->addInfo ("What the matrix is doing now: the operators you hear on the right, the ones modulating them to the left, a loop "
@@ -2962,6 +3187,14 @@ void MegaSynthEditor::buildPages()
         top->add (routeInfo, 560, 28);
         auto* grid = page->own (new BreakFxGrid (proc));
         breakFxGridForTests = grid;
+        grid->onOpen = [this] (int bit)
+        {
+            int slot = -1; for (int q = 0; q < FS_COUNT; ++q) if (bxRackBit (q) == bit) slot = q;
+            if (slot >= 0) showEffect (slot);
+            else if (bit == BX_Perf) showPage ("Performance FX");
+            else if (bit == BX_MF) showPage ("Filters");
+            else showPage ("Bus Mutation");
+        };
         int bi = 0;
         for (auto* ch : top->getChildren())
             if (auto* b = dynamic_cast<juce::TextButton*> (ch)) { const int k = bi++; if (k < 4) b->onClick = [this, grid, k] { grid->applyPreset (k); setStatus (juce::String ("Break FX: ") + BreakFxGrid::presetName (k)); }; }
@@ -3650,6 +3883,18 @@ void MegaSynthEditor::buildPages()
         for (int k = 0; k < kMxStrips; ++k)
             stripList.add (page->own (new ChannelStrip (proc, k, strips[k].name, strips[k].level, strips[k].extra, strips[k].extraCap, strips[k].pEnv, strips[k].c)));
         mixerStrips = stripList;
+        {
+            // (v0.1.74) a click on a strip's name opens its source's page
+            static const char* stripPage[kMxStrips] = { "Osc 1-3 & Sub", "Osc 1-3 & Sub", "Osc 1-3 & Sub", "Osc 1-3 & Sub", "Wavetables", "Wavetables",
+                                                        "Complex & SuperSaw", "Complex & SuperSaw", "FM & Ring", "Granular Synth", "Break Chopper", "Reese",
+                                                        "Core A", "Core B", "Break Sequencer" };
+            for (int k = 0; k < stripList.size(); ++k)
+            {
+                const juce::String pg (stripPage[k]);
+                stripList[k]->onOpen = [this, pg] { showPage (pg); };
+                stripList[k]->setTooltip ("Click the name: open " + pg);
+            }
+        }
         auto* srcHelp = sec (page, "Sources", col::mixer);
         srcHelp->addInfo ("Each source's level, pan, unison voices (or the SuperSaw's voices, or the ring modulator's wet / dry) and Mute / Solo. "
                           "Pan is a balance: the centre leaves both sides at full level, so a centred mix sounds exactly as before. "
@@ -3690,13 +3935,18 @@ void MegaSynthEditor::buildPages()
             struct Ret { int slot, level; const char* name; };
             const Ret rets[] = { { FS_Delay, P_delayMix, "Tape" }, { FS_Dub, P_sxMixDub, "Dub" },
                                  { FS_Reverb, P_reverbMix, "90s Verb" }, { FS_Reverb, P_shimmerMix, "Shimmer" }, { FS_Reverb, P_reverseMix, "Reverse" },
-                                 { FS_Plate, P_sxMixPlate, "Plate" }, { FS_Gated, P_sxMixGated, "Gated" }, { FS_Spring, P_sxMixSpring, "Spring" }, { FS_Ir, P_sxMixIr, "IR" },
+                                 { FS_Plate, P_sxMixPlate, "Plate" }, { FS_Gated, P_sxMixGated, "Gated" }, { FS_Spring, P_sxMixSpring, "Spring" }, { FS_Ir, P_sxMixIr, "IR" }, { FS_Vast, P_vsMix, "Vast" },
                                  { FS_Chorus, P_chorusMix, "Juno" }, { FS_Dim, P_sxMixDim, "Dim" }, { FS_Ens, P_cpMixEns, "Ensemble" },
                                  { FS_Bbd, P_cpMixBbd, "BBD" }, { FS_Multi, P_cpMixMulti, "Multi" },
                                  { FS_Flanger, P_fxMixFlanger, "Flanger" }, { FS_Script, P_cpMixScript, "Script" }, { FS_Colour, P_cpMixColour, "Colour" },
                                  { FS_Dual, P_cpMixDual, "Dual" }, { FS_Barber, P_cpMixBarber, "Barber" }, { FS_Vibe, P_cpMixVibe, "Vibe" },
                                  { FS_Stereo, P_fxMixStereo, "Stereo" }, { FS_Widen, P_sxMixWiden, "Widener" } };
-            for (auto& e : rets) rt->add (new ReturnCell (proc, e.slot, e.level, e.name, fxGroupColour (fxSlotGroup (e.slot))), 66, 28);
+            for (auto& e : rets)
+            {
+                auto* cell = new ReturnCell (proc, e.slot, e.level, e.name, fxGroupColour (fxSlotGroup (e.slot)));
+                cell->onOpen = [this] (int slot) { showEffect (slot); };
+                rt->add (cell, 66, 28);
+            }
         }
         auto* pageFm = addPage ("FM & Ring");
         auto* fmS = sec (pageFm, "FM Matrix  (source -> destination, Hz of deviation)", col::fm);
@@ -3709,13 +3959,54 @@ void MegaSynthEditor::buildPages()
         }
         fmS->knob (P_fmAmount, "FM 2>1 (legacy)", 96);
         auto* rg = sec (pageFm, "Ring Mod Matrix", col::fm);
+        rg->addInfo ("Each slot rings its Carrier with its Source. What you hear also goes through Ring Level and Ring Wet/Dry (the Mixer's "
+                     "Ring strip: Level and Ring Mix): at 0 the matrix is silent. Init sets both to 0, so raising an Amount from here sets them "
+                     "to 50% if they're at 0. The Source and Carrier are taken after their own Level: an oscillator at Level 0 rings nothing "
+                     "(to use one only as a modulator, Mute it in the Mixer: a muted source still rings).");
+        static const int srcGain[7] = { P_osc1Gain, P_osc2Gain, P_osc3Gain, P_osc4Gain, P_complexGain, P_supersawGain, -1 };
         for (int i = 0; i < 2; ++i)
         {
             rg->choice (P_ringSlot1Source + 3 * i, "Slot " + juce::String (i + 1) + " Source", 120);
             rg->choice (P_ringSlot1Dest + 3 * i, "Carrier", 140);
-            rg->knob (P_ringSlot1Amt + 3 * i, "Amount");
+            auto* amtK = rg->knob (P_ringSlot1Amt + 3 * i, "Amount");
+            // (v0.1.74) raising an Amount with Ring Level or Wet/Dry at 0 (Init) brings them to 50%, so the slot is heard
+            amtK->slider.onDragStart = [this]
+            {
+                auto plain = [this] (int i2) { return proc.param (i2)->convertFrom0to1 (proc.param (i2)->getValue()); };
+                juce::StringArray raised;
+                for (auto [prm, nm] : { std::pair<int, const char*> { P_ringGain, "Ring Level" }, { P_ringMix, "Ring Wet/Dry" } })
+                    if (plain (prm) <= 0.0f) { auto* pp = proc.param (prm); pp->beginChangeGesture(); pp->setValueNotifyingHost (pp->convertTo0to1 (0.5f)); pp->endChangeGesture(); raised.add (nm); }
+                if (! raised.isEmpty()) setStatus (raised.joinIntoString (" and ") + " were at 0: set to 50% so the ring matrix is heard");
+            };
             rg->newRow();
         }
+        rg->knob (P_ringGain, "Ring Level");
+        rg->knob (P_ringMix, "Ring Wet/Dry");
+        auto* ringInfo = new juce::Label();
+        ringInfo->setColour (juce::Label::textColourId, col::muted);
+        ringInfo->setFont (juce::Font (juce::FontOptions (11.5f)));
+        ringInfo->setJustificationType (juce::Justification::topLeft);
+        rg->add (ringInfo, 260, 70);
+        auto* ringTicker = pageFm->own (new StoreTicker());
+        ringTicker->tick = [this, ringInfo]
+        {
+            auto plain = [this] (int i2) { return proc.param (i2)->convertFrom0to1 (proc.param (i2)->getValue()); };
+            juce::StringArray why;
+            bool any = false;
+            for (int k = 0; k < 2; ++k)
+            {
+                if (plain (P_ringSlot1Amt + 3 * k) <= 0.0f) continue;
+                any = true;
+                const int src = juce::roundToInt (plain (P_ringSlot1Source + 3 * k)), dst = juce::roundToInt (plain (P_ringSlot1Dest + 3 * k));
+                for (int x : { src, dst })
+                    if (x >= 0 && x < 6 && srcGain[x] >= 0 && plain (srcGain[x]) <= 0.0f)
+                        why.addIfNotAlreadyThere (juce::String (tg::kOscLabels[x]) + " is at Level 0 (it rings nothing)");
+            }
+            if (any && plain (P_ringGain) <= 0.0f) why.add ("Ring Level is 0");
+            if (any && plain (P_ringMix) <= 0.0f) why.add ("Ring Wet/Dry is 0");
+            const juce::String t = ! any ? juce::String ("No slot on (Amount 0).") : why.isEmpty() ? juce::String ("Ringing.") : "Silent: " + why.joinIntoString ("; ") + ".";
+            if (ringInfo->getText() != t) ringInfo->setText (t, juce::dontSendNotification);
+        };
         // Analog Warmth: the colour of the whole output
         auto* w = sec (page, "Analog", col::supersaw);
         w->knob (P_warmth, "Warmth", 56);
@@ -3772,7 +4063,7 @@ void MegaSynthEditor::buildPages()
         {
             const int W = pageFm->getWidth(), g = 10;
             fmS->setBounds (g, g, 720, 220);
-            rg->setBounds (g * 2 + 720, g, W - 3 * g - 720, 220);
+            rg->setBounds (g * 2 + 720, g, W - 3 * g - 720, 320);
         };
     }
 
@@ -4222,7 +4513,7 @@ void MegaSynthEditor::buildPages()
         Page* pDirt = addPage ("Dirt");
         Page* pMot = addPage ("Motion");
         Page* pRack = addPage ("Rack");
-        Page* pRv = scrollPage (pRvOuter, 890, "Reverbs");
+        Page* pRv = scrollPage (pRvOuter, 1074, "Reverbs");
         Page* pCp = scrollPage (pCpOuter, 1060, "Chorus & Phase");
         auto keep = [] (Page* holder, auto* comp) { holder->children.add (comp); holder->addAndMakeVisible (comp); return comp; };
         auto own = [keep] (Page* holder, Section* s) { return keep (holder, s); };
@@ -4239,6 +4530,7 @@ void MegaSynthEditor::buildPages()
         // every effect's On, its state light (what it's doing now) and its Mix / Return
         auto slotControls = [&] (Section* s, int slot, bool /*hasMix*/ = true, int lightW = 210)
         {
+            fxSections[slot] = s;
             toggle (s, fxOnParam (slot), "On", 56);
             s->add (new FxLight (proc, slot), lightW, 40);
         };
@@ -4424,6 +4716,38 @@ void MegaSynthEditor::buildPages()
         for (auto [idx, n] : { std::pair<int, const char*> { P_sxIrPre, "Pre-delay" }, { P_sxIrLen, "Length" }, { P_sxIrLP, "High Cut" },
                                { P_sxIrHP, "Low Cut" }, { P_sxIrWidth, "Width" } })
             ir->knob (idx, n);
+        // (v0.1.74) Vastness
+        auto* vast = own (pRv, mkG (FG_Reverbs, "Vastness  (Huge reverbs, cascading echoes and swelling pads: eight long delays, modulated, feeding back into "
+                                 "each other. Mode sets their lengths and character. Delay: how long the lines are (or synced). Warp: from echoes passed "
+                                 "along a ring (low: the repeats cascade) to all into all (high: they smear into a dense wash). Feedback up to endless "
+                                 "(held, and kept below clipping). Density: how diffuse the start is. Mod: the lines' movement (a chorus in the tail). "
+                                 "Low / High Cut inside the loop. Freeze holds it. Its duck is on the Ducking page. An original design in the spirit "
+                                 "of the huge delay-reverbs, not a model of any one.)"));
+        {
+            auto* b = new juce::TextButton ("Vastness Presets...");
+            b->onClick = [this, b]
+            {
+                juce::PopupMenu m;
+                for (int k = 1; k < MegaSynthProcessor::kNumVastPresets; ++k) m.addItem (k + 1, MegaSynthProcessor::vastPresetName (k));
+                m.addSeparator(); m.addItem (1, MegaSynthProcessor::vastPresetName (0));
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (b), [this] (int r)
+                {
+                    if (r <= 0) return;
+                    proc.applyVastPreset (r - 1);
+                    setStatus (juce::String ("Vastness: ") + MegaSynthProcessor::vastPresetName (r - 1));
+                });
+            };
+            vast->addTitleChip (b, 132);
+        }
+        slotControls (vast, FS_Vast);
+        vast->choice (P_vsMode, "Mode", 140);
+        vast->choice (P_vsSync, "Delay Sync", 120);
+        vast->add (new ParamToggle (proc, P_vsFreeze, "Freeze", cRev), 86, 40);
+        vast->newRow();
+        mixKnob (vast, FS_Vast);
+        for (auto [idx, n] : { std::pair<int, const char*> { P_vsDelay, "Delay" }, { P_vsWarp, "Warp" }, { P_vsFeedback, "Feedback" }, { P_vsDensity, "Density" },
+                               { P_vsWidth, "Width" }, { P_vsModRate, "Mod Rate" }, { P_vsModDepth, "Mod Depth" }, { P_vsLowCut, "Low Cut" }, { P_vsHighCut, "High Cut" } })
+            vast->knob (idx, n, 66);
         auto* rvTicker = pRv->own (new StoreTicker());
         rvTicker->tick = [this, irInfo]
         {
@@ -4434,7 +4758,7 @@ void MegaSynthEditor::buildPages()
             if (proc.param (P_sxOnIr)->getValue() > 0.5f) t << (proc.getEngine().fx().irReady() ? "  (ready)" : "  (loading...)");
             if (irInfo->getText() != t) irInfo->setText (t, juce::dontSendNotification);
         };
-        pRv->onResize = [pRv, r, v, pl, gt, spr, ir]
+        pRv->onResize = [pRv, r, v, pl, gt, spr, ir, vast]
         {
             const int g = 10, W = pRv->getWidth(), w2 = (W - g * 3) / 2, y = 6;
             r->setBounds (g, y, w2, 176);
@@ -4443,6 +4767,7 @@ void MegaSynthEditor::buildPages()
             gt->setBounds (g, y + 320, W - 2 * g, 176);
             spr->setBounds (g, y + 504, W - 2 * g, 190);
             ir->setBounds (g, y + 702, W - 2 * g, 176);
+            vast->setBounds (g, y + 886, W - 2 * g, 176);
         };
 
         // ================= CHORUS & PHASE (the page scrolls): choruses on the left, phasers on the right
@@ -4593,7 +4918,7 @@ void MegaSynthEditor::buildPages()
                                      "notes, or a Duck note of your own (it isn't played, so a MIDI clip can duck anywhere). Amount 0 is off. The "
                                      "choruses and phasers have no duck: they don't build up a tail to clear.)"));
             presetsChip (dk);
-            static const char* duckNames[SD_COUNT] = { "Tape Delay", "90s Reverbs", "Dub Delay", "Spring", "Gated Reverb", "Plate", "IR Reverb" };
+            static const char* duckNames[SD_COUNT] = { "Tape Delay", "90s Reverbs", "Dub Delay", "Spring", "Gated Reverb", "Plate", "IR Reverb", "Vastness" };
             for (auto* h : { "", "Amount", "Attack", "Release", "Listens to", "Gain now" })
             {
                 auto* l = new juce::Label ({}, h);
@@ -4621,7 +4946,7 @@ void MegaSynthEditor::buildPages()
             pDk->onResize = [pDk, dk]
             {
                 const int g = 10, W = pDk->getWidth(), y = 6;
-                dk->setBounds (g, y, W - 2 * g, 400);
+                dk->setBounds (g, y, W - 2 * g, 430);
             };
         }
 
@@ -4690,6 +5015,7 @@ void MegaSynthEditor::buildPages()
 
         // ================= RACK
         auto* rack = keep (pRack, new RackList (proc));
+        rack->onOpen = [this] (int slot) { showEffect (slot); };
 
         pDirt->onResize = [pDirt, sm, mb, metersC]
         {

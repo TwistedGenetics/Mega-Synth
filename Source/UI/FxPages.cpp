@@ -230,6 +230,7 @@ void ReturnCell::paint (juce::Graphics& g)
 void ReturnCell::mouseDown (const juce::MouseEvent& e)
 {
     if (e.y > 15) return;
+    if (e.x > 14 && onOpen) { onOpen (slot); return; }   // (the name: its page; the light: On)
     auto* p = proc.param (fxOnParam (slot));
     p->beginChangeGesture(); p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.0f : 1.0f); p->endChangeGesture();
     repaint();
@@ -346,6 +347,13 @@ void RackList::mouseDown (const juce::MouseEvent& e)
     dragFrom = rowAt (e.y); dragOver = dragFrom; dragY = e.y;
     repaint();
 }
+void RackList::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (e.x > getWidth() - 340 || e.y < kTop || ! onOpen) return;
+    dragFrom = dragOver = -1;
+    onOpen (order[(size_t) rowAt (e.y)]);
+}
+
 void RackList::mouseDrag (const juce::MouseEvent& e)
 {
     if (dragFrom < 0) return;

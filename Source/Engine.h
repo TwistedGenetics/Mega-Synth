@@ -144,11 +144,109 @@ private:
         double ls = 0, le = 0;
         double start = 0;   // where a note starts (Break React's restart goes back here, plus its Jump)
         float comp = 1.0f;
+        // (v0.1.74) Sampler mode: Start / End, a loop (Forward, Ping-Pong, Reverse or Off) with a crossfade, and Stretch
+        bool sampler = false, stretch = false;
+        int loopType = 0;
+        double endPos = 0, xf = 0, dir = 1.0;
+        struct Grain { double start = 0, age = 0; } grain[2];
+        double sp = 0;          // Stretch: the source position, moving at the sample's own speed
+        double grainLen = 2880; // Stretch: each grain's length, in output samples
+
+        inline float readAt (const float* w, double p) const
+        {
+            const int wlen = wav->length;
+            int i0 = (int) std::floor (p);
+            const float fr = (float) (p - i0);
+            int i1 = i0 + 1;
+            i0 = clampv (i0, 0, wlen - 1); i1 = clampv (i1, 0, wlen - 1);
+            if (reverse) { i0 = wlen - 1 - i0; i1 = wlen - 1 - i1; }
+            return w[i0] + (w[i1] - w[i0]) * fr;
+        }
+        // a position's sound, with the loop crossfade (Forward: towards Loop End; Reverse: towards Loop Start)
+        inline void readXf (double p, const float* wl, const float* wr, float& l, float& r) const
+        {
+            l = readAt (wl, p); r = readAt (wr, p);
+            if (xf <= 0.0 || loopType == 1 || loopType == 3) return;
+            if (loopType == 0 && p >= le - xf && p < le)
+            {
+                const float t = (float) ((p - (le - xf)) / xf), a = std::cos (t * 1.5707963f), b = std::sin (t * 1.5707963f);
+                const double q = ls + (p - (le - xf));
+                l = l * a + readAt (wl, q) * b; r = r * a + readAt (wr, q) * b;
+            }
+            else if (loopType == 2 && dir < 0.0 && p <= ls + xf && p > ls)
+            {
+                const float t = (float) (((ls + xf) - p) / xf), a = std::cos (t * 1.5707963f), b = std::sin (t * 1.5707963f);
+                const double q = le - ((ls + xf) - p);
+                l = l * a + readAt (wl, q) * b; r = r * a + readAt (wr, q) * b;
+            }
+        }
+        // moves a position by inc through Start .. End and the loop; true when it jumped (a wrap, not a ping-pong turn)
+        inline bool step (double& p, double inc)
+        {
+            if (loopType == 3) { p += inc; if (p >= endPos || p < 0) stopped = true; return false; }
+            if (loopType == 1)
+            {
+                p += inc * dir;
+                if (p >= le && dir > 0) { p = std::max (ls, le - (p - le)); dir = -1.0; }
+                else if (p <= ls && dir < 0) { p = std::min (le, ls + (ls - p)); dir = 1.0; }
+                return false;
+            }
+            if (loopType == 2)
+            {
+                if (dir > 0) { p += inc; if (p >= le) { dir = -1.0; p = le - (p - le); } return false; }   // (the first pass, forward, then backwards round the loop)
+                p -= inc;
+                if (p <= ls) { p = le - xf - (ls - p); return true; }
+                return false;
+            }
+            p += inc;
+            if (p >= le) { p = ls + xf + (p - le); return true; }
+            return false;
+        }
+        // a jump (a loop's wrap, a marker moved under the playhead) glides the old level into the new over 2 ms
+        float dcL = 0.0f, dcR = 0.0f, lastL = 0.0f, lastR = 0.0f; int dcN = 0, dcLen = 96;
+        inline void tickSampler (double inc, float& outL, float& outR)
+        {
+            const float* wl = wav->ch[0].data();
+            const float* wr = wav->ch[wav->numChannels > 1 ? 1 : 0].data();
+            if (! stretch)
+            {
+                // the loop moved away from the playhead (a marker dragged past it): it jumps in, declicked
+                bool jumped = false;
+                if (loopType != 3 && (pos > le + 1.0 || (loopType != 0 && pos < ls - 1.0 && dir < 0)))
+                { pos = loopType == 2 && dir < 0 ? le - xf : ls + xf; jumped = true; }
+                readXf (pos, wl, wr, outL, outR);
+                if (jumped) { dcL = lastL - outL; dcR = lastR - outR; dcN = dcLen; }
+                if (dcN > 0) { const float g = (float) dcN / (float) dcLen; outL += dcL * g; outR += dcR * g; --dcN; }
+                if (step (pos, inc))
+                {
+                    // a wrap: what we'd hear next jumps; glide from this sample's level instead
+                    float nl, nr; readXf (pos, wl, wr, nl, nr);
+                    const float predL = outL + (outL - lastL), predR = outR + (outR - lastR);   // (where it was heading)
+                    dcL = predL - nl; dcR = predR - nr; dcN = dcLen;
+                }
+                lastL = outL; lastR = outR;
+                return;
+            }
+            // Stretch: two grains a half-grain apart read at the pitch's speed, while the source moves at the sample's own
+            outL = outR = 0.0f;
+            for (auto& g : grain)
+            {
+                const double ph = g.age / grainLen;
+                const float w = (float) (std::sin (3.14159265358979 * ph) * std::sin (3.14159265358979 * ph));
+                const double rp = g.start + g.age * inc * (loopType == 1 || loopType == 2 ? dir : 1.0);
+                outL += readAt (wl, rp) * w; outR += readAt (wr, rp) * w;
+                g.age += 1.0;
+                if (g.age >= grainLen) { g.age -= grainLen; g.start = sp; }
+            }
+            step (sp, wav->sampleRate * isrNow);
+        }
+        double isrNow = 1.0 / 48000.0;
 
         inline void tick (double fmRate, double isr, float& outL, float& outR)
         {
             outL = outR = 0.0f;
             if (! loaded || stopped) return;
+            if (sampler) { isrNow = isr; tickSampler (((double) rate.v + fmRate) * wav->sampleRate * isr, outL, outR); return; }
             const int wlen = wav->length;
             const float* wl = wav->ch[0].data();
             const float* wr = wav->ch[wav->numChannels > 1 ? 1 : 0].data();
@@ -171,6 +269,9 @@ private:
         }
     };
     WtPlayer wt[2];
+public:
+    double wtPlayhead (int k) const { const auto& w = wt[k & 1]; return w.loaded && ! w.stopped && w.pos >= 0.0 ? (w.sampler && w.stretch ? w.sp : w.pos) : -1.0; }
+private:
     // the Granular Synth (sample slot 2)
     GranVoice gran;
     ReeseOsc reese;          // the Reese engine
@@ -371,6 +472,7 @@ public:
     float arpModOffset (int which) const { return arpMod[juce::jlimit (0, 1, which)]; }
     std::atomic<float> lfoPlayhead[4] { -1.0f, -1.0f, -1.0f, -1.0f };   // newest voice's LFO phases (-1: no voice)
     std::atomic<float> msegPlayhead[2] { -1.0f, -1.0f }, msegLevelShown[2] { 0.0f, 0.0f };
+    std::atomic<double> wtPlayheadShown[2] { -1.0, -1.0 };   // (v0.1.74) the newest note's wavetable playheads (sample frames), -1 when none
     std::atomic<double> granPlayheadShown { -1.0 };   // the newest note's Granular Synth playhead (sample frames), -1 when none
     std::atomic<int> granGrainsShown { 0 };           // grains playing, all notes
     // the Mixer's meters: the editor switches them on while the Mixer is showing and reads (and resets) the peaks

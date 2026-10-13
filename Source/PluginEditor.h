@@ -153,6 +153,8 @@ private:
 };
 
 // A titled, coloured panel that lays its controls out in rows.
+struct CoreRandState { int type = 0; float crazy = 0.2f; int locks = 0; int64_t seed = 1; };   // (v0.1.74) the Core Randomise panel's settings
+
 class Section : public juce::Component
 {
 public:
@@ -168,6 +170,7 @@ public:
     // a small component beside the title (the drag-to-modulate source chips); takes ownership
     void addTitleChip (juce::Component* c, int width);
     juce::String getTitle() const { return title; }
+    void flash();   // (v0.1.74) a highlight for a moment (click-through from the Mixer)
     juce::String getInfo() const { return info; }
     juce::Colour colour;
 
@@ -180,6 +183,7 @@ private:
     juce::OwnedArray<juce::Component> owned;
     std::vector<std::pair<juce::Component*, int>> titleChips;
     bool pendingBreak = false;
+    bool flashing = false;
 };
 
 // Modulation assignment slot: source, target, bipolar amount.
@@ -388,7 +392,9 @@ public:
     bool showPage (const juce::String& name);
     juce::StringArray allPageNames() const;
     juce::String currentPageName() const;
-    void timerCallbackForTests();   // the editor's timer, and the pages' own refreshers (no message loop in tests)
+    void timerCallbackForTests();
+    juce::String shownPageForTests() const;            // (v0.1.74) the page on screen now
+    void openMixerStripForTests (int strip);           // ... a click on a Mixer strip's name   // the editor's timer, and the pages' own refreshers (no message loop in tests)
 private:
     struct PageRef { int tab = -1, sub = -1; tgui::Page* page = nullptr; };
     std::map<juce::String, PageRef> pageIndex;
@@ -398,9 +404,17 @@ private:
     tgui::LevelMeter* outMeters[2] { nullptr, nullptr };
     void updateMixerView();
     tgui::Page* scrollPage (tgui::Page* outer, int innerH, const juce::String& name);
+    std::map<int, tgui::Section*> fxSections;   // (v0.1.74) each Rack slot's section, for click-through
+public:
+    void showEffect (int slot);                 // its page, scrolled to it and its section flashed
+    static juce::String effectPage (int slot);
+private:
 public:
     std::vector<std::pair<juce::String, tgui::Page*>> scrollInners;
     juce::Component* breakFxGridForTests = nullptr;
+    juce::Component* wtViews[2] { nullptr, nullptr };
+    std::unique_ptr<juce::FileChooser> dxChooser;
+    tgui::CoreRandState coreRandState[2];   // (v0.1.74) the wavetables' displays
     std::unique_ptr<juce::Component> keysSwitch;   // (v0.1.72) Synth / Breaks / Auto, under Oct - / +   // (the scrolling pages' content, for the tests' snapshots)
 private:
     tgui::Page* pageFor (const juce::String& name) const { auto it = pageIndex.find (name); return it != pageIndex.end() ? it->second.page : nullptr; }

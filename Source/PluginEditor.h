@@ -533,6 +533,8 @@ private:
     juce::ToggleButton seqRunBtn { "Run Sequencer" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> seqRunAtt;
     std::unique_ptr<juce::FileChooser> chooser;
+    std::unique_ptr<juce::FileChooser> irChooser;
+    std::function<void (tgui::Section*)> reesePresetsChip;
     juce::Label* granInfo = nullptr;   // Granular Synth sample: name, length, size
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> latencyAtt;   // Break Chopper: chop tap latency
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> markerSnapAtt;   // Break Chopper: marker snap

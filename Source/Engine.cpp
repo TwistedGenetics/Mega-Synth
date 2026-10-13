@@ -87,7 +87,12 @@ void Voice::start (int k, double freq, double glideFrom, const StartOptions& o, 
     t = 0.0;
     { const int r = clampv (s.i (P_subRoute), 0, 2); for (int j = 0; j < 3; ++j) subRG[j] = j == r ? 1.0f : 0.0f; }   // (a new note starts on its route)
     for (auto& c : core) c.stop();   // (a Core slot starts with the note when it is on: see updateControl)
-    if (s.f (P_rsLevel) > 0.0f) reese.start (clampv (s.i (P_rsRetrig), 0, 2), (uint32_t) (ord * 131u + (uint64_t) k));
+    if (s.f (P_rsLevel) > 0.0f)
+    {
+        reese.start (clampv (s.i (P_rsRetrig), 0, 2), (uint32_t) (ord * 131u + (uint64_t) k));
+        const int cps = clampv (s.i (P_rsCpSync), 0, 7);
+        reese.syncLfos (s.fxBeat, kRsLfoSyncBeats[clampv (s.i (P_rsFmtSync), 0, 6)], cps > 0 ? kRsCpSyncBeats[cps] : 0.0);
+    }
     startedAt = voiceRand01() * 1000.0;
     for (int i = 0; i < 9; ++i) ssDriftSin[i] = std::sin ((startedAt + i * 0.37) * 7.123);   // fixed per note
     gran.start (ord * 131u + (uint64_t) k);   // its own random sequence (the shared voice one is left alone)
@@ -665,7 +670,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     if (rsRun)
     {
         ReeseSettings rs;
-        rs.voices = clampv (s.i (P_rsVoices), 0, 2); rs.wave = clampv (s.i (P_rsWave), 0, 2); rs.mode = clampv (s.i (P_rsDetMode), 0, 2);
+        rs.voices = clampv (s.i (P_rsVoices), 0, 2); rs.wave = clampv (s.i (P_rsWave), 0, 3); rs.mode = clampv (s.i (P_rsDetMode), 0, 2);
         rs.beat = clampv (s.i (P_rsBeat), 0, 12); rs.ratio = clampv (s.i (P_rsRatio), 0, 2); rs.retrig = clampv (s.i (P_rsRetrig), 0, 2);
         rs.cents = s.f (P_rsCents); rs.hz = s.f (P_rsHz); rs.twist = s.f (P_rsTwist); rs.twistRate = s.f (P_rsTwistRate);
         rs.width = clampv (s.f (P_rsWidth), 0.0f, 1.0f); rs.rotate = clampv (s.f (P_rsRotate), 0.0f, 1.0f); rs.rotRate = s.f (P_rsRotRate);
@@ -673,6 +678,32 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
         rs.notchMove = clampv (s.f (P_rsNotchMove), 0.0f, 1.0f); rs.notchSync = s.v[P_rsNotchSync] > 0.5f; rs.notchRate = s.f (P_rsNotchRate);
         rs.quality = clampv (s.i (P_quality), 0, 2);
         rs.sub = clampv (s.f (P_rsSub), 0.0f, 1.0f); rs.drive = clampv (s.f (P_rsDrive), 0.0f, 1.0f); rs.tone = clampv (s.f (P_rsTone), 0.0f, 1.0f);
+        {
+            // (v0.1.70) formants, bloom, split drive, shaper, comb / phaser, Hoover, cross-FM / sync, drift
+            const double tempo = s.fxTempo > 0.0 ? s.fxTempo : (double) s.f (P_seqTempo);
+            rs.fmtOn = s.v[P_rsFmtOn] > 0.5f; rs.fmtBefore = s.i (P_rsFmtPos) == 1; rs.fmtMove = clampv (s.i (P_rsFmtMove), 0, 2); rs.fmtShape = clampv (s.i (P_rsFmtShape), 0, 3);
+            rs.fmtVowel = clampv (s.f (P_rsFmtVowel), 0.0f, 1.0f); rs.fmtRes = clampv (s.f (P_rsFmtRes), 0.0f, 1.0f); rs.fmtMix = clampv (s.f (P_rsFmtMix), 0.0f, 1.0f);
+            rs.fmtShift = s.f (P_rsFmtShift); rs.fmtDepth = clampv (s.f (P_rsFmtDepth), 0.0f, 1.0f);
+            rs.fmtLfoInc = tempo / 60.0 / kRsLfoSyncBeats[clampv (s.i (P_rsFmtSync), 0, 6)] / sr;
+            const int bs = clampv (s.i (P_rsBloomSync), 0, 5);
+            rs.bloom = bs > 0 ? (float) (kRsBloomSyncBeats[bs] * 60.0 / std::max (20.0, tempo)) : std::max (0.0f, s.f (P_rsBloom));
+            rs.bloomRev = s.v[P_rsBloomRev] > 0.5f; rs.bloomCurve = clampv (s.i (P_rsBloomCurve), 0, 1);
+            rs.split = s.v[P_rsSplitOn] > 0.5f; rs.splitHz = s.f (P_rsSplitFreq); rs.lowDrive = clampv (s.f (P_rsLowDrive), 0.0f, 1.0f);
+            rs.highDrive = clampv (s.f (P_rsHighDrive), 0.0f, 1.0f); rs.highTone = s.f (P_rsHighTone);
+            rs.shp = clampv (s.i (P_rsShpType), 0, 4); rs.shpAmt = s.f (P_rsShpAmt); rs.shpSym = s.f (P_rsShpSym);
+            static const int stages[3] = { 4, 8, 12 };
+            rs.cp = clampv (s.i (P_rsCpMode), 0, 2); rs.cpStages = stages[clampv (s.i (P_rsCpStages), 0, 2)];
+            rs.cpFb = s.f (P_rsCpFb); rs.cpDepth = s.f (P_rsCpDepth); rs.cpOffset = s.f (P_rsCpOffset); rs.cpMix = s.f (P_rsCpMix);
+            const int cps = clampv (s.i (P_rsCpSync), 0, 7);
+            rs.cpLfoInc = (cps > 0 ? tempo / 60.0 / kRsCpSyncBeats[cps] : (double) std::max (0.0f, s.f (P_rsCpRate))) / sr;
+            rs.pw = s.f (P_rsPw); rs.pwmRate = s.f (P_rsPwmRate); rs.pwmDepth = s.f (P_rsPwmDepth); rs.stack = clampv (s.i (P_rsStack), 0, 2);
+            rs.pdMode = clampv (s.i (P_rsPdMode), 0, 3); rs.pdAmt = s.f (P_rsPdAmt); rs.pdTime = s.f (P_rsPdTime);
+            const float envAmt = s.f (P_rsFmEnvAmt);
+            const float env = envAmt != 0.0f ? (float) (s.i (P_rsFmEnvSrc) == 0 ? ampEnv.eval (t) : modEnv[0].eval (t)) * envAmt : 0.0f;
+            rs.fm = clampv (s.f (P_rsFm) + env, 0.0f, 1.0f);
+            rs.sync = s.v[P_rsSync] > 0.5f; rs.syncRatio = clampv (s.f (P_rsSyncRatio) * std::pow (2.0f, 2.0f * env), 1.0f, 16.0f);
+            rs.drift = clampv (s.f (P_rsDrift), 0.0f, 1.0f); rs.driftRate = s.f (P_rsDriftRate);
+        }
         const double pe = s.i (P_pEnvTarget) == 0 ? (double) peRatio[0] : 1.0;   // the pitch envelope when it targets all oscillators
         const double fr = baseFreq * pow2 (std::round (s.f (P_rsOct))) * pow2 ((100.0 * std::round (s.f (P_rsSemi)) + pitch) / 1200.0) * pe;
         reese.setFrequency (fr, s.fxTempo > 0.0 ? s.fxTempo : (double) s.f (P_seqTempo), rs);
@@ -1811,6 +1842,7 @@ int Engine::activeVoiceCount() const
 void Engine::noteOn (int key, double freq, const Voice::StartOptions& o, const Snapshot& s)
 {
     if (findActive (key) != nullptr) return;   // the browser ignores a repeated note-on
+    fxBus.addSpaceHits (SH_Notes);   // (the Space ducks: Synth notes)
 
     // polyphony: release the oldest held voices (they keep their release tail)
     const int poly = std::max (clampv (s.i (P_polyphony), 1, 16), std::min (polyFloor, 16));
@@ -1955,6 +1987,30 @@ void Engine::render (float* L, float* R, int numSamples, const Snapshot& sDry, c
     {
         BreakChopper::HitLogEntry hl[BreakChopper::kHitLog];
         const int nh = chopper.takeHits (hl);
+        // (v0.1.70) the Space effects' ducks and gate hear the break hits too: kick / snare by the same sorting as Break React
+        if (nh > 0)
+        {
+            uint32_t bits = 0;
+            const BreakData& bd0 = chopper.data();
+            const bool band = s.i (P_rxDetect) == 1;
+            for (int k = 0; k < nh; ++k)
+            {
+                const uint32_t seqBit = hl[k].layer ? SH_Layer : SH_Main;
+                const BreakSlot& b = bd0.brk[clampv (hl[k].brk, 0, BreakChopper::kBreaks - 1)];
+                const int sl = clampv (hl[k].slice, 0, BreakSlot::kSlices - 1);
+                int type = b.slice[sl].hitType - 1;   // (set by hand: 0 kick, 1 snare, 2 hat; 3 none)
+                if (type < 0)
+                {
+                    const float kk = band ? b.kickB[sl] : b.kick[sl], sn = band ? b.snareB[sl] : b.snare[sl], ht = band ? b.hatB[sl] : b.hat[sl];
+                    type = kk >= sn && kk >= ht ? 0 : (sn >= ht ? 1 : 2);
+                }
+                if (type == 3) continue;   // (None: never a hit)
+                bits |= SH_Hits | seqBit;
+                if (type == 0) bits |= SH_Kick;
+                if (type == 1) bits |= SH_Snare;
+            }
+            if (bits != 0) fxBus.addSpaceHits (bits);
+        }
         if (s.v[P_rxOn] > 0.5f)
         {
             // (its listening and shape settings follow last block's global sources, like the arpeggiator's)

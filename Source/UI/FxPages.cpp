@@ -150,16 +150,17 @@ RackList::RackList (MegaSynthProcessor& p) : proc (p)
     {
         auto* t = on.add (new juce::ToggleButton ("On"));
         t->setColour (juce::ToggleButton::tickColourId, col::fx);
-        onAtt.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[P_fxOnStutter + 2 * s], tagParam (*t, P_fxOnStutter + 2 * s)));
+        onAtt.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, kParamIds[fxOnParam (s)], tagParam (*t, fxOnParam (s))));
         addAndMakeVisible (t);
         auto* m = mix.add (new juce::Slider());
         m->setSliderStyle (juce::Slider::LinearBar);
         m->setColour (juce::Slider::trackColourId, col::fx.withAlpha (0.5f));
         m->setColour (juce::Slider::backgroundColourId, col::panel3);
         m->setColour (juce::Slider::textBoxTextColourId, col::text);
-        m->setTooltip (fxSlotIsSend (s) ? "Mix: scales this effect's return" : "Mix: dry / wet");
-        mixAtt.add (new juce::AudioProcessorValueTreeState::SliderAttachment (proc.apvts, kParamIds[P_fxMixStutter + 2 * s], *m));
-        m->textFromValueFunction = [] (double v) { return "Mix " + juce::String (juce::roundToInt (v * 100)) + "%"; };
+        m->setTooltip (fxSlotIsReturn (s) ? "Return: how much of this effect is added" : "Mix: dry / wet");
+        mixAtt.add (new juce::AudioProcessorValueTreeState::SliderAttachment (proc.apvts, kParamIds[fxMixParam (s)], *m));
+        const juce::String word = fxSlotIsReturn (s) && ! fxSlotIsSend (s) ? "Return " : "Mix ";
+        m->textFromValueFunction = [word] (double v) { return word + juce::String (juce::roundToInt (v * 100)) + "%"; };
         m->updateText();
         addAndMakeVisible (m);
     }
@@ -181,8 +182,8 @@ void RackList::layoutRows()
     {
         const int s = order[(size_t) i];
         const int y = kTop + i * kRowH;
-        on[s]->setBounds (W - 330, y + 8, 60, 24);
-        mix[s]->setBounds (W - 260, y + 8, 240, 24);
+        on[s]->setBounds (W - 330, y + 4, 60, 24);
+        mix[s]->setBounds (W - 260, y + 4, 240, 24);
     }
 }
 

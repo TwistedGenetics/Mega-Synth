@@ -103,6 +103,12 @@ public:
     std::atomic<bool> fillPadLearn { false };
     bool fillPadCcDown = false;
     juce::String fillPadText() const;                            // e.g. "Note 36 (C1)", "CC 20", "none"
+    // (v0.1.70) the Dub Delay's Throw pad, learned like the Fill pad (saved with the project)
+    std::atomic<int> throwPadKind { 0 }, throwPadNum { -1 };
+    std::atomic<bool> throwPadLearn { false };
+    juce::String throwPadText() const;
+    void updateIrImpulse (bool force);   // the IR Reverb's impulse, rebuilt when its settings change (message thread)
+    juce::String lastIrKey;
     // the break a pattern plays (and its tools use): its own, or the Active Break when it's set to Active
     int patternBreak (const tg::BreakData& d, int pattern, bool layer) const;
     // the editor's Key Entry / sequencer page: the slice keys play this break (-1: the Active Break)
@@ -191,6 +197,11 @@ public:
     // Break React's starting points (0 Off, 1 Lock bass to kicks, 2 Snare stabs, 3 Rolling Reese, 4 Duck on kick): set only
     // the Break React controls, as one undo step
     static constexpr int kNumReactPresets = 5;
+    static constexpr int kNumSpacePresets = 6, kNumReesePresets = 6;
+    static const char* spacePresetName (int k);
+    static const char* reesePresetName (int k);
+    void applySpacePreset (int k);
+    void applyReesePreset (int k);
     static const char* reactPresetName (int k);
     void applyReactPreset (int k);
     bool sliceKeysTakeNotes() const
@@ -218,13 +229,14 @@ public:
     juce::String getSampleStatus (int slot = 0) const;
     // sample slots: 0 WT 1, 1 WT 2, 2 the Granular Synth, 3 the Break Chopper
     // sample slots: 0 WT 1, 1 WT 2, 2 the Granular Synth, 3-5 the Break Chopper's Breaks 1-3
-    static constexpr int kSampleSlots = 7, kSlotGranular = 2, kSlotBreak = 3;
+    static constexpr int kSampleSlots = 8, kSlotGranular = 2, kSlotBreak = 3, kSlotIr = 7;   // (7: the IR Reverb's own impulse, v0.1.70)
+    static bool isBreakSlot (int k) { return k >= kSlotBreak && k < kSlotBreak + tg::BreakData::kBreaks; }
     static int breakSlot (int k) { return kSlotBreak + juce::jlimit (0, tg::BreakData::kBreaks - 1, k); }
-    static juce::String sampleSuffix (int k) { static const char* s[] = { "", "2", "Gran", "Break", "Break2", "Break3", "Break4" }; return s[juce::jlimit (0, 6, k)]; }
-    static const char* samplePatchKey (int k) { static const char* s[] = { "wavetable", "wavetable2", "granularSample", "breakSample", "breakSample2", "breakSample3", "breakSample4" }; return s[juce::jlimit (0, 6, k)]; }
+    static juce::String sampleSuffix (int k) { static const char* s[] = { "", "2", "Gran", "Break", "Break2", "Break3", "Break4", "IR" }; return s[juce::jlimit (0, 7, k)]; }
+    static const char* samplePatchKey (int k) { static const char* s[] = { "wavetable", "wavetable2", "granularSample", "breakSample", "breakSample2", "breakSample3", "breakSample4", "irSample" }; return s[juce::jlimit (0, 7, k)]; }
     // the longest audio a slot keeps: the wavetable slots 120 s as before; the Granular Synth 20 s and the
     // Break Chopper 30 s (8 bars at 64 BPM), so a project doesn't grow past roughly 10 MB per sample
-    static double sampleCapSeconds (int k) { return k == kSlotGranular ? 20.0 : (k >= kSlotBreak ? 30.0 : 120.0); }
+    static double sampleCapSeconds (int k) { return k == kSlotGranular ? 20.0 : (k == kSlotIr ? 10.0 : (k >= kSlotBreak ? 30.0 : 120.0)); }
     const tg::WaveSample* getSample (int slot) const { return currentWave[juce::jlimit (0, kSampleSlots - 1, slot)].load(); }
     size_t getSampleBytes (int slot) const { const juce::ScopedLock sl (waveLock); return waveData[juce::jlimit (0, kSampleSlots - 1, slot)].getSize(); }
     juce::String getSampleName (int slot) const { const juce::ScopedLock sl (waveLock); return waveName[juce::jlimit (0, kSampleSlots - 1, slot)]; }
@@ -295,7 +307,7 @@ public:
     juce::RangedAudioParameter* param (int index) const { return params[(size_t) index]; }
 
     // ---- history: undo / redo / return to original (message thread)
-    static constexpr int kStateVersion = 29;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows; 29: Break 4, layer sequencer, fill pattern
+    static constexpr int kStateVersion = 30;   // 3: filter overhaul; 4: Filter 2; 5: DNA Sequencer update; 6: effects rack; 7: LFO sync / shapes; 8: arp / chord memory; 9: sidechain; 10: unison; 11: pitch env / MSEG; 12: Master Filter / Output / Mixer strips; 13: filter character models; 14: Performance FX; 15: Granular Synth; 16: Break Chopper / Sequencer; 17: three breaks; 18: chop mode; 19: pattern tools / per-hit stretch; 20: fills; 21: Master Filter models; 22: sub / break routing; 23: Akai Stretch pad; 24: the Reese engine; 25: Break-Reactive mode; 26: the Core oscillator slots; 27: Core envelope mode, Break Sequencer key entry; 28: Slice Keys Auto, Break React rows, 29: Break 4, layer sequencer, fill pattern; 30: the Space effects, the Reese additions
     bool canUndo() const { return historyPos > 0; }
     bool canRedo() const { return historyPos + 1 < (int) history.size(); }
     void undo();
@@ -350,6 +362,7 @@ private:
     void setRandomReport (const juce::String& r) { { const juce::ScopedLock sl (rpLock); rpReport = r; } randomReportVersion.fetch_add (1); }
     void setV27DefaultsForOldPatch();
     void setV28DefaultsForOldPatch();
+    void setV30DefaultsForOldPatch();       // ... and from before the new Space effects / Reese additions
     void setV29DefaultsForOldPatch();       // ... and from before Break 4 / the layer sequencer / the fill pattern       // ... and from before Slice Keys / the Break React rows       // ... and from before the Core envelope mode / key entry
     void setCoreDefaultsForOldPatch();      // ... and from before the Core oscillator slots
     void setReeseDefaultsForOldPatch();     // ... and from before the Reese engine
@@ -506,7 +519,7 @@ private:
     bool hostWasPlaying = false;
 
     // sample for Osc 4
-    std::atomic<tg::WaveSample*> currentWave[kSampleSlots] { { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr } };
+    std::atomic<tg::WaveSample*> currentWave[kSampleSlots] { { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr }, { nullptr } };
     std::vector<std::unique_ptr<tg::WaveSample>> waveKeep;
     juce::MemoryBlock waveData[kSampleSlots];
     std::shared_ptr<const juce::MemoryBlock> waveShared[kSampleSlots];   // same bytes, shared with history snapshots

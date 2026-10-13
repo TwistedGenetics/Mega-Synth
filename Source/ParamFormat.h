@@ -138,6 +138,35 @@ inline juce::String formatParam (int idx, float v)
     if (id == "rsHz" || id == "rsTwistRate" || id == "rsRotRate" || id == "rsNotchRate") return fixed (v, v < 10.0f ? 2 : 1) + " Hz";
     if (id == "rsMonoBelow") return v < 1.0f ? juce::String ("off") : juce::String (juce::roundToInt (v)) + " Hz";
     if (id == "rsNotchFreq") return v >= 1000.0f ? fixed (v / 1000.0f, 2) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz";
+    // ---- v0.1.70: the Space effects and the Reese additions
+    if (id.startsWith ("sx") || id.startsWith ("rsFmt") || id.startsWith ("rsCp") || id.startsWith ("rsPw") || id.startsWith ("rsPd") || id.startsWith ("rsDrift")
+        || id.startsWith ("rsShp") || id.startsWith ("rsFm") || id.startsWith ("rsSync") || id.startsWith ("rsBloom") || id.startsWith ("rsSplit")
+        || id == "rsLowDrive" || id == "rsHighDrive" || id == "rsHighTone")
+    {
+        auto pct = [&] { return juce::String (juce::roundToInt (v * 100.0f)) + "%"; };
+        auto spct = [&] { const int n = juce::roundToInt (v * 100.0f); return (n > 0 ? "+" : "") + juce::String (n) + "%"; };
+        auto ms = [&] { return v >= 1000.0f ? fixed (v / 1000.0f, 2) + " s" : fixed (v, v < 10.0f ? 1 : 0) + " ms"; };
+        auto st = [&] { return (v > 0.005f ? "+" : "") + fixed (v, 1) + " st"; };
+        if (id == "sxDuckNote") { const int n = juce::roundToInt (v); return n < 0 ? juce::String ("Off") : juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")"; }
+        if (id.endsWith ("DuckAtt") || id.endsWith ("DuckRel") || id.endsWith ("Pre") || id == "sxGateLen" || id == "sxWidDelay") return ms();
+        if (id == "sxDubTime" || id == "sxSprDecay" || id == "sxPlDecay" || id == "sxIrLen" || id == "rsPdTime") return v < 1.0f ? fixed (v * 1000.0f, 0) + " ms" : fixed (v, 2) + " s";
+        if (id == "rsBloom") return v <= 0.0f ? juce::String ("off") : fixed (v, 2) + " s";
+        if (id == "sxDubHP" || id == "sxDubLP" || id == "sxSprTone" || id == "sxGateTone" || id == "sxWidLowCut" || id == "sxIrLP" || id == "sxIrHP"
+            || id == "rsSplitFreq" || id == "rsHighTone") return formatHz (v);
+        if (id == "rsCpRate" || id == "rsPwmRate" || id == "rsDriftRate") return fixed (v, v < 10.0f ? 2 : 1) + " Hz";
+        if (id == "sxWidCents") return fixed (v, 1) + " cents";
+        if (id == "sxGateThr") return fixed (v, 1) + " dB";
+        if (id == "rsFmtShift" || id == "rsCpOffset" || id == "rsPdAmt") return st();
+        if (id == "rsSyncRatio") return "x" + fixed (v, 2);
+        if (id == "rsFmtVowel")
+        {
+            static const char* vw[5] = { "A", "E", "I", "O", "U" };
+            const float p = juce::jlimit (0.0f, 1.0f, v) * 4.0f; const int i0 = juce::jmin (3, (int) p); const float fr = p - (float) i0;
+            return fr < 0.05f ? juce::String (vw[i0]) : (fr > 0.95f ? juce::String (vw[i0 + 1]) : juce::String (vw[i0]) + ">" + vw[i0 + 1] + " " + juce::String (juce::roundToInt (fr * 100.0f)) + "%");
+        }
+        if (id == "rsShpSym" || id == "rsCpFb" || id == "rsFmEnvAmt") return spct();
+        return pct();
+    }
     // ---- Break-Reactive mode
     if (id == "rxSens" || id == "rxScSens" || id == "rxDrive" || id == "rxDuck" || id == "rxNotch") return juce::String (juce::roundToInt (v * 100.0f)) + "%";
     if (id.startsWith ("rx") && (id.endsWith ("Sens") || id.endsWith ("Drive") || id.endsWith ("Duck") || id.endsWith ("Notch") || id.endsWith ("Res")
@@ -245,6 +274,7 @@ inline float parseParam (int idx, const juce::String& text)
     if (text.containsIgnoreCase ("khz") || text.trim().endsWithIgnoreCase ("k")) return v * 1000.0f;
     if (text.contains ("%")) v /= 100.0f;
     else if (id.startsWith ("sch")) {}   // sidechain attack / release are in ms already
+    else if (id.startsWith ("sx") && ! (id == "sxDubTime" || id == "sxSprDecay" || id == "sxPlDecay" || id == "sxIrLen")) { if (text.trim().endsWithIgnoreCase (" s") && (id.endsWith ("DuckRel") || id.endsWith ("DuckAtt"))) v *= 1000.0f; }   // (Space times in ms)
     else if (id.startsWith ("rx")) { if (id == "rxDecay" && text.trim().endsWithIgnoreCase (" s")) v *= 1000.0f; }   // Break React times are in ms
     else if ((id == "pEnvA" || id == "pEnvD") && text.contains ("ms")) v /= 1000.0f;
     else if (text.contains ("ms") || ((id == "chorusDepth" || id == "tapeFlutter" || id == "reversePitch") && v > 0.5f)) v /= 1000.0f;

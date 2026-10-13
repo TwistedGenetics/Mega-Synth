@@ -141,8 +141,8 @@ inline const char* const kPfAkaiSyncKeys[]   = { "free","32","64" };
 inline const char* const kPfAkaiSyncLabels[] = { "Cycle: free (ms)","Cycle: 1/32","Cycle: 1/64" };
 inline const char* const kRsVoicesKeys[]   = { "2","3","4" };
 inline const char* const kRsVoicesLabels[] = { "2 voices","3 voices","4 voices" };
-inline const char* const kRsWaveKeys[]   = { "saw","square","sawsquare" };
-inline const char* const kRsWaveLabels[] = { "Saw","Square","Saw + Square" };
+inline const char* const kRsWaveKeys[]   = { "saw","square","sawsquare","hoover" };
+inline const char* const kRsWaveLabels[] = { "Saw","Square","Saw + Square","Hoover (PWM)" };
 inline const char* const kRsModeKeys[]   = { "cents","hz","beats" };
 inline const char* const kRsModeLabels[] = { "Cents","Hz (same on every note)","Beats (locked to tempo)" };
 inline const char* const kRsBeatKeys[]   = { "4bar","2bar","1bar","1/2","1/4","1/8","1/16","1/2d","1/4d","1/8d","1/2t","1/4t","1/8t" };
@@ -234,6 +234,51 @@ inline const char* const kBsLFillKeys[]      = { "keep","fill" };
 inline const char* const kBsLFillLabels[]    = { "Keep going","Play its own fill" };
 inline const char* const kRxFromKeys[]       = { "main","layer","both" };
 inline const char* const kRxFromLabels[]     = { "Main sequencer","Layer sequencer","Both" };
+// ---- v0.1.70: the Space effects and the Reese additions
+inline const char* const kSxDuckSrcKeys[]    = { "kick","snare","hits","main","layer","sc","notes","note" };
+inline const char* const kSxDuckSrcLabels[]  = { "Break kicks","Break snares","Break hits","Main sequencer","Layer sequencer","Sidechain","Synth notes","Duck note" };
+inline const char* const kSxThrowKeys[]      = { "hold","latch","always" };
+inline const char* const kSxThrowLabels[]    = { "Hold","Latch","Always" };
+inline const char* const kSxSpringsKeys[]    = { "2","3" };
+inline const char* const kSxSpringsLabels[]  = { "2 springs","3 springs" };
+inline const char* const kSxGateTrigKeys[]   = { "thr","kick","snare","hits","main","layer","sc","notes","note" };
+inline const char* const kSxGateTrigLabels[] = { "Threshold","Break kicks","Break snares","Break hits","Main sequencer","Layer sequencer","Sidechain","Synth notes","Duck note" };
+inline const char* const kSxGateSyncKeys[]   = { "free","1/32","1/16","1/8","1/4","1/2" };
+inline const char* const kSxGateSyncLabels[] = { "Free (ms)","1/32","1/16","1/8","1/4","1/2" };
+inline constexpr double kSxGateSyncBeats[]   = { 0.0, 0.125, 0.25, 0.5, 1.0, 2.0 };
+inline const char* const kSxGateShapeKeys[]  = { "hard","curved" };
+inline const char* const kSxGateShapeLabels[]= { "Hard","Curved" };
+inline const char* const kSxIrTypeKeys[]     = { "user","room","hall","plate","spring" };
+inline const char* const kSxIrTypeLabels[]   = { "Your file","Room","Hall","Plate","Spring" };
+inline const char* const kRsFmtMoveKeys[]    = { "off","lfo","notch" };
+inline const char* const kRsFmtMoveLabels[]  = { "Off","Synced LFO","Follow the notch" };
+inline const char* const kRsLfoSyncKeys[]    = { "4bar","2bar","1bar","1/2","1/4","1/8","1/16" };
+inline const char* const kRsLfoSyncLabels[]  = { "4 bars","2 bars","1 bar","1/2","1/4","1/8","1/16" };
+inline constexpr double kRsLfoSyncBeats[]    = { 16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25 };
+inline const char* const kRsLfoShapeKeys[]   = { "sine","tri","saw","random" };
+inline const char* const kRsLfoShapeLabels[] = { "Sine","Triangle","Saw","Random" };
+inline const char* const kRsFmtPosKeys[]     = { "after","before" };
+inline const char* const kRsFmtPosLabels[]   = { "After the drive","Before the drive" };
+inline const char* const kRsBloomSyncKeys[]  = { "free","1/4","1/2","1bar","2bar","4bar" };
+inline const char* const kRsBloomSyncLabels[]= { "Free (s)","1/4","1/2","1 bar","2 bars","4 bars" };
+inline constexpr double kRsBloomSyncBeats[]  = { 0.0, 1.0, 2.0, 4.0, 8.0, 16.0 };
+inline const char* const kRsCurveKeys[]      = { "linear","exp" };
+inline const char* const kRsCurveLabels[]    = { "Linear","Exponential" };
+inline const char* const kRsShpKeys[]        = { "off","fold","tanh","asym","bits" };
+inline const char* const kRsShpLabels[]      = { "Off","Fold","Tanh","Asym","Bitwise" };
+inline const char* const kRsCpModeKeys[]     = { "off","comb","phaser" };
+inline const char* const kRsCpModeLabels[]   = { "Off","Comb","Phaser" };
+inline const char* const kRsCpStagesKeys[]   = { "4","8","12" };
+inline const char* const kRsCpStagesLabels[] = { "4 stages","8 stages","12 stages" };
+inline const char* const kRsCpSyncKeys[]     = { "free","4bar","2bar","1bar","1/2","1/4","1/8","1/16" };
+inline const char* const kRsCpSyncLabels[]   = { "Free (Hz)","4 bars","2 bars","1 bar","1/2","1/4","1/8","1/16" };
+inline constexpr double kRsCpSyncBeats[]     = { 0.0, 16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25 };
+inline const char* const kRsPdModeKeys[]     = { "off","drop","rise","droprise" };
+inline const char* const kRsPdModeLabels[]   = { "Off","Drop","Rise","Drop-Rise" };
+inline const char* const kRsStackKeys[]      = { "off","down","downup" };
+inline const char* const kRsStackLabels[]    = { "Off","Octave down","Octave down + up" };
+inline const char* const kRsEnvSrcKeys[]     = { "amp","mod1" };
+inline const char* const kRsEnvSrcLabels[]   = { "Amp envelope","Mod Env 1" };
 inline const char* const kBsFillLenKeys[]    = { "beat","2beats","bar","2bars" };
 inline const char* const kBsFillLenLabels[]  = { "1 beat","2 beats","1 bar","2 bars" };
 inline const char* const kBsFillStartKeys[]   = { "beat","bar","end" };
@@ -441,6 +486,26 @@ inline const ChoiceList kListBsFillSize = TG_LIST(kBsFillSize);
 inline const ChoiceList kListBsLFollow  = TG_LIST(kBsLFollow);
 inline const ChoiceList kListBsLFill    = TG_LIST(kBsLFill);
 inline const ChoiceList kListRxFrom     = TG_LIST(kRxFrom);
+inline const ChoiceList kListSxDuckSrc = TG_LIST(kSxDuckSrc);
+inline const ChoiceList kListSxThrow = TG_LIST(kSxThrow);
+inline const ChoiceList kListSxSprings = TG_LIST(kSxSprings);
+inline const ChoiceList kListSxGateTrig = TG_LIST(kSxGateTrig);
+inline const ChoiceList kListSxGateSync = TG_LIST(kSxGateSync);
+inline const ChoiceList kListSxGateShape = TG_LIST(kSxGateShape);
+inline const ChoiceList kListSxIrType = TG_LIST(kSxIrType);
+inline const ChoiceList kListRsFmtMove = TG_LIST(kRsFmtMove);
+inline const ChoiceList kListRsLfoSync = TG_LIST(kRsLfoSync);
+inline const ChoiceList kListRsLfoShape = TG_LIST(kRsLfoShape);
+inline const ChoiceList kListRsFmtPos = TG_LIST(kRsFmtPos);
+inline const ChoiceList kListRsBloomSync = TG_LIST(kRsBloomSync);
+inline const ChoiceList kListRsCurve = TG_LIST(kRsCurve);
+inline const ChoiceList kListRsShp = TG_LIST(kRsShp);
+inline const ChoiceList kListRsCpMode = TG_LIST(kRsCpMode);
+inline const ChoiceList kListRsCpStages = TG_LIST(kRsCpStages);
+inline const ChoiceList kListRsCpSync = TG_LIST(kRsCpSync);
+inline const ChoiceList kListRsPdMode = TG_LIST(kRsPdMode);
+inline const ChoiceList kListRsStack = TG_LIST(kRsStack);
+inline const ChoiceList kListRsEnvSrc = TG_LIST(kRsEnvSrc);
 inline const ChoiceList kListPfAkaiMode = TG_LIST(kPfAkaiMode);
 inline const ChoiceList kListPfAkaiSpeed = TG_LIST(kPfAkaiSpeed);
 inline const ChoiceList kListPfAkaiSync = TG_LIST(kPfAkaiSync);
@@ -465,11 +530,16 @@ constexpr int kMxStrips = 15;   // ... 11 = Reese, 12 = Core A, 13 = Core B, 14 
 
 // Filter types (filterType) and slopes (filterSlope, 0..3 = 6/12/18/24 dB per octave)
 // The effects rack (Effects tab): every effect is a slot with On and Mix, in a user-set order
-enum FxSlot { FS_Stutter, FS_Sampler, FS_Flanger, FS_Delay, FS_Chorus, FS_Reverb, FS_Shaper, FS_Multiband, FS_Stereo, FS_COUNT };
+enum FxSlot { FS_Stutter, FS_Sampler, FS_Flanger, FS_Delay, FS_Chorus, FS_Reverb, FS_Shaper, FS_Multiband, FS_Stereo,
+              FS_Dub, FS_Spring, FS_Gated, FS_Plate, FS_Widen, FS_Dim, FS_Ir, FS_COUNT };   // (v0.1.70: Dub..Ir; older racks list 9)
+constexpr int kFxSlotsBefore70 = 9;
 inline const char* const kFxSlotNames[FS_COUNT] = { "Beat Repeat", "Vintage Sampler", "Flanger / Phaser", "Tape Delay", "Juno Chorus",
-                                                    "Reverbs", "Volume Shaper", "Multiband", "Stereo Tools" };
+                                                    "Reverbs", "Volume Shaper", "Multiband", "Stereo Tools",
+                                                    "Dub Delay", "Spring Reverb", "Gated Reverb", "Plate Reverb", "Micro-pitch Widener", "Dimension Chorus", "IR Reverb" };
 // The effects that are sends (they add their output to what they hear); next to each other they share one input.
 inline bool fxSlotIsSend (int s) { return s == FS_Delay || s == FS_Chorus || s == FS_Reverb; }
+// The effects whose knob is a Return (they add what they make to what they hear): the sends, and the new delay and reverbs
+inline bool fxSlotIsReturn (int s) { return fxSlotIsSend (s) || s == FS_Dub || s == FS_Spring || s == FS_Gated || s == FS_Plate || s == FS_Ir; }
 
 enum FilterType { FT_LP, FT_HP, FT_BP, FT_NOTCH, FT_PEAK, FT_AP, FT_TYPE_COUNT };
 // The slope each classic model has as a low-pass (its original circuit). Low Pass at this slope
@@ -1639,7 +1709,141 @@ inline const ChoiceList kListArFmT       { kArFmTKeys, kArFmTLabels, 5 };
     F(mxLayerPan, "Break Layer Pan", -1, 1, 0, 0.01, 0) \
     B(mxLayerMute, "Break Layer Mute", false) \
     B(mxLayerSolo, "Break Layer Solo", false) \
-    C(rxFrom,    "Break React From Sequencer", kListRxFrom, 0)
+    C(rxFrom,    "Break React From Sequencer", kListRxFrom, 0) \
+    B(sxOnDub,   "Dub Delay On", false) \
+    F(sxMixDub,  "Dub Delay Return", 0, 1, 0.5, 0.01, 0) \
+    B(sxOnSpring,"Spring Reverb On", false) \
+    F(sxMixSpring,"Spring Reverb Return", 0, 1, 0.5, 0.01, 0) \
+    B(sxOnGated, "Gated Reverb On", false) \
+    F(sxMixGated,"Gated Reverb Return", 0, 1, 0.5, 0.01, 0) \
+    B(sxOnPlate, "Plate Reverb On", false) \
+    F(sxMixPlate,"Plate Reverb Return", 0, 1, 0.4, 0.01, 0) \
+    B(sxOnWiden, "Micro-pitch Widener On", false) \
+    F(sxMixWiden,"Micro-pitch Widener Mix", 0, 1, 0.5, 0.01, 0) \
+    B(sxOnDim,   "Dimension Chorus On", false) \
+    F(sxMixDim,  "Dimension Chorus Mix", 0, 1, 1, 0.01, 0) \
+    B(sxOnIr,    "IR Reverb On", false) \
+    F(sxMixIr,   "IR Reverb Return", 0, 1, 0.4, 0.01, 0) \
+    F(sxDubTime, "Dub Delay Time", 0.01, 2, 0.375, 0.001, 0.4) \
+    C(sxDubSync, "Dub Delay Sync", kListDelaySync, 4) \
+    F(sxDubFb,   "Dub Delay Feedback", 0, 1.1, 0.6, 0.01, 0) \
+    F(sxDubHP,   "Dub Delay Low Cut", 20, 2000, 200, 1, 200) \
+    F(sxDubLP,   "Dub Delay High Cut", 500, 18000, 4000, 1, 3000) \
+    F(sxDubRes,  "Dub Delay Filter Resonance", 0, 1, 0.2, 0.01, 0) \
+    F(sxDubDrive,"Dub Delay Drive", 0, 1, 0.3, 0.01, 0) \
+    F(sxDubWidth,"Dub Delay Width", 0, 1, 1, 0.01, 0) \
+    C(sxDubMode, "Dub Delay Throw Mode", kListSxThrow, 2) \
+    B(sxDubThrow,"Dub Delay Throw", false) \
+    F(sxSprTension,"Spring Tension", 0, 1, 0.5, 0.01, 0) \
+    F(sxSprDecay,"Spring Decay", 0.3, 6, 2, 0.01, 2) \
+    F(sxSprTone, "Spring Tone", 500, 12000, 4000, 1, 3000) \
+    C(sxSprCount,"Spring Springs", kListSxSprings, 1) \
+    B(sxSprKick, "Spring Kick the Tank", false) \
+    B(sxSprFreeze,"Spring Freeze", false) \
+    F(sxGateSize,"Gated Reverb Size", 0, 1, 0.7, 0.01, 0) \
+    F(sxGatePre, "Gated Reverb Pre-delay", 0, 100, 5, 0.1, 0) \
+    F(sxGateTone,"Gated Reverb Tone", 1000, 18000, 8000, 1, 6000) \
+    F(sxGateLen, "Gated Reverb Length", 50, 1000, 250, 1, 250) \
+    C(sxGateSync,"Gated Reverb Length Sync", kListSxGateSync, 0) \
+    C(sxGateShape,"Gated Reverb Gate Shape", kListSxGateShape, 0) \
+    C(sxGateTrig,"Gated Reverb Trigger", kListSxGateTrig, 0) \
+    F(sxGateThr, "Gated Reverb Threshold", -60, 0, -24, 0.1, 0) \
+    B(sxGateFreeze,"Gated Reverb Freeze", false) \
+    F(sxPlDecay, "Plate Decay", 0.2, 10, 2.5, 0.01, 2.5) \
+    F(sxPlDamp,  "Plate Damping", 0, 1, 0.4, 0.01, 0) \
+    F(sxPlPre,   "Plate Pre-delay", 0, 200, 10, 0.1, 0) \
+    F(sxPlWidth, "Plate Width", 0, 1, 1, 0.01, 0) \
+    F(sxPlMod,   "Plate Mod", 0, 1, 0.3, 0.01, 0) \
+    B(sxPlFreeze,"Plate Freeze", false) \
+    F(sxWidCents,"Widener Cents", 0, 25, 9, 0.1, 0) \
+    F(sxWidDelay,"Widener Delay", 0, 30, 12, 0.1, 0) \
+    F(sxWidLowCut,"Widener Low Cut", 50, 1000, 200, 1, 250) \
+    F(sxWidWidth,"Widener Width", 0, 1, 1, 0.01, 0) \
+    B(sxDim1,    "Dimension Mode 1", true) \
+    B(sxDim2,    "Dimension Mode 2", false) \
+    B(sxDim3,    "Dimension Mode 3", false) \
+    B(sxDim4,    "Dimension Mode 4", false) \
+    C(sxIrType,  "IR Reverb Impulse", kListSxIrType, 1) \
+    F(sxIrPre,   "IR Reverb Pre-delay", 0, 200, 0, 0.1, 0) \
+    F(sxIrLen,   "IR Reverb Length", 0.1, 10, 10, 0.01, 2) \
+    F(sxIrLP,    "IR Reverb High Cut", 1000, 20000, 20000, 1, 6000) \
+    F(sxIrHP,    "IR Reverb Low Cut", 20, 1000, 20, 1, 150) \
+    F(sxIrWidth, "IR Reverb Width", 0, 1, 1, 0.01, 0) \
+    B(sxIrReverse,"IR Reverb Reverse", false) \
+    B(sxRevFreeze,"90s Reverb Freeze", false) \
+    F(sxDuckNote,"Duck Note", -1, 127, -1, 1, 0) \
+    F(sxDlyDuckAmt, "Tape Delay Duck Amount", 0, 1, 0, 0.01, 0) \
+    F(sxDlyDuckAtt, "Tape Delay Duck Attack", 0.1, 50, 2, 0.1, 5) \
+    F(sxDlyDuckRel, "Tape Delay Duck Release", 20, 2000, 250, 1, 250) \
+    C(sxDlyDuckSrc, "Tape Delay Duck Source", kListSxDuckSrc, 0) \
+    F(sxRevDuckAmt, "Reverbs Duck Amount", 0, 1, 0, 0.01, 0) \
+    F(sxRevDuckAtt, "Reverbs Duck Attack", 0.1, 50, 2, 0.1, 5) \
+    F(sxRevDuckRel, "Reverbs Duck Release", 20, 2000, 250, 1, 250) \
+    C(sxRevDuckSrc, "Reverbs Duck Source", kListSxDuckSrc, 0) \
+    F(sxDubDuckAmt, "Dub Delay Duck Amount", 0, 1, 0, 0.01, 0) \
+    F(sxDubDuckAtt, "Dub Delay Duck Attack", 0.1, 50, 2, 0.1, 5) \
+    F(sxDubDuckRel, "Dub Delay Duck Release", 20, 2000, 250, 1, 250) \
+    C(sxDubDuckSrc, "Dub Delay Duck Source", kListSxDuckSrc, 0) \
+    F(sxSprDuckAmt, "Spring Duck Amount", 0, 1, 0, 0.01, 0) \
+    F(sxSprDuckAtt, "Spring Duck Attack", 0.1, 50, 2, 0.1, 5) \
+    F(sxSprDuckRel, "Spring Duck Release", 20, 2000, 250, 1, 250) \
+    C(sxSprDuckSrc, "Spring Duck Source", kListSxDuckSrc, 0) \
+    F(sxGateDuckAmt, "Gated Reverb Duck Amount", 0, 1, 0, 0.01, 0) \
+    F(sxGateDuckAtt, "Gated Reverb Duck Attack", 0.1, 50, 2, 0.1, 5) \
+    F(sxGateDuckRel, "Gated Reverb Duck Release", 20, 2000, 250, 1, 250) \
+    C(sxGateDuckSrc, "Gated Reverb Duck Source", kListSxDuckSrc, 0) \
+    F(sxPlDuckAmt, "Plate Duck Amount", 0, 1, 0, 0.01, 0) \
+    F(sxPlDuckAtt, "Plate Duck Attack", 0.1, 50, 2, 0.1, 5) \
+    F(sxPlDuckRel, "Plate Duck Release", 20, 2000, 250, 1, 250) \
+    C(sxPlDuckSrc, "Plate Duck Source", kListSxDuckSrc, 0) \
+    F(sxIrDuckAmt, "IR Reverb Duck Amount", 0, 1, 0, 0.01, 0) \
+    F(sxIrDuckAtt, "IR Reverb Duck Attack", 0.1, 50, 2, 0.1, 5) \
+    F(sxIrDuckRel, "IR Reverb Duck Release", 20, 2000, 250, 1, 250) \
+    C(sxIrDuckSrc, "IR Reverb Duck Source", kListSxDuckSrc, 0) \
+    B(rsFmtOn,   "Reese Formant On", false) \
+    F(rsFmtVowel,"Reese Formant Vowel", 0, 1, 0, 0.01, 0) \
+    F(rsFmtRes,  "Reese Formant Resonance", 0, 1, 0.5, 0.01, 0) \
+    F(rsFmtMix,  "Reese Formant Mix", 0, 1, 1, 0.01, 0) \
+    F(rsFmtShift,"Reese Formant Shift", -12, 12, 0, 0.01, 0) \
+    C(rsFmtMove, "Reese Formant Movement", kListRsFmtMove, 0) \
+    C(rsFmtSync, "Reese Formant LFO Rate", kListRsLfoSync, 2) \
+    C(rsFmtShape,"Reese Formant LFO Shape", kListRsLfoShape, 0) \
+    F(rsFmtDepth,"Reese Formant LFO Depth", 0, 1, 0.5, 0.01, 0) \
+    C(rsFmtPos,  "Reese Formant Position", kListRsFmtPos, 0) \
+    F(rsBloom,   "Reese Detune Bloom", 0, 4, 0, 0.01, 1) \
+    C(rsBloomSync,"Reese Bloom Sync", kListRsBloomSync, 0) \
+    B(rsBloomRev,"Reese Bloom Reverse", false) \
+    C(rsBloomCurve,"Reese Bloom Curve", kListRsCurve, 0) \
+    B(rsSplitOn, "Reese Split Drive", false) \
+    F(rsSplitFreq,"Reese Split Frequency", 40, 400, 120, 1, 120) \
+    F(rsLowDrive,"Reese Low Drive", 0, 1, 0, 0.01, 0) \
+    F(rsHighDrive,"Reese High Drive", 0, 1, 0.5, 0.01, 0) \
+    F(rsHighTone,"Reese High Tone", 1000, 18000, 8000, 1, 5000) \
+    C(rsShpType, "Reese Shaper", kListRsShp, 0) \
+    F(rsShpAmt,  "Reese Shaper Amount", 0, 1, 0.3, 0.01, 0) \
+    F(rsShpSym,  "Reese Shaper Symmetry", -1, 1, 0, 0.01, 0) \
+    C(rsCpMode,  "Reese Comb / Phaser", kListRsCpMode, 0) \
+    F(rsCpFb,    "Reese Comb / Phaser Feedback", -0.95, 0.95, 0.5, 0.01, 0) \
+    C(rsCpStages,"Reese Phaser Stages", kListRsCpStages, 1) \
+    C(rsCpSync,  "Reese Comb / Phaser Rate Sync", kListRsCpSync, 3) \
+    F(rsCpRate,  "Reese Comb / Phaser Rate", 0.01, 10, 0.5, 0.01, 1) \
+    F(rsCpDepth, "Reese Comb / Phaser Depth", 0, 1, 0.5, 0.01, 0) \
+    F(rsCpOffset,"Reese Comb / Phaser Offset", -24, 24, 0, 0.01, 0) \
+    F(rsCpMix,   "Reese Comb / Phaser Mix", 0, 1, 0.5, 0.01, 0) \
+    F(rsPw,      "Reese Pulse Width", 0.05, 0.95, 0.5, 0.01, 0) \
+    F(rsPwmRate, "Reese PWM Rate", 0.05, 10, 0.6, 0.01, 1) \
+    F(rsPwmDepth,"Reese PWM Depth", 0, 0.45, 0.25, 0.01, 0) \
+    C(rsStack,   "Reese Octave Stack", kListRsStack, 0) \
+    C(rsPdMode,  "Reese Pitch Envelope", kListRsPdMode, 0) \
+    F(rsPdAmt,   "Reese Pitch Envelope Amount", 0, 24, 12, 0.01, 0) \
+    F(rsPdTime,  "Reese Pitch Envelope Time", 0.01, 2, 0.25, 0.001, 0.25) \
+    F(rsFm,      "Reese Cross FM", 0, 1, 0, 0.01, 0) \
+    B(rsSync,    "Reese Hard Sync", false) \
+    F(rsSyncRatio,"Reese Sync Ratio", 1, 8, 1, 0.01, 0) \
+    C(rsFmEnvSrc,"Reese FM / Sync Envelope", kListRsEnvSrc, 0) \
+    F(rsFmEnvAmt,"Reese FM / Sync Envelope Amount", -1, 1, 0, 0.01, 0) \
+    F(rsDrift,   "Reese Analog Drift", 0, 1, 0, 0.01, 0) \
+    F(rsDriftRate,"Reese Drift Rate", 0.05, 5, 0.5, 0.01, 0.5)
 
 enum ParamIndex
 {
@@ -1674,6 +1878,14 @@ inline constexpr int mxParam (int strip) { return strip < kMxSources ? P_mxOsc1P
 constexpr int kMxReeseStrip = kMxSources + 2;
 constexpr int kMxCoreStrip = kMxSources + 3;   // Core A; Core B is the next
 constexpr int kMxLayerStrip = kMxSources + 5;  // the Break Layer
+
+// v0.1.70: the Space effects' rack slots (On, Mix / Return) and their Duck sections
+inline constexpr int fxOnParam (int slot)  { return slot < FS_Dub ? P_fxOnStutter + 2 * slot : P_sxOnDub + 2 * (slot - FS_Dub); }
+inline constexpr int fxMixParam (int slot) { return slot < FS_Dub ? P_fxMixStutter + 2 * slot : P_sxMixDub + 2 * (slot - FS_Dub); }
+enum SxDucker { SD_Delay, SD_Reverb, SD_Dub, SD_Spring, SD_Gated, SD_Plate, SD_Ir, SD_COUNT };
+enum SxDuckField { SDF_Amt, SDF_Att, SDF_Rel, SDF_Src };
+inline constexpr int sxDuckParam (int d, int field) { return P_sxDlyDuckAmt + 4 * d + field; }
+static_assert (sxDuckParam (SD_Ir, SDF_Src) == P_sxIrDuckSrc && fxMixParam (6 + 9) == P_sxMixIr, "Space parameter layout");
 
 // The Core oscillator slots: slot s (0 = A, 1 = B) starts at coreParam (s, 0); then 6 operators of kCoreOpStride
 constexpr int kCoreSlotHead = 11, kCoreOpStride = 21, kCoreOps = 6, kCoreSlotStride = kCoreSlotHead + kCoreOps * kCoreOpStride;

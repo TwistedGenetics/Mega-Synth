@@ -1291,7 +1291,7 @@ int main()
         // stability: everything on, extreme settings thrown around
         {
             auto p = make();
-            for (int k = 0; k < FS_COUNT; ++k) setP (*p, P_fxOnStutter + 2 * k, 1.0f);
+            for (int k = 0; k < FS_COUNT; ++k) setP (*p, fxOnParam (k), 1.0f);
             uint32_t r = 99; auto rnd = [&] { r = r * 1664525u + 1013904223u; return (r >> 8) / 16777216.0f; };
             bool finite = true; float peak = 0;
             for (int blk = 0; blk < 60; ++blk)
@@ -1299,7 +1299,7 @@ int main()
                 for (int i = 0; i < P_COUNT; ++i)
                 {
                     const juce::String id (kParamIds[i]);
-                    if (! (id.startsWith ("mbc") || id.startsWith ("smp") || id.startsWith ("rpt") || id.startsWith ("flp") || id.startsWith ("vsh") || id.startsWith ("stt"))) continue;
+                    if (! (id.startsWith ("mbc") || id.startsWith ("smp") || id.startsWith ("rpt") || id.startsWith ("flp") || id.startsWith ("vsh") || id.startsWith ("stt") || id.startsWith ("sx"))) continue;
                     p->param (i)->setValueNotifyingHost (rnd() < 0.5f ? (rnd() < 0.5f ? 0.0f : 1.0f) : rnd());
                 }
                 auto st = render (*p, 0.05, blk == 0 ? chord (0.0, 3.0, { 36, 48, 60, 72 }) : std::vector<std::pair<double, juce::MidiMessage>> {});
@@ -2257,7 +2257,7 @@ int main()
         setP (*p, P_spOn, 1); setP (*p, P_spMix, 0.5f); setP (*p, P_fbDlGr, 0.3f);
         setP (*p, P_filter2On, 1); setP (*p, P_filterRouting, 1); setP (*p, P_filterType, (float) FT_BP); setP (*p, P_filterSlope, 3);
         setP (*p, P_filter2Type, (float) FT_LP); setP (*p, P_filter2Slope, 3);
-        for (int k = 0; k < FS_COUNT; ++k) setP (*p, P_fxOnStutter + 2 * k, 1.0f);
+        for (int k = 0; k < FS_COUNT; ++k) setP (*p, fxOnParam (k), 1.0f);
         setP (*p, P_reverbMix, 0.4f); setP (*p, P_shimmerMix, 0.3f); setP (*p, P_reverseMix, 0.3f);
         setP (*p, P_rptChance, 0.5f); setP (*p, P_flpTZ, 1);
         setP (*p, P_dsOn, 1); setP (*p, P_dsLane2On, 1); setP (*p, P_dsSwing, 0.2f);
@@ -3004,7 +3004,7 @@ int main()
             for (int i : { P_osc2Gain, P_osc3Gain, P_subGain, P_osc4Gain, P_wt2Gain, P_complexGain, P_supersawGain, P_mutAmount, P_ciAmount, P_dsOn, P_arpOn, P_chdOn, P_fEnvAmt, P_lfoAssignAmt0, P_envAssignAmt0 })
                 clean = clean && std::abs (plain (*p, i)) < 1e-4f;
             for (int k = 0; k < 6; ++k) clean = clean && plain (*p, P_uni1Voices + kUniStride * k) < 1.5f;
-            for (int k = 0; k < FS_COUNT; ++k) clean = clean && plain (*p, P_fxOnStutter + 2 * k) < 0.5f;
+            for (int k = 0; k < FS_COUNT; ++k) clean = clean && plain (*p, fxOnParam (k)) < 0.5f;
             CHECK (clean, "Init: Osc 1 only, no effects, no mutation, sequencers or arp");
             // only Osc 1 is heard, and nothing rings on after the release
             juce::AudioBuffer<float> c; render (*p, 1.5, chord (0.0, 0.5, { 57 }), &c);
@@ -8260,6 +8260,115 @@ int main()
         juce::File (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_COREREF", {})).replaceWithData (all.getData(), all.getSize());
         return 0;
     }
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_SPACEDEMO", {}).isNotEmpty())
+    {
+        // v0.1.70 reel: 172 BPM, 16 bars over the demo break.
+        //  bars 1-4   Talking Neuro Reese with Detune Bloom, the IR Hall ducking under the break's kicks
+        //  bars 5-8   Split Distort with a comb sweeping each bar
+        //  bars 9-12  Hoover stabs through the Spring, a Dub Throw on the last beat of each bar
+        //  bars 13-16 the Gated Reverb on the break's snares; a plate chord frozen into a pad (bar 15), the break stopped
+        // "dry": the same notes and break with the new effects and Reese additions left off (the plain Reese)
+        const bool wet = juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_SPACEDEMO", {}) != "dry";
+        auto p = make();
+        setP (*p, P_osc1Gain, 0.0f); setP (*p, P_ampA, 0.004f); setP (*p, P_ampS, 1.0f); setP (*p, P_ampR, 0.12f); setP (*p, P_polyphony, 4.0f);
+        setP (*p, P_reverbMix, 0.0f); setP (*p, P_delayMix, 0.0f); setP (*p, P_chorusMix, 0.0f);
+        setP (*p, P_bcOn, 1.0f); setP (*p, P_bcSliceMode, 3.0f); setP (*p, P_bcLevel, 0.75f); setP (*p, P_bsOn, 1.0f); setP (*p, P_bcSliceKeys, 2.0f); setP (*p, P_bcSync, 1.0f);
+        setP (*p, P_bcKeyBase, 96.0f);
+        p->loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, 0), 44100.0), "Mega Break.wav", MegaSynthProcessor::kSlotBreak);
+        p->refreshBreakAnalysis (true);
+        setP (*p, P_bsSteps, 1.0f);
+        p->breakStore.edit ([] (tg::BreakData& d) { tg::breaktools::original (d, 0, 32); });
+        struct Head : juce::AudioPlayHead { PositionInfo info; juce::Optional<PositionInfo> getPosition() const override { return info; } };
+        Head head; p->prepareToPlay (sr, 256); p->setPlayHead (&head);
+        auto reese = [&] (int preset) { p->applyReesePreset (wet ? preset : 0); setP (*p, P_rsLevel, 0.6f); };
+        // set up the IR hall first (its impulse loads in the background)
+        if (wet)
+        {
+            setP (*p, P_sxOnIr, 1.0f); setP (*p, P_sxIrType, 2.0f); setP (*p, P_sxMixIr, 0.45f); setP (*p, P_sxIrHP, 180.0f);
+            setP (*p, sxDuckParam (SD_Ir, SDF_Amt), 0.8f); setP (*p, sxDuckParam (SD_Ir, SDF_Src), 0.0f); setP (*p, sxDuckParam (SD_Ir, SDF_Att), 2.0f); setP (*p, sxDuckParam (SD_Ir, SDF_Rel), 300.0f);
+            p->updateIrImpulse (true);
+        }
+        { juce::AudioBuffer<float> b (2, 256); juce::MidiBuffer m; head.info.setIsPlaying (false); p->processBlock (b, m); juce::Thread::sleep (400); p->processBlock (b, m); }
+        reese (1); if (wet) setP (*p, P_rsBloom, 1.0f);
+        const double bpm = 172.0, inc = bpm / 60.0 / sr;
+        const int bars = 16, total = (int) (bars * 4.0 / inc) + (int) (2.5 * sr);
+        juce::AudioBuffer<float> out (2, total), buf (2, 256);
+        const int bassNotes[4] = { 33, 33, 29, 31 };   // A1, A1, F1, G1
+        double ppq = 0.0; int lastBar = -1, lastBeat = -1;
+        std::vector<int> held;
+        auto allOff = [&] (juce::MidiBuffer& m) { for (int nn : held) m.addEvent (juce::MidiMessage::noteOff (1, nn), 0); held.clear(); };
+        for (int pos = 0; pos < total; pos += 256)
+        {
+            const int n = std::min (256, total - pos);
+            const bool playing = ppq < bars * 4.0;
+            const int bar = (int) std::floor (ppq / 4.0), beat = (int) std::floor (ppq);
+            juce::MidiBuffer m;
+            if (playing && bar != lastBar)
+            {
+                lastBar = bar;
+                if (bar == 4) { reese (3); if (wet) { setP (*p, P_rsCpMode, 1.0f); setP (*p, P_rsCpSync, 4.0f); setP (*p, P_rsCpDepth, 0.8f); setP (*p, P_rsCpFb, 0.7f); setP (*p, P_rsCpMix, 0.55f); } }
+                if (bar == 8)
+                {
+                    reese (4);
+                    if (wet)
+                    {
+                        setP (*p, sxDuckParam (SD_Ir, SDF_Amt), 0.0f); setP (*p, P_sxMixIr, 0.2f);
+                        setP (*p, P_sxOnSpring, 1.0f); setP (*p, P_sxMixSpring, 0.45f); setP (*p, P_sxSprTension, 0.7f); setP (*p, P_sxSprDecay, 2.2f);
+                        setP (*p, P_sxOnDub, 1.0f); setP (*p, P_sxMixDub, 0.6f); setP (*p, P_sxDubMode, 0.0f); setP (*p, P_sxDubSync, 6.0f); setP (*p, P_sxDubFb, 0.7f);
+                        setP (*p, P_sxDubHP, 300.0f); setP (*p, P_sxDubLP, 2600.0f); setP (*p, P_sxDubDrive, 0.4f);
+                    }
+                }
+                if (bar == 12)
+                {
+                    reese (0); setP (*p, P_rsLevel, 0.0f);
+                    if (wet)
+                    {
+                        setP (*p, P_sxOnSpring, 0.0f); setP (*p, P_sxOnIr, 0.0f);
+                        setP (*p, P_sxOnGated, 1.0f); setP (*p, P_sxMixGated, 0.55f); setP (*p, P_sxGateTrig, 2.0f); setP (*p, P_sxGateSync, 3.0f); setP (*p, P_sxGateSize, 0.85f);
+                        setP (*p, P_sxOnPlate, 1.0f); setP (*p, P_sxMixPlate, 0.5f); setP (*p, P_sxPlDecay, 6.0f); setP (*p, P_sxPlMod, 0.5f);
+                    }
+                    // a chord for the pad (the SuperSaw)
+                    setP (*p, P_supersawGain, 0.1f); setP (*p, P_ampA, 0.02f); setP (*p, P_ampR, 0.3f);
+                }
+                if (bar == 14) { if (wet) setP (*p, P_sxPlFreeze, 1.0f); setP (*p, P_bsOn, 0.0f); }
+                std::cout << "SPACEDEMO bar " << (bar + 1) << std::endl;
+            }
+            if (playing && beat != lastBeat)
+            {
+                lastBeat = beat;
+                const int bib = beat % 4;
+                if (bar < 8)
+                {
+                    if (bib == 0) { allOff (m); const int nn = bassNotes[bar % 4]; m.addEvent (juce::MidiMessage::noteOn (1, nn, (juce::uint8) 100), 1); held.push_back (nn); }
+                }
+                else if (bar < 12)
+                {
+                    // Hoover stabs on 1, the "and" of 2 (here on 2) and 3; Throw held over beat 4
+                    allOff (m);
+                    if (bib != 3) { const int nn = (bar % 2 == 0) ? 45 : 43; m.addEvent (juce::MidiMessage::noteOn (1, nn, (juce::uint8) 110), 1); held.push_back (nn); }
+                    if (wet) setP (*p, P_sxDubThrow, bib == 2 ? 1.0f : 0.0f);   // (the last stab goes into the delay)
+                }
+                else if (bar == 12 && bib == 0)
+                {
+                    allOff (m);
+                    for (int nn : { 57, 60, 64, 69 }) { m.addEvent (juce::MidiMessage::noteOn (1, nn, (juce::uint8) 90), 1); held.push_back (nn); }
+                }
+                else if (bar == 14 && bib == 0) allOff (m);
+            }
+            if (! playing && ! held.empty()) allOff (m);
+            head.info.setIsPlaying (playing); head.info.setBpm (bpm); head.info.setPpqPosition (ppq); head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+            buf.setSize (2, n, false, false, true); buf.clear(); p->processBlock (buf, m);
+            for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, buf, c, 0, n);
+            ppq += n * inc;
+            if (! playing && wet && ppq > bars * 4.0 + 2.0) setP (*p, P_sxPlFreeze, 0.0f);   // (let the frozen pad go at the end)
+        }
+        p->setPlayHead (nullptr);
+        const float pk = out.getMagnitude (0, total);
+        if (pk > 0.0f) out.applyGain (juce::Decibels::decibelsToGain (-1.0f) / pk);
+        writeWav (out, sr, wet ? "space_reese_demo_172.wav" : "space_reese_demo_172_dry.wav");
+        std::cout << "SPACEDEMO written, " << juce::String (total / sr, 1) << " s, peak was " << juce::String (juce::Decibels::gainToDecibels (pk), 1) << " dBFS (normalised to -1)" << std::endl;
+        return 0;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_RXDEMO", {}).isNotEmpty())
     {
         // Break React reel: 172 BPM, the demo break from the Break Sequencer, a held Reese + sub bass played in the slice zone
@@ -8677,6 +8786,471 @@ int main()
         }
         return 0;
     }
+    // ---- v0.1.70: the new Space effects and the Reese additions
+    auto spaceTests = [&]
+    {
+        std::cout << "Space effects / Reese additions (v0.1.70)" << std::endl;
+        const double fs = 48000.0;
+        auto defaults = [] { std::vector<float> v ((size_t) P_COUNT); for (int i = 0; i < P_COUNT; ++i) v[(size_t) i] = meta (i).def; return v; };
+        auto rmsOf = [] (const std::vector<float>& x, int a, int b) { double e = 0; b = std::min (b, (int) x.size()); for (int i = std::max (0, a); i < b; ++i) e += (double) x[(size_t) i] * x[(size_t) i]; return std::sqrt (e / std::max (1, b - a)); };
+        auto db = [] (double r) { return 20.0 * std::log10 (std::max (1.0e-12, r)); };
+        FxContext ctx; ctx.sr = fs; ctx.tempo = 172.0;
+        // runs an effect over a mono input (both channels), 256 at a time; fx (L, R, n, blockStart)
+        auto runFx = [&] (const std::vector<float>& in, std::function<void (float*, float*, int, int)> fx, std::vector<float>* right = nullptr)
+        {
+            std::vector<float> L (in), R (in);
+            for (int pos = 0; pos < (int) in.size(); pos += 256) fx (L.data() + pos, R.data() + pos, std::min (256, (int) in.size() - pos), pos);
+            if (right != nullptr) *right = R;
+            return L;
+        };
+        uint32_t nrng = 12345u;
+        auto noise = [&] { nrng = nrng * 1664525u + 1013904223u; return (float) ((nrng >> 8) & 0xffff) / 32768.0f - 1.0f; };
+        // ---- Dub Delay: 110% feedback builds up but stays bounded; 60% dies away
+        {
+            auto v = defaults();
+            v[P_sxDubSync] = 0; v[P_sxDubTime] = 0.2f; v[P_sxDubMode] = 2; v[P_sxDubDrive] = 0.0f;
+            std::vector<float> in ((size_t) (10.0 * fs), 0.0f);
+            for (int i = 0; i < (int) (0.1 * fs); ++i) in[(size_t) i] = 0.5f * noise();
+            for (float fb : { 1.1f, 0.6f })
+            {
+                v[P_sxDubFb] = fb;
+                DubDelay d; d.prepare (fs);
+                auto out = runFx (in, [&] (float* l, float* r, int n, int) { d.process (l, r, n, v.data(), ctx, false, nullptr); });
+                float pk = 0; bool fin = true; for (float x : out) { pk = std::max (pk, std::abs (x)); fin &= std::isfinite (x); }
+                const double last = rmsOf (out, (int) (9.0 * fs), (int) (10.0 * fs));
+                std::cout << "  Dub Delay feedback " << juce::roundToInt (fb * 100) << "%: peak " << pk << ", last second " << juce::String (db (last), 1) << " dB" << std::endl;
+                if (fb > 1.0f) CHECK (fin && pk < 2.0f && last > 0.01, "Dub Delay at 110%: a runaway that stays bounded (peak " + juce::String (pk, 2) + ")");
+                else CHECK (fin && last < 1.0e-4, "Dub Delay at 60%: the repeats die away");
+            }
+        }
+        // ---- Throw: Hold sends only while held; Latch between presses
+        {
+            auto v = defaults();
+            v[P_sxDubSync] = 0; v[P_sxDubTime] = 0.25f; v[P_sxDubFb] = 0.0f; v[P_sxDubDrive] = 0.0f;
+            std::vector<float> in ((size_t) (4.0 * fs));
+            for (size_t i = 0; i < in.size(); ++i) in[i] = 0.4f * (float) std::sin (2.0 * kPi * 330.0 * (double) i / fs);
+            for (int mode : { 0, 1 })
+            {
+                v[P_sxDubMode] = (float) mode;
+                DubDelay d; d.prepare (fs);
+                auto out = runFx (in, [&] (float* l, float* r, int n, int pos)
+                {
+                    const double t = pos / fs;
+                    const bool held = mode == 0 ? (t >= 1.0 && t < 1.5) : ((t >= 1.0 && t < 1.05) || (t >= 2.0 && t < 2.05));
+                    d.process (l, r, n, v.data(), ctx, held, nullptr);
+                });
+                std::vector<float> wet (in.size()); for (size_t i = 0; i < in.size(); ++i) wet[i] = out[i] - in[i];
+                const double endAt = mode == 0 ? 1.5 : 2.0;
+                const double before = rmsOf (wet, 0, (int) (1.2 * fs)), during = rmsOf (wet, (int) (1.3 * fs), (int) ((endAt + 0.2) * fs)), after = rmsOf (wet, (int) ((endAt + 0.3) * fs), (int) (4.0 * fs));
+                CHECK (before < 1.0e-6 && during > 0.05 && after < 1.0e-4, juce::String (mode == 0 ? "Throw (Hold)" : "Throw (Latch)") + ": only what plays while it's on goes into the delay ("
+                       + juce::String (db (before), 0) + " / " + juce::String (db (during), 0) + " / " + juce::String (db (after), 0) + " dB)");
+            }
+        }
+        // ---- Ducking: dips within 1 ms of the hit, comes back over Release
+        {
+            SpaceDucker dk; std::vector<float> g (12000); std::vector<char> hit (12000, 0); hit[0] = 1;
+            dk.run (g.data(), 12000, reinterpret_cast<const bool*> (hit.data()), 1.0f, 0.1f, 100.0f, fs);
+            float gMin = 1.0f; for (int i = 0; i <= 48; ++i) gMin = std::min (gMin, g[(size_t) i]);
+            CHECK (gMin < 0.02f && g[(size_t) (0.15 * fs)] > 0.9f, "a duck dips within 1 ms of its hit (down to " + juce::String (gMin, 3) + ") and comes back over Release");
+            // through the plug-in: the Plate's duck listening to the synth's notes
+            auto p = make();
+            setP (*p, P_sxOnPlate, 1.0f); setP (*p, sxDuckParam (SD_Plate, SDF_Amt), 1.0f); setP (*p, sxDuckParam (SD_Plate, SDF_Src), 6.0f); setP (*p, sxDuckParam (SD_Plate, SDF_Att), 0.1f);
+            juce::AudioBuffer<float> b (2, 48); juce::MidiBuffer none; p->processBlock (b, none);
+            const float g0 = p->getEngine().fx().duckShown[SD_Plate].load();
+            juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            b.clear(); p->processBlock (b, m);
+            const float g1 = p->getEngine().fx().duckShown[SD_Plate].load();
+            CHECK (g0 > 0.999f && g1 < 0.05f, "the Plate ducks on a synth note within 1 ms (" + juce::String (g1, 3) + ")");
+            // the break's kicks (a slice set to Kick) duck; a snare listener doesn't
+            for (int src : { 0, 1 })
+            {
+                auto q = make(); setP (*q, P_bcOn, 1.0f);
+                q->loadSampleData (tg::breaks::toWav16 (tg::breaks::makeDemoBreak (44100.0, 170.0, 0), 44100.0), "demo.wav", MegaSynthProcessor::kSlotBreak);
+                q->breakStore.setAnalysis ([] (tg::BreakData& d) { d.brk[0].slice[0].hitType = 1; });
+                setP (*q, P_sxOnIr, 1.0f); setP (*q, sxDuckParam (SD_Ir, SDF_Amt), 1.0f); setP (*q, sxDuckParam (SD_Ir, SDF_Src), (float) src); setP (*q, sxDuckParam (SD_Ir, SDF_Att), 0.1f);
+                const int kb = juce::roundToInt (q->param (P_bcKeyBase)->convertFrom0to1 (q->param (P_bcKeyBase)->getValue()));
+                juce::AudioBuffer<float> bb (2, 48); juce::MidiBuffer mm; mm.addEvent (juce::MidiMessage::noteOn (1, kb, (juce::uint8) 100), 0);
+                q->processBlock (bb, mm); bb.clear(); juce::MidiBuffer e2; q->processBlock (bb, e2);
+                const float gk = q->getEngine().fx().duckShown[SD_Ir].load();
+                CHECK (src == 0 ? gk < 0.1f : gk > 0.999f, juce::String (src == 0 ? "a kick slice ducks what listens to Break kicks" : "... and not what listens to Break snares"));
+            }
+        }
+        // ---- Freeze: the tail holds steady, without a click
+        {
+            auto v = defaults();
+            std::vector<float> in ((size_t) (7.0 * fs), 0.0f);
+            for (int i = 0; i < (int) (1.0 * fs); ++i) in[(size_t) i] = 0.3f * noise();
+            for (int which = 0; which < 3; ++which)
+            {
+                const char* nm[3] = { "Plate", "Spring", "Gated Reverb" };
+                double held[2] {}; float clickMax = 0, steadyMax = 0;
+                for (int fz : { 1, 0 })
+                {
+                    PlateReverb pl; SpringReverb sp; GatedReverb gt;
+                    pl.prepare (fs); sp.prepare (fs); gt.prepare (fs);
+                    auto vv = v; vv[P_sxGateTrig] = 1;   // (no trigger: the gate opens only when frozen)
+                    std::vector<float> R;
+                    auto out = runFx (in, [&] (float* l, float* r, int n, int pos)
+                    {
+                        const bool f = fz == 1 && pos >= (int) (1.0 * fs);
+                        vv[P_sxPlFreeze] = vv[P_sxSprFreeze] = vv[P_sxGateFreeze] = f ? 1.0f : 0.0f;
+                        if (which == 0) pl.process (l, r, n, vv.data(), ctx, nullptr);
+                        else if (which == 1) sp.process (l, r, n, vv.data(), ctx, nullptr);
+                        else gt.process (l, r, n, vv.data(), ctx, 0, nullptr, nullptr);
+                    });
+                    held[fz] = rmsOf (out, (int) (5.0 * fs), (int) (6.0 * fs)) / std::max (1.0e-9, rmsOf (out, (int) (2.0 * fs), (int) (3.0 * fs)));
+                    if (fz == 1)
+                    {
+                        for (int i = (int) (0.95 * fs); i < (int) (1.2 * fs); ++i) clickMax = std::max (clickMax, std::abs (out[(size_t) i] - out[(size_t) i - 1]));
+                        for (int i = (int) (0.5 * fs); i < (int) (0.95 * fs); ++i) steadyMax = std::max (steadyMax, std::abs (out[(size_t) i] - out[(size_t) i - 1]));
+                    }
+                }
+                std::cout << "  " << nm[which] << " Freeze: 3 s later " << juce::String (db (held[1]), 2) << " dB (not frozen " << juce::String (db (held[0]), 1) << " dB); largest step " << clickMax << " (steady " << steadyMax << ")" << std::endl;
+                CHECK (std::abs (db (held[1])) < 1.5 && (which == 2 || db (held[0]) < -10.0) && clickMax < steadyMax * 1.6f, juce::String (nm[which]) + ": Freeze holds the tail steady, without a click");
+            }
+            // the 90s reverb (the convolution's tail, recorded and played as grains)
+            double ratio[2] {};
+            for (int fz : { 1, 0 })
+            {
+                auto p = make(); setP (*p, P_reverbMix, 0.6f); setP (*p, P_reverbSize, 3.0f);
+                p->getEngine();   // (the impulse loads in the background)
+                juce::Thread::sleep (300);
+                render (*p, 0.2, {});
+                juce::Thread::sleep (200);
+                render (*p, 1.2, chord (0.0, 0.8, { 48, 55, 60 }));
+                if (fz) setP (*p, P_sxRevFreeze, 1.0f);
+                juce::AudioBuffer<float> cap; render (*p, 5.0, {}, &cap);
+                std::vector<float> o (cap.getReadPointer (0), cap.getReadPointer (0) + cap.getNumSamples());
+                ratio[fz] = rmsOf (o, (int) (3.5 * fs), (int) (4.5 * fs)) / std::max (1.0e-9, rmsOf (o, (int) (0.5 * fs), (int) (1.5 * fs)));
+            }
+            std::cout << "  90s Reverb Freeze: 3 s later " << juce::String (db (ratio[1]), 2) << " dB (not frozen " << juce::String (db (ratio[0]), 1) << " dB)" << std::endl;
+            CHECK (std::abs (db (ratio[1])) < 2.0 && db (ratio[0]) < -10.0, "the 90s Reverb's Freeze holds its tail");
+        }
+        // ---- Widener: wide, mono-safe, the lows left alone
+        {
+            auto v = defaults();
+            std::vector<float> in ((size_t) fs); for (auto& x : in) x = 0.3f * noise();
+            MicroWidener w; w.prepare (fs);
+            std::vector<float> R;
+            auto L = runFx (in, [&] (float* l, float* r, int n, int) { w.process (l, r, n, v.data(), ctx); }, &R);
+            std::vector<float> mono (in.size()), side (in.size());
+            for (size_t i = 0; i < in.size(); ++i) { mono[i] = 0.5f * (L[i] + R[i]); side[i] = 0.5f * (L[i] - R[i]); }
+            const double monoDb = db (rmsOf (mono, 4800, (int) in.size()) / rmsOf (in, 4800, (int) in.size())), sideDb = db (rmsOf (side, 4800, (int) in.size()) / rmsOf (in, 4800, (int) in.size()));
+            std::vector<float> lo ((size_t) fs); for (size_t i = 0; i < lo.size(); ++i) lo[i] = 0.4f * (float) std::sin (2.0 * kPi * 50.0 * (double) i / fs);
+            MicroWidener w2; w2.prepare (fs);
+            std::vector<float> R2; auto L2 = runFx (lo, [&] (float* l, float* r, int n, int) { w2.process (l, r, n, v.data(), ctx); }, &R2);
+            std::vector<float> side2 (lo.size()); for (size_t i = 0; i < lo.size(); ++i) side2[i] = 0.5f * (L2[i] - R2[i]);
+            const double lowSide = db (rmsOf (side2, 4800, (int) lo.size()) / rmsOf (lo, 4800, (int) lo.size()));
+            std::cout << "  Widener: mono sum " << juce::String (monoDb, 2) << " dB, side " << juce::String (sideDb, 1) << " dB; at 50 Hz the side is " << juce::String (lowSide, 1) << " dB" << std::endl;
+            CHECK (monoDb > -0.5 && sideDb > -20.0 && lowSide < -30.0, "the Widener: wide, the mono sum keeps the dry sound, the lows stay mono");
+        }
+        // ---- the rack: all sixteen slots, a new slot with Return 0 changes nothing, older racks get the new slots after theirs
+        {
+            FxRackStore st; juce::DynamicObject::Ptr o = new juce::DynamicObject(); o->setProperty ("order", "8,7,6,5,4,3,2,1,0");
+            st.fromVar (juce::var (o.get()));
+            const auto ord = st.getOrder();
+            bool ok = ord[0] == 8 && ord[8] == 0; for (int k = 9; k < FS_COUNT; ++k) ok = ok && ord[(size_t) k] == k;
+            CHECK (ok, "an older project's effect order is kept, the new effects after it");
+            auto a = make(), b = make();
+            setP (*b, P_sxOnPlate, 1.0f); setP (*b, P_sxMixPlate, 0.0f); setP (*b, P_sxOnDub, 1.0f); setP (*b, P_sxMixDub, 0.0f);
+            juce::AudioBuffer<float> ca, cb;
+            tg::resetVoiceRandom(); render (*a, 1.0, chord (0.0, 0.6, { 48, 60 }), &ca);
+            tg::resetVoiceRandom(); render (*b, 1.0, chord (0.0, 0.6, { 48, 60 }), &cb);
+            float diff = 0; for (int c = 0; c < 2; ++c) for (int i = 0; i < ca.getNumSamples(); ++i) diff = std::max (diff, std::abs (ca.getSample (c, i) - cb.getSample (c, i)));
+            CHECK (diff == 0.0f, "a new effect on with its Return at 0 changes nothing (" + juce::String (diff) + ")");
+        }
+        // ---- IR Reverb: built-in impulses, your own file saved with the project
+        {
+            auto ir = makeSpaceImpulse (2, fs, 10.0);
+            double e = 0; for (int i = 0; i < ir.getNumSamples(); ++i) e += (double) ir.getSample (0, i) * ir.getSample (0, i);
+            CHECK (ir.getNumSamples() > (int) (2.0 * fs) && e > 0.0, "the built-in Hall impulse is made");
+            auto p = make();
+            juce::AudioBuffer<float> user (2, (int) (0.5 * 44100.0));
+            for (int i = 0; i < user.getNumSamples(); ++i) { const float s = (float) std::exp (-8.0 * i / 44100.0) * (i % 7 == 0 ? 0.8f : -0.1f); user.setSample (0, i, s); user.setSample (1, i, s * 0.9f); }
+            CHECK (p->loadSampleData (tg::breaks::toWav16 (user, 44100.0), "my room.wav", MegaSynthProcessor::kSlotIr), "an impulse file loads");
+            setP (*p, P_sxOnIr, 1.0f); setP (*p, P_sxIrType, 0.0f); setP (*p, P_sxMixIr, 1.0f);
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (q->getSample (MegaSynthProcessor::kSlotIr) != nullptr && q->getSampleName (MegaSynthProcessor::kSlotIr) == "my room.wav", "the impulse file is saved with the project");
+            q->updateIrImpulse (true);
+            for (int k = 0; k < 40 && ! q->getEngine().fx().irReady(); ++k) { juce::AudioBuffer<float> b (2, 64); juce::MidiBuffer m; q->processBlock (b, m); juce::Thread::sleep (25); }
+            CHECK (q->getEngine().fx().irReady(), "the impulse loads (in the background)");
+            for (int i : { P_osc1Gain }) setP (*q, i, 0.6f);
+            juce::AudioBuffer<float> cap; render (*q, 1.0, chord (0.0, 0.05, { 60 }), &cap);
+            std::vector<float> o (cap.getReadPointer (1), cap.getReadPointer (1) + cap.getNumSamples());
+            CHECK (rmsOf (o, (int) (0.25 * fs), (int) (0.4 * fs)) > 1.0e-4, "the IR Reverb plays the impulse's tail");
+        }
+        // ---- the Throw pad and the Duck note: learned / set, and not played
+        {
+            auto p = make(); p->throwPadLearn = true;
+            juce::AudioBuffer<float> b (2, 256); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 40, (juce::uint8) 100), 0); p->processBlock (b, m);
+            CHECK (p->throwPadKind.load() == 1 && p->throwPadNum.load() == 40, "Learn takes the next note as the Throw pad");
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto q = make(); q->setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (q->throwPadKind.load() == 1 && q->throwPadNum.load() == 40, "the Throw pad is saved with the project");
+            auto level = [&] (bool asDuck)
+            {
+                auto r = make(); if (asDuck) setP (*r, P_sxDuckNote, 60.0f);
+                double e = 0;
+                for (int i = 0; i < 30; ++i) { juce::AudioBuffer<float> o (2, 256); o.clear(); juce::MidiBuffer mm; if (i == 0) mm.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); r->processBlock (o, mm); e += o.getMagnitude (0, 256); }
+                return e;
+            };
+            CHECK (level (false) > 0.1 && level (true) < 1.0e-6, "the Duck note isn't played");
+        }
+        // ---- older projects: the new controls at their defaults; the presets set only their own controls
+        {
+            auto p = make();
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto xml = juce::parseXML (getXmlFromBinaryForTest (mb));
+            if (xml != nullptr)
+            {
+                xml->setAttribute ("stateVersion", 29);
+                for (int i = P_sxOnDub; i <= P_rsDriftRate; ++i) if (auto* e = xml->getChildByAttribute ("id", kParamIds[i])) xml->removeChildElement (e, true);
+                juce::MemoryBlock mb2; juce::AudioProcessor::copyXmlToBinary (*xml, mb2);
+                auto r = make(); setP (*r, P_sxOnDub, 1.0f); setP (*r, P_rsFmtOn, 1.0f); setP (*r, P_rsBloom, 2.0f);
+                r->setStateInformation (mb2.getData(), (int) mb2.getSize());
+                auto plain = [] (MegaSynthProcessor& x, int i) { return x.param (i)->convertFrom0to1 (x.param (i)->getValue()); };
+                CHECK (plain (*r, P_sxOnDub) < 0.5f && plain (*r, P_rsFmtOn) < 0.5f && plain (*r, P_rsBloom) == 0.0f, "older projects load with the new Space and Reese controls off");
+            }
+            auto q = make(); setP (*q, P_reverbMix, 0.33f); setP (*q, P_rsLevel, 0.0f);
+            q->pushHistory ("set up");
+            q->applySpacePreset (1);
+            auto plain = [] (MegaSynthProcessor& x, int i) { return x.param (i)->convertFrom0to1 (x.param (i)->getValue()); };
+            CHECK (std::abs (plain (*q, P_reverbMix) - 0.33f) < 0.01f && plain (*q, P_sxOnDub) > 0.5f && plain (*q, P_sxDubMode) < 0.5f, "a Space preset sets only the new Space controls");
+            q->undo();
+            CHECK (plain (*q, P_sxOnDub) < 0.5f, "... and Undo takes it back");
+            q->applyReesePreset (4);
+            CHECK (juce::roundToInt (plain (*q, P_rsWave)) == 3 && plain (*q, P_rsLevel) > 0.5f && std::abs (plain (*q, P_reverbMix) - 0.33f) < 0.01f, "the Hoover preset: the Reese only");
+        }
+        // ---- Reese: Bloom timing, the pitch envelope, Split Drive, drift, the shaper's aliasing
+        {
+            auto reeseRun = [&] (ReeseSettings rs, double note, double seconds, uint32_t seed, std::vector<float>* outR = nullptr, std::function<void (ReeseOsc&, double)> each = nullptr)
+            {
+                ReeseOsc o; o.prepare (fs); o.start (1, seed);
+                std::vector<float> L ((size_t) (seconds * fs)), R (L.size());
+                for (size_t i = 0; i < L.size(); i += 32)
+                {
+                    o.setFrequency (note, 172.0, rs);
+                    if (each) each (o, (double) i / fs);
+                    for (size_t j = i; j < std::min (L.size(), i + 32); ++j) o.tick (L[j], R[j]);
+                }
+                if (outR != nullptr) *outR = R;
+                return L;
+            };
+            ReeseSettings rs; rs.cents = 20.0f; rs.mode = 0; rs.bloom = 1.0f;
+            double d0 = 0, dHalf = 0, dFull = 0;
+            reeseRun (rs, 110.0, 1.3, 7, nullptr, [&] (ReeseOsc& o, double t)
+            {
+                const double d = o.voiceFrequency (1) - o.voiceFrequency (0);
+                if (t < 1.0e-9) d0 = d; if (std::abs (t - 0.5) < 0.0004) dHalf = d; if (t > 1.2 && dFull == 0) dFull = d;
+            });
+            CHECK (std::abs (d0) < 1.0e-6 && std::abs (dHalf / dFull - 0.5) < 0.02 && dFull > 1.0, "Detune Bloom: no detune at the start, half at half the Bloom time (" + juce::String (dHalf / dFull, 3) + "), all of it after");
+            rs.bloomRev = true; double r0 = 0;
+            reeseRun (rs, 110.0, 0.01, 7, nullptr, [&] (ReeseOsc& o, double t) { if (t < 1.0e-9) r0 = o.voiceFrequency (1) - o.voiceFrequency (0); });
+            CHECK (std::abs (r0 / dFull - 3.0) < 0.05, "Bloom Reverse starts three times as wide");
+            ReeseSettings pd; pd.pdMode = 1; pd.pdAmt = 12.0f; pd.pdTime = 0.5f; pd.cents = 0.0f;
+            double f0 = 0, f1 = 0;
+            auto mid = [] (ReeseOsc& o) { return 0.5 * (o.voiceFrequency (0) + o.voiceFrequency (1)); };   // (the note: halfway between the beating voices)
+            reeseRun (pd, 110.0, 0.7, 3, nullptr, [&] (ReeseOsc& o, double t) { if (t < 1.0e-9) f0 = mid (o); if (t > 0.6 && f1 == 0) f1 = mid (o); });
+            CHECK (std::abs (f0 / 220.0 - 1.0) < 0.01 && std::abs (f1 / 110.0 - 1.0) < 0.001, "the pitch envelope (Drop, 12 st): an octave up at the start, on the note after Time");
+            // Split Drive: the lows stay clean (compared with no drive), the highs change; the single Drive changes the lows
+            auto lowBand = [&] (const std::vector<float>& x) { std::vector<float> y (x.size()); float a = 0, b = 0; const float c = (float) (1.0 - std::exp (-2.0 * kPi * 70.0 / fs)); for (size_t i = 0; i < x.size(); ++i) { a += (x[i] - a) * c; b += (a - b) * c; y[i] = b; } return y; };
+            ReeseSettings plainS; plainS.sub = 0.8f; plainS.cents = 10.0f;
+            // (each against itself without the drive: Split with High Drive 0 is the same crossover, so only the drive differs)
+            ReeseSettings splitS = plainS; splitS.split = true; splitS.splitHz = 150.0f; splitS.lowDrive = 0.0f; splitS.highDrive = 1.0f;
+            ReeseSettings split0 = splitS; split0.highDrive = 0.0f;
+            ReeseSettings driveS = plainS; driveS.drive = 1.0f;
+            const auto a = lowBand (reeseRun (plainS, 41.2, 1.0, 5)), a0 = lowBand (reeseRun (split0, 41.2, 1.0, 5)), b = lowBand (reeseRun (splitS, 41.2, 1.0, 5)), c2 = lowBand (reeseRun (driveS, 41.2, 1.0, 5));
+            std::vector<float> dSplit (a.size()), dDrive (a.size());
+            for (size_t i = 0; i < a.size(); ++i) { dSplit[i] = b[i] - a0[i]; dDrive[i] = c2[i] - a[i]; }
+            const double eS = rmsOf (dSplit, 4800, (int) a.size()) / rmsOf (a, 4800, (int) a.size()), eD = rmsOf (dDrive, 4800, (int) a.size()) / rmsOf (a, 4800, (int) a.size());
+            std::cout << "  Split Drive: the lows (below 70 Hz) change by " << juce::String (db (eS), 1) << " dB (the single Drive: " << juce::String (db (eD), 1) << " dB)" << std::endl;
+            CHECK (db (eS) < -20.0 && db (eD) > db (eS) + 6.0, "Split Drive leaves the low band (nearly) clean");
+            // drift: the same every time from the same note; another note differs; Beats mode keeps its beating
+            ReeseSettings dr; dr.drift = 1.0f; dr.driftRate = 2.0f;
+            const auto x1 = reeseRun (dr, 110.0, 1.0, 11), x2 = reeseRun (dr, 110.0, 1.0, 11), x3 = reeseRun (dr, 110.0, 1.0, 12);
+            bool same = true, differ = false; for (size_t i = 0; i < x1.size(); ++i) { same = same && x1[i] == x2[i]; differ = differ || x1[i] != x3[i]; }
+            CHECK (same && differ, "Analog Drift: the same from the same note's seed, different for another");
+            ReeseSettings bt; bt.mode = 2; bt.beat = 4; bt.drift = 1.0f; double beat = 0;
+            reeseRun (bt, 110.0, 0.5, 9, nullptr, [&] (ReeseOsc& o, double) { beat = std::max (beat, std::abs (o.beatRate() - 172.0 / 60.0)); });
+            CHECK (beat < 1.0e-9, "with Drift in Beats mode the beating stays locked to the tempo");
+            // the shaper's aliasing: an aliasing measure at Normal (not oversampled) and High (x2)
+            auto aliasDb = [&] (int quality)
+            {
+                ReeseSettings s; s.cents = 0.0f; s.shp = 1; s.shpAmt = 0.6f; s.quality = quality; s.width = 0.0f;
+                const double f = 1661.22;   // (G#6)
+                std::vector<float> R; auto L = reeseRun (s, f, 0.6, 1, &R);
+                const int N = 16384; juce::dsp::FFT fft (14);
+                std::vector<float> w ((size_t) N * 2, 0.0f);
+                for (int i = 0; i < N; ++i) w[(size_t) i] = L[(size_t) (8000 + i)] * (0.5f - 0.5f * (float) std::cos (2.0 * kPi * i / N));
+                fft.performFrequencyOnlyForwardTransform (w.data());
+                double harm = 0, other = 0;
+                for (int k = 1; k < N / 2; ++k)
+                {
+                    const double hz = k * fs / N, h = hz / f, dist = std::abs (h - std::round (h)) * f;
+                    const double e = (double) w[(size_t) k] * w[(size_t) k];
+                    if (dist < 4.0 * fs / N) harm += e; else other += e;
+                }
+                return 10.0 * std::log10 (std::max (1.0e-20, other) / std::max (1.0e-20, harm));
+            };
+            const double aN = aliasDb (1), aH = aliasDb (2);
+            std::cout << "  Shaper (Fold 60%, G#6): energy off the harmonics " << juce::String (aN, 1) << " dB at Normal, " << juce::String (aH, 1) << " dB at High (x2)" << std::endl;
+            CHECK (aH < aN - 3.0, "the shaper aliases less at High (oversampled)");
+            // every new part makes sound, finite, and different from without it
+            ReeseSettings base; base.cents = 14.0f;
+            const auto ref = reeseRun (base, 110.0, 0.5, 2);
+            auto check = [&] (const char* what, ReeseSettings s)
+            {
+                const auto x = reeseRun (s, 110.0, 0.5, 2);
+                bool fin = true; double d = 0; for (size_t i = 0; i < x.size(); ++i) { fin &= std::isfinite (x[i]) && std::abs (x[i]) < 8.0f; d += std::abs (x[i] - ref[i]); }
+                CHECK (fin && d > 1.0, juce::String ("Reese ") + what + ": finite and audible");
+            };
+            { auto s = base; s.fmtOn = true; s.fmtVowel = 0.5f; check ("formant", s); }
+            { auto s = base; s.fmtOn = true; s.fmtMove = 1; s.fmtLfoInc = 4.0 / fs; s.fmtShape = 3; check ("formant LFO", s); }
+            { auto s = base; s.cp = 1; s.cpFb = 0.9f; check ("comb", s); }
+            { auto s = base; s.cp = 2; s.cpStages = 12; s.cpFb = -0.8f; s.cpLfoInc = 2.0 / fs; check ("phaser", s); }
+            { auto s = base; s.wave = 3; s.stack = 2; check ("Hoover + stack", s); }
+            { auto s = base; s.fm = 0.8f; check ("cross-FM", s); }
+            { auto s = base; s.sync = true; s.syncRatio = 3.3f; check ("sync", s); }
+            for (int t = 1; t <= 4; ++t) { auto s = base; s.shp = t; s.shpAmt = 0.8f; s.shpSym = 0.4f; check ("shaper", s); }
+            // the formant's vowels: U is darker than A
+            auto bright = [&] (float vow)
+            {
+                auto s = base; s.fmtOn = true; s.fmtVowel = vow; s.fmtMix = 1.0f;
+                const auto x = reeseRun (s, 110.0, 0.5, 2);
+                std::vector<float> hp (x.size()); float lp = 0; const float c = (float) (1.0 - std::exp (-2.0 * kPi * 1500.0 / fs));
+                for (size_t i = 0; i < x.size(); ++i) { lp += (x[i] - lp) * c; hp[i] = x[i] - lp; }
+                return rmsOf (hp, 4800, (int) x.size()) / rmsOf (x, 4800, (int) x.size());
+            };
+            CHECK (bright (1.0f) < bright (0.0f) * 0.7, "the formant: U is darker than A");
+        }
+        // ---- CPU, measured directly (less noisy): each effect on 10 s of stereo noise; one Reese note (4 voices) with each part,
+        //      times 8 for 8 notes (the quickest of 3 runs each)
+        {
+            auto timeIt = [&] (std::function<void()> f) { double best = 1.0e9; for (int r = 0; r < 3; ++r) { const auto t0 = juce::Time::getMillisecondCounterHiRes(); f(); best = std::min (best, juce::Time::getMillisecondCounterHiRes() - t0); } return best; };
+            auto v = defaults();
+            const int N = (int) (10.0 * fs);
+            std::vector<float> nL ((size_t) N), nR ((size_t) N); for (int i = 0; i < N; ++i) { nL[(size_t) i] = 0.2f * noise(); nR[(size_t) i] = 0.2f * noise(); }
+            juce::String line = "  Effect alone, % of one core:";
+            auto fxCost = [&] (const char* name, std::function<void (float*, float*, int)> proc)
+            {
+                std::vector<float> L (nL), R (nR);
+                const double ms = timeIt ([&] { for (int pos = 0; pos < N; pos += 256) proc (L.data() + pos, R.data() + pos, std::min (256, N - pos)); });
+                line << " " << name << " " << juce::String (ms / 100.0, 2);
+                return ms / 100.0;
+            };
+            DubDelay dd; dd.prepare (fs); SpringReverb sp; sp.prepare (fs); GatedReverb gt; gt.prepare (fs); PlateReverb pl; pl.prepare (fs);
+            MicroWidener wd; wd.prepare (fs); DimensionChorus dm; dm.prepare (fs); IrReverb ir; ir.prepare (fs, 256);
+            ir.load (makeSpaceImpulse (2, fs, 10.0), fs);
+            for (int k = 0; k < 40 && ! ir.ready(); ++k) { std::vector<float> a (256), b (256); ir.process (a.data(), b.data(), 256, v.data(), ctx, nullptr); juce::Thread::sleep (25); }
+            double worstFx = 0;
+            worstFx = std::max (worstFx, fxCost ("Dub", [&] (float* l, float* r, int n) { dd.process (l, r, n, v.data(), ctx, true, nullptr); }));
+            worstFx = std::max (worstFx, fxCost ("Spring", [&] (float* l, float* r, int n) { sp.process (l, r, n, v.data(), ctx, nullptr); }));
+            worstFx = std::max (worstFx, fxCost ("Gated", [&] (float* l, float* r, int n) { gt.process (l, r, n, v.data(), ctx, 0, nullptr, nullptr); }));
+            worstFx = std::max (worstFx, fxCost ("Plate", [&] (float* l, float* r, int n) { pl.process (l, r, n, v.data(), ctx, nullptr); }));
+            worstFx = std::max (worstFx, fxCost ("Widen", [&] (float* l, float* r, int n) { wd.process (l, r, n, v.data(), ctx); }));
+            worstFx = std::max (worstFx, fxCost ("Dim", [&] (float* l, float* r, int n) { dm.process (l, r, n, v.data(), ctx); }));
+            worstFx = std::max (worstFx, fxCost ("IR Hall (3.2 s)", [&] (float* l, float* r, int n) { ir.process (l, r, n, v.data(), ctx, nullptr); }));
+            std::cout << line << std::endl;
+            CHECK (worstFx < 6.0, "each new effect costs under 6% of a core");
+            { juce::dsp::Convolution c (juce::dsp::Convolution::NonUniform { 1024 }); c.prepare ({ fs, 256, 2 }); CHECK (c.getLatency() == 0, "the IR Reverb's convolution adds no latency"); }
+            for (int q = 0; q < 3; ++q)
+            {
+                static const char* qn[3] = { "Eco", "Normal", "High" };
+                auto noteCost = [&] (ReeseSettings rs)
+                {
+                    rs.quality = q; rs.voices = 2;
+                    const int M = (int) (4.0 * fs);
+                    return timeIt ([&]
+                    {
+                        ReeseOsc o; o.prepare (fs); o.start (1, 3);
+                        float a = 0, b = 0, acc = 0;
+                        for (int i = 0; i < M; i += 32) { o.setFrequency (110.0, 172.0, rs); for (int j = 0; j < 32; ++j) { o.tick (a, b); acc += a; } }
+                        if (acc == 12345.0f) std::cout << "";
+                    }) / 40.0 * 8.0;   // (4 s of one note -> % of a core, x8 notes)
+                };
+                ReeseSettings base; base.cents = 14.0f;
+                const double b0 = noteCost (base);
+                juce::String rl; rl << "  Reese, 8 notes x 4 voices, " << qn[q] << " (" << juce::String (b0, 2) << "%), each part adds:";
+                struct P { const char* n; std::function<void (ReeseSettings&)> f; };
+                std::vector<P> parts = {
+                    { "Formant", [] (ReeseSettings& s) { s.fmtOn = true; s.fmtMove = 1; s.fmtLfoInc = 1.0 / 48000.0; } },
+                    { "Bloom", [] (ReeseSettings& s) { s.bloom = 1.0f; } },
+                    { "Split", [] (ReeseSettings& s) { s.split = true; s.highDrive = 0.6f; s.lowDrive = 0.2f; } },
+                    { "Shaper", [] (ReeseSettings& s) { s.shp = 1; s.shpAmt = 0.5f; } },
+                    { "Comb", [] (ReeseSettings& s) { s.cp = 1; } },
+                    { "Phaser", [] (ReeseSettings& s) { s.cp = 2; s.cpStages = 12; } },
+                    { "Hoover+stack", [] (ReeseSettings& s) { s.wave = 3; s.stack = 2; } },
+                    { "FM+Sync", [] (ReeseSettings& s) { s.fm = 0.5f; s.sync = true; s.syncRatio = 2.5f; } },
+                    { "Drift", [] (ReeseSettings& s) { s.drift = 0.5f; } },
+                    { "all of them", [] (ReeseSettings& s) { s.fmtOn = true; s.bloom = 1.0f; s.split = true; s.shp = 1; s.cp = 2; s.cpStages = 12; s.wave = 3; s.stack = 2; s.fm = 0.5f; s.sync = true; s.drift = 0.5f; } } };
+                double worst = 0;
+                for (auto& pp : parts) { auto s2 = base; pp.f (s2); const double c = noteCost (s2) - b0; worst = std::max (worst, c); rl << " " << pp.n << " +" << juce::String (c, 2); }
+                std::cout << rl << std::endl;
+                CHECK (worst < 32.0, juce::String ("the Reese with everything on stays under 32% of a core more (8 notes) at ") + qn[q]);
+            }
+        }
+        // ---- CPU: each new effect and each Reese part at each quality (8 notes; added to the same patch without it)
+        {
+            auto cpuOf = [&] (std::function<void (MegaSynthProcessor&)> setup, bool reese, int quality)
+            {
+                auto p = make(); setP (*p, P_quality, (float) quality);
+                if (reese) { setP (*p, P_osc1Gain, 0.0f); setP (*p, P_rsLevel, 0.8f); setP (*p, P_rsVoices, 2.0f); }
+                if (setup) setup (*p);
+                render (*p, 0.3, {}); juce::Thread::sleep (100);
+                double best = 1.0e9;
+                for (int run = 0; run < 3; ++run)   // (the quickest of three: less noise from whatever else the machine is doing)
+                {
+                    double secs = 0;
+                    tg::resetVoiceRandom();
+                    render (*p, 2.0, chord (0.0, 1.9, { 36, 43, 48, 52, 55, 60, 64, 67 }), nullptr, &secs);
+                    best = std::min (best, secs / 2.0 * 100.0);
+                }
+                return best;
+            };
+            juce::String line;
+            for (int q = 0; q < 3; ++q)
+            {
+                static const char* qn[3] = { "Eco", "Normal", "High" };
+                const double base = cpuOf (nullptr, false, q);
+                line << "  " << qn[q] << " (plain " << juce::String (base, 1) << "%):";
+                struct E { const char* n; int slot; };
+                for (auto e : { E { "Dub", FS_Dub }, E { "Spring", FS_Spring }, E { "Gated", FS_Gated }, E { "Plate", FS_Plate }, E { "Widen", FS_Widen }, E { "Dim", FS_Dim }, E { "IR", FS_Ir } })
+                {
+                    const double c = cpuOf ([&] (MegaSynthProcessor& p) { setP (p, fxOnParam (e.slot), 1.0f); if (e.slot == FS_Ir) { p.updateIrImpulse (true); juce::Thread::sleep (300); } }, false, q);
+                    line << " " << e.n << " +" << juce::String (c - base, 1);
+                    CHECK (c - base < 10.0, juce::String (e.n) + " costs under 10% of a core at " + qn[q]);
+                }
+                const double rb = cpuOf (nullptr, true, q);
+                line << "\n    Reese (8 notes, 4 voices) " << juce::String (rb, 1) << "%:";
+                struct Rp { const char* n; std::function<void (MegaSynthProcessor&)> f; };
+                std::vector<Rp> parts = {
+                    { "Formant", [] (MegaSynthProcessor& p) { setP (p, P_rsFmtOn, 1.0f); setP (p, P_rsFmtMove, 1.0f); } },
+                    { "Bloom", [] (MegaSynthProcessor& p) { setP (p, P_rsBloom, 1.0f); } },
+                    { "Split", [] (MegaSynthProcessor& p) { setP (p, P_rsSplitOn, 1.0f); } },
+                    { "Shaper", [] (MegaSynthProcessor& p) { setP (p, P_rsShpType, 1.0f); } },
+                    { "Comb", [] (MegaSynthProcessor& p) { setP (p, P_rsCpMode, 1.0f); } },
+                    { "Phaser", [] (MegaSynthProcessor& p) { setP (p, P_rsCpMode, 2.0f); setP (p, P_rsCpStages, 2.0f); } },
+                    { "Hoover", [] (MegaSynthProcessor& p) { setP (p, P_rsWave, 3.0f); setP (p, P_rsStack, 2.0f); } },
+                    { "FM+Sync", [] (MegaSynthProcessor& p) { setP (p, P_rsFm, 0.5f); setP (p, P_rsSync, 1.0f); } },
+                    { "Drift", [] (MegaSynthProcessor& p) { setP (p, P_rsDrift, 0.5f); } } };
+                for (auto& rp : parts)
+                {
+                    const double c = cpuOf ([&] (MegaSynthProcessor& p) { setP (p, P_rsLevel, 0.8f); setP (p, P_osc1Gain, 0.0f); setP (p, P_rsVoices, 2.0f); rp.f (p); }, true, q);
+                    line << " " << rp.n << " +" << juce::String (c - rb, 1);
+                    CHECK (c - rb < 15.0, juce::String ("Reese ") + rp.n + " costs under 15% of a core more at " + qn[q]);
+                }
+                line << "\n";
+            }
+            std::cout << "  CPU (% of one core, added):\n" << line;
+        }
+    };
+    if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_SPACEONLY", {}).isNotEmpty())
+    {
+        spaceTests();
+        std::cout << (failures == 0 ? "SPACE TESTS PASSED" : "FAILURES: " + std::to_string (failures)) << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
     if (juce::SystemStats::getEnvironmentVariable ("MEGASYNTH_BREAKONLY", {}).isNotEmpty())
     {
         breakTests();
@@ -8734,12 +9308,12 @@ int main()
             for (int t = 0; t < tabs->getNumTabs(); ++t)
                 if (auto* pg = tabs->getTabContentComponent (t); pg != nullptr && pg->getParentComponent() == nullptr) walk (pg);
         juce::StringArray before;
-        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.69.txt").loadFileAsString());
+        before.addLines (juce::File (__FILE__).getSiblingFile ("ui_controls_v0.1.70.txt").loadFileAsString());
         before.removeEmptyStrings();
         juce::StringArray lost;
         // (v0.1.69: the Fill Key and Fill Length are replaced by the Fill pad and Size, as asked; they're kept, hidden, for older projects)
         for (auto& id : before) if (ids.count (id) == 0 && id != "bsFillKey" && id != "bsFillLen") lost.add (id);
-        std::cout << "  " << before.size() << " parameters had a control in v0.1.69 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React, the Core A / B slots, Core Envelope, Key Entry, Slice Keys and the Break React rows added, the Breaks tab, Break 4, the layer sequencer, the Fill Pattern and pad, Fixed velocity and Break React Sequencer added; the Fill Key and Fill Length replaced by the pad and Size; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
+        std::cout << "  " << before.size() << " parameters had a control in v0.1.70 (Performance FX, the Granular Synth, the Break Chopper / Sequencer, three breaks, chop mode, Marker Snap, the pattern tools, fills, the one Filter list, the routes, Akai Stretch, the Reese engine, Break React, the Core A / B slots, Core Envelope, Key Entry, Slice Keys and the Break React rows added, the Breaks tab, Break 4, the layer sequencer, the Fill Pattern and pad, Fixed velocity and Break React Sequencer added; the Fill Key and Fill Length replaced by the pad and Size, the v0.1.70 Space effects, ducking and Reese additions added; v0.1.40's 466 all kept); now " << (int) ids.size() << std::endl;
         CHECK (before.size() > 400 && lost.isEmpty(), "every parameter keeps its control" + (lost.isEmpty() ? juce::String() : ": lost " + lost.joinIntoString (", ")));
         // the tabs, in signal-flow order
         CHECK (tabs != nullptr && tabs->getTabNames() == juce::StringArray ({ "Perform", "Overview", "Oscillators", "Breaks", "Mixer", "Filters", "Envelopes",
@@ -10155,6 +10729,7 @@ int main()
     presetBankTests();
     granTests();
     breakTests();
+    spaceTests();
     hardTests();
     lfoTests();
     arpTests();

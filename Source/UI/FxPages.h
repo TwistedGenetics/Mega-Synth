@@ -88,7 +88,7 @@ private:
     std::array<int, tg::FS_COUNT> order {};
     uint64_t lastKey = ~0ull;
     int dragFrom = -1, dragY = 0, dragOver = -1;
-    static constexpr int kRowH = 40, kTop = 30;
+    static constexpr int kRowH = 34, kTop = 30;   // (16 slots since v0.1.70)
 };
 
 } // namespace tgui

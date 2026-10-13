@@ -190,6 +190,7 @@ void MegaSynthProcessor::prepareToPlay (double sr, int block)
     fillSnapshot (0);
     const double tempo = snap.fxTempo;
     engine.fx().updateImpulse (juce::jlimit (0.5, 4.5, syncSeconds (kListReverbSync, snap.i (P_reverbSync), tempo, snap.f (P_reverbSize))));
+    updateIrImpulse (true);
     sustained.fill (false); sustainDown = false;
     seqRunning = false;
     seqHeldKey = -1;
@@ -686,6 +687,51 @@ juce::String MegaSynthProcessor::convertOldFills (bool always)
     return report;
 }
 
+juce::String MegaSynthProcessor::throwPadText() const
+{
+    const int k = throwPadKind.load(), n = throwPadNum.load();
+    if (k == 1) return "Note " + juce::String (n) + " (" + juce::MidiMessage::getMidiNoteName (n, true, true, 3) + ")";
+    if (k == 2) return "CC " + juce::String (n);
+    return "none";
+}
+
+// The IR Reverb's impulse (message thread): your file or a built-in one, cut to Length (faded out over its last 30 ms),
+// reversed if asked, its energy normalised; loaded into the convolution in the background. Only while the effect is on.
+void MegaSynthProcessor::updateIrImpulse (bool force)
+{
+    if (raw[P_sxOnIr]->load() < 0.5f) return;
+    const int type = juce::jlimit (0, 4, juce::roundToInt (raw[P_sxIrType]->load()));
+    const float lenS = juce::jlimit (0.1f, 10.0f, raw[P_sxIrLen]->load());
+    const bool rev = raw[P_sxIrReverse]->load() > 0.5f;
+    const auto* w = currentWave[kSlotIr].load();
+    juce::String key; key << type << "|" << juce::String (lenS, 2) << "|" << (rev ? 1 : 0) << "|" << (juce::pointer_sized_int) (type == 0 ? w : nullptr) << "|" << sampleRate;
+    if (key == lastIrKey && ! force) return;
+    lastIrKey = key;
+    juce::AudioBuffer<float> ir;
+    double rate = sampleRate;
+    if (type == 0)
+    {
+        if (w == nullptr || w->length < 2) { ir.setSize (2, 1); ir.clear(); engine.fx().loadIr (std::move (ir), rate); return; }
+        rate = w->sampleRate;
+        ir.setSize (2, w->length);
+        for (int c = 0; c < 2; ++c) std::copy (w->ch[c].begin(), w->ch[c].begin() + w->length, ir.getWritePointer (c));
+    }
+    else ir = tg::makeSpaceImpulse (type, sampleRate, 10.0);
+    const int len = juce::jlimit (2, ir.getNumSamples(), (int) (lenS * rate));
+    juce::AudioBuffer<float> cut (2, len);
+    for (int c = 0; c < 2; ++c) cut.copyFrom (c, 0, ir, std::min (c, ir.getNumChannels() - 1), 0, len);
+    const int fade = std::min (len / 2, (int) (0.03 * rate));
+    for (int i = 0; i < fade; ++i) { const float g = (float) i / (float) fade; for (int c = 0; c < 2; ++c) cut.setSample (c, len - 1 - i, cut.getSample (c, len - 1 - i) * g); }
+    if (rev) cut.reverse (0, len);
+    if (type == 0)
+    {
+        double e = 0.0;
+        for (int c = 0; c < 2; ++c) for (int i = 0; i < len; ++i) e += (double) cut.getSample (c, i) * cut.getSample (c, i);
+        if (e > 1.0e-12) cut.applyGain ((float) (0.5 / std::sqrt (e * 0.5)));
+    }
+    engine.fx().loadIr (std::move (cut), rate);
+}
+
 juce::String MegaSynthProcessor::fillPadText() const
 {
     const int k = fillPadKind.load(), n = fillPadNum.load();
@@ -1105,6 +1151,26 @@ void MegaSynthProcessor::handleMidi (const juce::MidiMessage& m)
             if (down != fillPadCcDown) { fillPadCcDown = down; bsFillPress (down); }
             return;
         }
+    }
+    // (v0.1.70) the Dub Delay's Throw pad: Learn takes the next note or CC; then it holds the Throw (and isn't played)
+    if (throwPadLearn.load() && (m.isNoteOn() || m.isController()))
+    {
+        throwPadKind = m.isNoteOn() ? 1 : 2;
+        throwPadNum = m.isNoteOn() ? m.getNoteNumber() : m.getControllerNumber();
+        throwPadLearn = false;
+        return;
+    }
+    if (const int kind = throwPadKind.load(); kind != 0)
+    {
+        const int num = throwPadNum.load();
+        if (kind == 1 && m.isNoteOnOrOff() && m.getNoteNumber() == num) { engine.fx().setThrowPad (m.isNoteOn()); return; }
+        if (kind == 2 && m.isController() && m.getControllerNumber() == num) { engine.fx().setThrowPad (m.getControllerValue() >= 64); return; }
+    }
+    // the Duck note: a hit for the Space ducks (and isn't played)
+    if (m.isNoteOnOrOff() && snap.f (P_sxDuckNote) >= 0.0f && m.getNoteNumber() == juce::roundToInt (snap.f (P_sxDuckNote)))
+    {
+        if (m.isNoteOn()) engine.fx().addSpaceHits (tg::SH_Note);
+        return;
     }
     // DNA Sequencer pattern select: four notes choose A-D (and aren't played)
     if (m.isNoteOnOrOff())
@@ -1785,6 +1851,7 @@ void MegaSynthProcessor::timerCallback()
     const double tempo = ht > 0 ? ht : (double) raw[P_seqTempo]->load();
     const int syncIdx = (int) raw[P_reverbSync]->load();
     engine.fx().updateImpulse (juce::jlimit (0.5, 4.5, syncSeconds (kListReverbSync, syncIdx, tempo, raw[P_reverbSize]->load())));
+    updateIrImpulse (false);
 
     // Euclidean mode: re-flow the existing notes onto the new pattern when pulses/rotate/length change
     const int cur[4] = { (int) raw[P_seqGenMode]->load(), juce::roundToInt (raw[P_seqEuclidPulses]->load()),
@@ -1864,7 +1931,7 @@ bool MegaSynthProcessor::loadSampleData (const juce::MemoryBlock& data, const ju
         if (it == waveKeep.end()) break;
         waveKeep.erase (it);
     }
-    if (slot >= kSlotBreak) refreshBreakAnalysis (true);
+    if (isBreakSlot (slot)) refreshBreakAnalysis (true);
     return true;
 }
 
@@ -1876,7 +1943,7 @@ void MegaSynthProcessor::clearSample (int slot)
     waveData[slot].reset();
     waveShared[slot].reset();
     waveName[slot].clear();
-    if (slot >= kSlotBreak) refreshBreakAnalysis (true);
+    if (isBreakSlot (slot)) refreshBreakAnalysis (true);
 }
 
 juce::String MegaSynthProcessor::getSampleStatus (int slot) const
@@ -1917,6 +1984,8 @@ void MegaSynthProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("randomGen", juce::JSON::toString (randomOptions.toVar(), true), nullptr);   // (the Random Patch page's settings)
     state.setProperty ("fillPadKind", fillPadKind.load(), nullptr);
     state.setProperty ("fillPadNum", fillPadNum.load(), nullptr);
+    state.setProperty ("throwPadKind", throwPadKind.load(), nullptr);
+    state.setProperty ("throwPadNum", throwPadNum.load(), nullptr);
     state.setProperty ("patchMeta", juce::JSON::toString (getPatchMeta().toVar(), true), nullptr);
     {
         const juce::ScopedLock sl (waveLock);
@@ -1969,6 +2038,7 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
     if (version < 27) setV27DefaultsForOldPatch();
     if (version < 28) setV28DefaultsForOldPatch();
     if (version < 29) setV29DefaultsForOldPatch();
+    if (version < 30) setV30DefaultsForOldPatch();
     fxRack.fromVar (juce::JSON::parse (tree.getProperty ("fxRack").toString()));   // older projects: default order
     lfoShapes.fromVar (juce::JSON::parse (tree.getProperty ("lfoShapes").toString()));
     arpStore.fromVar (juce::JSON::parse (tree.getProperty ("arp").toString()));
@@ -2013,6 +2083,8 @@ void MegaSynthProcessor::setStateInformation (const void* data, int size)
 
     fillPadKind = juce::jlimit (0, 2, (int) tree.getProperty ("fillPadKind", 0));
     fillPadNum = (int) tree.getProperty ("fillPadNum", -1);
+    throwPadKind = juce::jlimit (0, 2, (int) tree.getProperty ("throwPadKind", 0));
+    throwPadNum = (int) tree.getProperty ("throwPadNum", -1);
     if (version < 29) { const auto r = convertOldFills (false); if (r.isNotEmpty()) lastFillConversion = "Older project: " + r; }
     lastEuclid[0] = -1;   // don't re-flow the restored sequence
     if (! restoring)
@@ -2215,6 +2287,7 @@ juce::String MegaSynthProcessor::importBrowserPatch (const juce::String& text)
         if (extra == nullptr || ! extra->hasProperty ("cAEnvMode")) setV27DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bcSliceKeys")) setV28DefaultsForOldPatch();
         if (extra == nullptr || ! extra->hasProperty ("bcSliceMode4")) { setV29DefaultsForOldPatch(); importLegacyFills = true; }
+        if (extra == nullptr || ! extra->hasProperty ("sxOnDub")) setV30DefaultsForOldPatch();
         msegs.fromVar (patch["msegs"]);
         scenes.fromVar (patch["scenes"]);
         sceneEditIndex = juce::jlimit (0, 3, (int) patch.getProperty ("sceneEdit", 0));
@@ -2583,6 +2656,97 @@ void MegaSynthProcessor::applyReactPreset (int k)
             break;
     }
     pushHistory (juce::String ("Break React: ") + reactPresetName (k));
+}
+
+// ---- v0.1.70: the Space and Reese presets: only their own controls (back to their defaults first), one undo step
+const char* MegaSynthProcessor::spacePresetName (int k)
+{
+    static const char* n[kNumSpacePresets] = { "Clear (all off)", "Dub Throws", "Ragga Spring", "Ducked Hall", "Gated Snare", "Frozen Pad" };
+    return n[juce::jlimit (0, kNumSpacePresets - 1, k)];
+}
+
+void MegaSynthProcessor::applySpacePreset (int k)
+{
+    using namespace tg;
+    auto set = [this] (int i, float plain) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (plain)); prm->endChangeGesture(); };
+    for (int i = P_sxOnDub; i <= P_sxIrDuckSrc; ++i) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture(); }
+    switch (k)
+    {
+        case 1:   // dub throws: hold the pad (or automate Throw) on the last beat; a little spring under it
+            set (P_sxOnDub, 1); set (P_sxMixDub, 0.6f); set (P_sxDubMode, 0); set (P_sxDubSync, 6); set (P_sxDubFb, 0.72f);
+            set (P_sxDubHP, 300.0f); set (P_sxDubLP, 2600.0f); set (P_sxDubRes, 0.3f); set (P_sxDubDrive, 0.4f);
+            set (P_sxOnSpring, 1); set (P_sxMixSpring, 0.22f); set (P_sxSprTension, 0.6f);
+            break;
+        case 2:   // ragga spring: three wet springs, a quarter-note echo into them
+            set (P_sxOnSpring, 1); set (P_sxMixSpring, 0.5f); set (P_sxSprTension, 0.75f); set (P_sxSprDecay, 2.5f); set (P_sxSprTone, 3500.0f); set (P_sxSprCount, 1);
+            set (P_sxOnDub, 1); set (P_sxMixDub, 0.35f); set (P_sxDubMode, 2); set (P_sxDubSync, 4); set (P_sxDubFb, 0.45f); set (P_sxDubLP, 3000.0f);
+            break;
+        case 3:   // a hall that ducks under the break's kicks
+            set (P_sxOnIr, 1); set (P_sxMixIr, 0.5f); set (P_sxIrType, 2);
+            set (sxDuckParam (SD_Ir, SDF_Amt), 0.75f); set (sxDuckParam (SD_Ir, SDF_Src), 0); set (sxDuckParam (SD_Ir, SDF_Att), 2.0f); set (sxDuckParam (SD_Ir, SDF_Rel), 320.0f);
+            break;
+        case 4:   // the 80s gated snare: a big bright room, cut an eighth after each snare
+            set (P_sxOnGated, 1); set (P_sxMixGated, 0.7f); set (P_sxGateTrig, 2); set (P_sxGateSync, 3); set (P_sxGateShape, 0);
+            set (P_sxGateSize, 0.85f); set (P_sxGateTone, 9000.0f);
+            break;
+        case 5:   // a long plate with movement, a dimension chorus and the widener: hit Freeze to hold it
+            set (P_sxOnPlate, 1); set (P_sxMixPlate, 0.6f); set (P_sxPlDecay, 6.0f); set (P_sxPlDamp, 0.3f); set (P_sxPlMod, 0.5f);
+            set (P_sxOnDim, 1); set (P_sxDim1, 0); set (P_sxDim2, 1);
+            set (P_sxOnWiden, 1); set (P_sxMixWiden, 0.5f);
+            break;
+        default: break;
+    }
+    pushHistory (juce::String ("Space: ") + spacePresetName (k));
+}
+
+const char* MegaSynthProcessor::reesePresetName (int k)
+{
+    static const char* n[kNumReesePresets] = { "Plain Reese", "Talking Neuro", "Bloom Reese", "Split Distort", "Hoover", "Sync Growl" };
+    return n[juce::jlimit (0, kNumReesePresets - 1, k)];
+}
+
+void MegaSynthProcessor::applyReesePreset (int k)
+{
+    using namespace tg;
+    auto set = [this] (int i, float plain) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (plain)); prm->endChangeGesture(); };
+    auto reset = [this] (int a, int b) { for (int i = a; i <= b; ++i) { auto* prm = params[(size_t) i]; prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture(); } };
+    reset (P_rsLevel, P_rsTone); reset (P_rsFmtOn, P_rsDriftRate);
+    set (P_rsLevel, 0.8f); set (P_rsMonoBelow, 120.0f);
+    switch (k)
+    {
+        case 1:   // talking neuro: the vowels move every beat (a random vowel each time), into the drive
+            set (P_rsVoices, 1); set (P_rsDetMode, 2); set (P_rsBeat, 5); set (P_rsDrive, 0.45f); set (P_rsSub, 0.4f); set (P_rsNotch, 0.25f);
+            set (P_rsFmtOn, 1); set (P_rsFmtVowel, 0.25f); set (P_rsFmtRes, 0.7f); set (P_rsFmtMove, 1); set (P_rsFmtSync, 4); set (P_rsFmtShape, 3); set (P_rsFmtDepth, 0.9f);
+            set (P_rsFmtPos, 1);
+            break;
+        case 2:   // bloom: each note opens from one voice into a wide Reese over a second and a half
+            set (P_rsCents, 24.0f); set (P_rsBloom, 1.5f); set (P_rsBloomCurve, 1); set (P_rsWidth, 0.85f); set (P_rsTwist, 0.2f); set (P_rsSub, 0.5f); set (P_rsTone, 0.8f);
+            break;
+        case 3:   // split distort: the sub clean, the top torn up
+            set (P_rsVoices, 2); set (P_rsSub, 0.6f); set (P_rsSplitOn, 1); set (P_rsSplitFreq, 130.0f); set (P_rsLowDrive, 0.05f); set (P_rsHighDrive, 0.85f);
+            set (P_rsHighTone, 6000.0f); set (P_rsShpType, 2); set (P_rsShpAmt, 0.4f);
+            break;
+        case 4:   // hoover: PWM saws stacked in octaves, a pitch drop at the start of each note
+            set (P_rsVoices, 2); set (P_rsWave, 3); set (P_rsCents, 28.0f); set (P_rsStack, 2); set (P_rsPdMode, 1); set (P_rsPdAmt, 7.0f); set (P_rsPdTime, 0.35f);
+            set (P_rsPwmRate, 0.8f); set (P_rsPwmDepth, 0.3f); set (P_rsWidth, 1.0f); set (P_rsRotate, 0.3f); set (P_rsTone, 0.85f);
+            break;
+        case 5:   // sync growl: synced, cross-modulated, folded and combed, drifting a little
+            set (P_rsSync, 1); set (P_rsSyncRatio, 2.6f); set (P_rsFmEnvAmt, 0.4f); set (P_rsFm, 0.25f); set (P_rsShpType, 1); set (P_rsShpAmt, 0.3f);
+            set (P_rsCpMode, 1); set (P_rsCpFb, 0.6f); set (P_rsCpOffset, 12.0f); set (P_rsCpSync, 5); set (P_rsCpMix, 0.4f); set (P_rsDrift, 0.3f); set (P_rsSub, 0.4f);
+            break;
+        default: break;
+    }
+    pushHistory (juce::String ("Reese: ") + reesePresetName (k));
+}
+
+void MegaSynthProcessor::setV30DefaultsForOldPatch()
+{
+    for (int i = P_sxOnDub; i <= P_rsDriftRate; ++i)
+    {
+        auto* prm = params[(size_t) i];
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getDefaultValue()); prm->endChangeGesture();
+    }
+    throwPadKind = 0; throwPadNum = -1;
 }
 
 void MegaSynthProcessor::setV29DefaultsForOldPatch()

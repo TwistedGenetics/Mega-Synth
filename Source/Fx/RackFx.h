@@ -123,6 +123,7 @@ public:
         setDefaultOrder(); setCurvePreset (0);
         if (! v.isObject()) return;
         juce::StringArray ord; ord.addTokens (v["order"].toString(), ",", {});
+        if (ord.size() == kFxSlotsBefore70) for (int k = kFxSlotsBefore70; k < FS_COUNT; ++k) ord.add (juce::String (k));   // (before v0.1.70: the new slots after it)
         if (ord.size() == FS_COUNT) { std::array<int, FS_COUNT> o; for (int i = 0; i < FS_COUNT; ++i) o[(size_t) i] = ord[i].getIntValue(); setOrder (o); }
         juce::StringArray c; c.addTokens (v["shaperCurve"].toString(), ",", {});
         if (c.size() == kCurve) for (int i = 0; i < kCurve; ++i) pts[(size_t) i].store (juce::jlimit (0.0f, 1.0f, c[i].getFloatValue()));

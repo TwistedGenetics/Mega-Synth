@@ -63,12 +63,12 @@ The tabs follow the signal: the oscillators, the mix, the filters, the envelopes
 |---|---|
 | Perform | Perform, Performance FX |
 | Overview | (one page) |
-| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring, Granular Synth, Reese, Core A, Core B |
+| Oscillators | Osc 1-3 & Sub, Wavetables, Complex & SuperSaw, Unison, FM & Ring, Granular Synth, Reese, Reese Shape, Core A, Core B |
 | Breaks | Break Chopper, Break Sequencer, Break React |
 | Mixer | (one page) |
 | Filters | (one page) |
 | Envelopes | Amp & Filter, Mod Envelopes, Pitch Envelope, MSEG 1 & 2 |
-| FX & Mutation | Note Mutation, Bus Mutation, Space, Dirt, Motion, Rack |
+| FX & Mutation | Note Mutation, Bus Mutation, Space, Dub & Spring, Reverbs, Width, Ducking, Dirt, Motion, Rack |
 | Modulation | LFOs, Mod Matrix, Assignments, Macros & Scenes, Cell Instability |
 | Sequencers | Step Sequencer, Arp / Chord, DNA Sequencer |
 | Lab | Mutate / Lab, Capture, Random Patch |
@@ -98,9 +98,22 @@ Moved from earlier versions:
 | Oscillators > Break Chopper, Oscillators > Break React (v0.1.68) | Breaks > Break Chopper, Breaks > Break React |
 | Sequencers > Break Sequencer (v0.1.68) | Breaks > Break Sequencer |
 
-## Effects (FX & Mutation > Space / Dirt / Motion / Rack)
+## Effects (FX & Mutation > Space / Dub & Spring / Reverbs / Width / Ducking / Dirt / Motion / Rack)
 
 - **Space**: Tape / BBD Delay, 90s Reverb + Shimmer, Juno Chorus and the Reverse Reverb (as before), plus **Stereo Tools**: Bass Mono below 50-300 Hz, Width 0-200% and a Haas delay (0-30 ms) on the top end. It works in mid/side and never touches the mid, so the mono sum is exactly unchanged.
+- **New in v0.1.70 (Dub & Spring, Reverbs, Width, Ducking):** seven new Rack slots, all **off by default** (an older project, patch or preset sounds exactly as before). Each is a slot like the others (On, and Return or Mix), so you can drag it anywhere in the Rack order. The reverbs and the Dub Delay add their sound to what they hear; Return sets how much.
+  - **Dub Delay** (Dub & Spring): a ping-pong delay with **Time** (free, or synced incl. dotted and triplet), **Feedback** 0-110%, a **Low Cut** and a **High Cut** (with **Resonance**) in the feedback, **Drive** (saturation in the feedback), and **Ping-Pong** width. Above 100% the repeats build into a dub runaway; a soft limiter in the loop keeps it bounded (measured: at 110% it settles about -11 dB with a peak of 0.75 from a -6 dB burst). The filter's resonance is level-compensated, so below 100% the repeats always die away.
+    - **Throw**: **Hold** (only what plays while Throw is held goes into the delay; let go and the repeats ring out), **Latch** (each press switches it), or **Always** (a normal delay). Throw is a parameter (automate it, MIDI-learn it) and has its own **Learn** pad: press Learn, then hit a pad or move a CC (64 and up is held). That note isn't played. The pad is saved with the project.
+  - **Spring Reverb** (Dub & Spring): 2 or 3 modelled springs. A loop per spring with a chain of stretched all-passes gives the "drip" chirp. **Tension** (how much drip), **Decay**, **Tone**, **Springs**. **Kick the tank** plays a knock (noise and a low thump) straight into the springs; it's a parameter, so you can automate or MIDI-learn it. **Freeze** holds the tail. It's a model of how springs behave, not a capture of any particular unit.
+  - **Plate Reverb** (Reverbs): Jon Dattorro's plate (1997): dense, bright, no early reflections. **Decay**, **Damping**, **Pre-delay**, **Width**, **Mod** (a little movement in the tail), **Freeze**. In the spirit of the EMT 140 plate, not a model of one.
+  - **Gated Reverb** (Reverbs): a big bright room (an 8-line feedback delay network) with a hard gate. The gate opens for **Length** (ms, or 1/32-1/2 synced) after each trigger: its own **Threshold**, or Break kicks / snares / hits, the main or layer sequencer, the sidechain, the synth's notes or the Duck note. **Gate**: Hard or Curved. **Size**, **Pre-delay**, **Tone**, **Freeze** (holds the room open).
+  - **IR Reverb** (Reverbs): convolution with an impulse. **Impulse**: your own file (**Load...**: WAV / AIFF / FLAC, up to 10 s, saved inside the project and patch like the breaks; **Clear**), or a built-in Room, Hall, Plate or Spring (original, synthesised by the plug-in; no copyrighted impulses). **Pre-delay**, **Length** (trims it), **High Cut**, **Low Cut**, **Width**, **Reverse**. The impulse loads in the background, so it may take a moment after a change to be heard.
+  - **Freeze** on the 90s Reverb (Space page), the Plate, Spring and Gated Reverb: the reverb stops hearing new sound and its tail holds, crossfaded in and out over about 30 ms, so it doesn't click. Measured over 3 s: Plate -0.3 dB, Spring -0.5 dB, Gated -1.2 dB, 90s Reverb -1.6 dB (it plays its recorded tail back as overlapping grains). Freeze is a parameter, so you can MIDI-learn it and modulate it.
+  - **Micro-pitch Widener** (Width): two copies, one pitched up and one down by **Cents** (0-25), each **Delay**ed (0-30 ms), one on each side. **Low Cut** (24 dB/octave) keeps the lows mono, **Width**, **Mix**. Measured with noise: the mono sum is +0.6 dB on the dry sound (it doesn't cancel), the side signal -8 dB, and at 50 Hz the side is -53 dB.
+  - **Dimension Chorus** (Width): two short delays swept in opposite directions and cross-mixed, with four mode buttons (combinable), after the Roland SDD-320. An approximation of the idea, not a circuit model.
+  - **Ducking** (its own page): every delay and reverb, old and new (Tape Delay, the 90s Reverbs, Dub Delay, Spring, Gated, Plate, IR), can duck under hits. **Amount**, **Attack**, **Release** and **Listens to**: Break kicks, Break snares, Break hits (Break React's detection, or a slice's React Type), the main or the layer sequencer, the sidechain input, the synth's notes, or the **Duck note** (a key that isn't played; put it in a MIDI clip). Off by default (Amount 0). It dips within 1 ms of the hit. The "Gain now" bars show each duck as it works.
+  - **Space Presets...** (on each of those pages): Dub Throws, Ragga Spring, Ducked Hall, Gated Snare, Frozen Pad, or Clear. They set only the new Space controls (the rest to their defaults first) as one undo step.
+  - **CPU** (each effect on its own, stereo, 48 kHz, our build machine): Dub Delay 0.6%, Spring 2.1%, Gated 1.7%, Plate 1.0%, Widener 0.2%, Dimension 0.1%, IR Reverb with the 3.2 s Hall about 3% of one core (a longer impulse costs more). They add no latency (the convolution is zero-latency).
 - **Dirt**:
   - **Vintage Sampler**: SP-1200 (12-bit, 26.04 kHz, no anti-alias filter: it aliases), Akai S950 (12-bit at Rate, a steep anti-alias filter and the resonant Filter), E-mu (12-bit, 27.8 kHz, gentle filters) or Free (Bits, Rate, Anti-Alias), with Noise (hiss that follows the signal, so a silent track stays silent) and an input clip. Quality High oversamples the clip.
   - **Multiband** (OTT style): three bands with adjustable crossovers, upward (up to 4:1 below -36 dB) and downward (up to 20:1 above -18 dB) compression per band, input and output gain per band, Depth, Time, Output and gain meters. The bands are split so that with nothing compressing they add back to exactly the input. Quality Eco updates the gains every 8 samples.
@@ -202,6 +215,20 @@ A second oscillator built for jungle and drum & bass basses: 2, 3 or 4 detuned v
 - **Quality:** the voices are band-limited at every setting. The Drive is oversampled x2 on Normal and x4 on High (with anti-aliasing on the curve itself); on Eco it isn't.
 - **Measured** (our build machine, 48 kHz): the beating period within 0.04% of the note value across 90/140/172/174 BPM and C1-C5 (1% allowed); at C7 on High, aliasing at -114 dB without the drive, -64 dB (2 saws, drive 60%) and -70 dB (2 squares, drive 100%); with full drive on Normal it's about -48 dB and on Eco about -25 dB. Mono Below 120 Hz takes the side signal under 70 Hz from -5 dB to -34 dB. The sub stays locked to voice 1 (no measurable drift over 18 s).
 - **CPU** (8 notes held): about 3-6% of one core for the Reese on top of Init at 2-4 voices; with the Drive at 4 voices, about 5% on Eco, 9% on Normal and 15% on High. The numbers vary a few percent from run to run.
+
+### Reese Shape (Oscillators > Reese Shape, new in v0.1.70)
+
+Eight additions to the Reese engine, all **off by default**: with them off, the Reese is bit-for-bit what it was. **Reese Presets...** (on both Reese pages): Plain Reese, Talking Neuro, Bloom Reese, Split Distort, Hoover, Sync Growl. They set only the Reese's controls, as one undo step.
+
+- **Formant:** three band-passes at a vowel's formants, morphing A-E-I-O-U with **Vowel**; **Resonance**, **Mix**, **Shift** (+/-12 st, all formants together). **Movement**: Off, a **Synced LFO** (4 bars to 1/16, Sine / Triangle / Saw / Random, with **LFO Depth**) or **Follow the notch** (it moves with the notch). **Position**: after or before the Drive. Vowel is a Mod Matrix destination, so Break React, the MSEGs or a macro can make it talk.
+- **Detune Bloom:** each note starts with no detune and opens to the set amount over **Bloom** (0-4 s, or synced 1/4 to 4 bars); **Curve** Linear or Exponential; **Reverse** starts three times as wide and closes in. It starts again with each new note. Measured: half the detune at half the time, within 2%.
+- **Split Drive:** a 24 dB/octave crossover (**Split**, 40-400 Hz), **Low Drive** and **High Drive** apart, and **High Tone**. The high band is high-passed again after its drive, so its new harmonics stay out of the sub. Measured on a 41 Hz Reese with a sub: full High Drive changes what's below 70 Hz by -21 dB (the single Drive at full changes it by -2 dB). With Split off, the single Drive works exactly as before.
+- **Shaper** (per voice, before the voices are summed, so the beating itself is shaped): **Fold**, **Tanh**, **Asym** or **Bitwise**, with **Amount** and **Symmetry**. Oversampled x2 at Quality High. It does alias: measured on a G#6 note with Fold at 60%, the energy away from the harmonics is -11 dB at Normal and -18.5 dB at High. Low notes alias much less.
+- **Comb / Phaser:** a **Comb** tuned to the note (Feedback +/-) or a **Phaser** (4, 8 or 12 stages) swept around it; **Rate** free or synced (4 bars to 1/16), **Depth**, **Offset** (st), **Mix**.
+- **Hoover mode:** a new **Waveform**, Hoover (PWM): pulse-width-modulated saws (**Pulse Width**, **PWM Rate**, **PWM Depth**) with a saw underneath; **Octave Stack** (an octave down, or down and up); and a per-note **Pitch Envelope**: Drop, Rise or Drop-Rise, **Env Amount** up to 24 st over **Env Time**. The Hoover preset is the classic stacked "Mentasm" style voicing. (The Waveform list grew by one, so a DAW automation lane drawn for Waveform before v0.1.70 is scaled differently; saved settings load as they were.)
+- **Cross-FM, Sync & Drift:** **Cross-FM** (voice 1 moves the others' phase); **Sync** (each voice's wave hard-synced to its own pitch, so the detune still beats) with **Ratio** 1-8; an **Envelope** (the amp envelope or Mod Env 1) with **Env Amt** on both. **Drift**: slow random pitch (up to +/-12 cents) and phase wander per voice, at **Drift Rate**. It's seeded per note, so a render repeats exactly. In Beats mode only the whole note drifts, so the beating stays locked to the tempo.
+- Every continuous control is a Mod Matrix destination; Mutate leaves them alone.
+- **CPU** (8 notes of a 4-voice Reese, on top of the Reese's own 3%; our build machine, a few tenths of a percent of noise): Formant +1.5%, Bloom +0-1%, Split Drive +3%, Shaper +3% (+6-7% at High, where it's oversampled), Comb +1%, Phaser +2%, Hoover with the octave stack +3.5%, Cross-FM with Sync +1%, Drift +0.5%. Everything on at once: about +14% on Eco and Normal, +20-22% on High.
 
 ## Break React (Breaks > Break React)
 

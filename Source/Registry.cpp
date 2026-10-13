@@ -59,6 +59,7 @@ namespace
         if (id.startsWith ("cA")) return "Core A";
         if (id.startsWith ("cB")) return "Core B";
         if (id.startsWith ("rx")) return "Break React";
+        if (id.startsWith ("sx")) return "Space";
         if (id.startsWith ("res")) return "Resonator";
         if (id.startsWith ("gr")) return "Granular";
         if (id.startsWith ("sp")) return "Spectral";
@@ -200,6 +201,7 @@ namespace
             if (id.startsWith ("rs")) { m.category = Category::Osc; m.group = MutGroup::None; }
             if (id.startsWith ("cA") || id.startsWith ("cB")) { m.category = Category::Osc; m.group = MutGroup::None; }   // the Core slots: not mutated   // the Reese engine: not mutated (old patches mutate as before)
             if (id.startsWith ("rx")) { m.category = Category::Osc; m.group = MutGroup::None; }   // Break-Reactive mode: not mutated
+            if (id.startsWith ("sx")) { m.category = Category::Fx; m.group = MutGroup::None; }   // the Space effects (v0.1.70): on the bus; not mutated
             if (id.startsWith ("bc")) { m.category = Category::Fx; m.group = MutGroup::None; }    // Break Chopper: on the bus, before the effects
             if (id.startsWith ("bs")) { m.category = Category::Seq; m.group = MutGroup::None; }
             if (id == "subRoute" || id == "subMono") { m.category = Category::Mixer; m.group = MutGroup::None; }   // routing: chosen, not mutated  // Granular Synth: per voice; not mutated (old patches mutate as before)
@@ -213,6 +215,14 @@ namespace
                 m.unit = (id.endsWith ("Fine") || id.endsWith ("Detune")) ? "cents" : id.endsWith ("Hz") ? "Hz" : id.endsWith ("Oct") ? "oct" : id.endsWith ("Semi") ? "st"
                        : (id.endsWith ("Dly") || id.endsWith ("Att") || id.endsWith ("Hold") || id.endsWith ("Dec") || id.endsWith ("Rel")) ? "s" : juce::String();
             if (id.startsWith ("rx")) m.unit = (id == "rxAttack" || id == "rxDecay" || id == "rxOffset" || id == "rxHuman") ? "ms" : id.endsWith ("Pitch") ? "st" : id == "rxNote" ? "note" : id.endsWith ("Cut") ? "oct" : juce::String();
+            if (id.startsWith ("sx"))
+                m.unit = (id.endsWith ("Att") || id.endsWith ("Rel") || id.endsWith ("Pre") || id == "sxGateLen" || id == "sxWidDelay") ? "ms"
+                       : (id == "sxDubTime" || id == "sxSprDecay" || id == "sxPlDecay" || id == "sxIrLen") ? "s"
+                       : (id == "sxDubHP" || id == "sxDubLP" || id == "sxSprTone" || id == "sxGateTone" || id == "sxWidLowCut" || id == "sxIrLP" || id == "sxIrHP") ? "Hz"
+                       : id == "sxWidCents" ? "cents" : id == "sxGateThr" ? "dB" : id == "sxDuckNote" ? "note" : juce::String();
+            if (id == "rsFmtShift" || id == "rsPdAmt" || id == "rsCpOffset") m.unit = "st";
+            if (id == "rsBloom" || id == "rsPdTime") m.unit = "s";
+            if (id == "rsSplitFreq" || id == "rsHighTone" || id == "rsCpRate" || id == "rsPwmRate" || id == "rsDriftRate") m.unit = "Hz";
             if (id == "mfCutoff") m.unit = "Hz";
             if (id == "mfDrive" || id == "outGain") m.unit = "dB";
             m.path = juce::String (categoryName (m.category)).toLowerCase() + "." + id;
@@ -221,7 +231,7 @@ namespace
             const bool admin = isAny (id, { "polyphony", "keyboardOctave", "bendRange", "seqLength", "seqEuclidPulses",
                                             "seqEuclidRotate", "seqTempo", "osc4Root", "wt2Root", "ccANum", "ccBNum", "mutSeed", "dsSteps",
                                             "chdSpread", "chdInversion", "arpOctaves", "arpVelFixed", "arpRepeats", "arpSteps",
-                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot", "bcKeyBase", "bcTempo", "bcTempo2", "bcTempo3", "bcTempo4", "bcChopLatency", "bsFillKey", "bsVarAmount", "bsAutoFillProb", "rsOct", "rsSemi", "rxNote", "rxSeed", "cAOct", "cASemi", "cBOct", "cBSemi" });
+                                            "uni1Voices", "uni2Voices", "uni3Voices", "uni4Voices", "uni5Voices", "uni6Voices", "gsRoot", "bcKeyBase", "bcTempo", "bcTempo2", "bcTempo3", "bcTempo4", "bcChopLatency", "bsFillKey", "bsVarAmount", "bsAutoFillProb", "rsOct", "rsSemi", "rxNote", "rxSeed", "cAOct", "cASemi", "cBOct", "cBSemi", "sxDuckNote" });
             m.modulatable = (r.kind == KFloat || r.kind == KAmount) && ! admin
                             && ! isAny (id, { "pfX1", "pfY1", "pfX2", "pfY2" });   // the XY pads are sources, not destinations
             float adScale;

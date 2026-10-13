@@ -629,7 +629,7 @@ void Voice::updateControl (const Snapshot& s, const WaveSample* const* wavs, con
     fSub.target = (float) oscF (P_subOct, semi (P_subSemi) + pitch + driftCents[3]);
     f1.step (cPort); f2.step (cPort); f3.step (cPort); fSub.step (cPort);
     gHz.target = (float) baseFreq; gHz.step (cPort);   // (v0.1.72: glides exactly as Osc 1 does)
-    const double glHz = gHz.v;
+    const double glHz = s.f (P_porta) > 0.0005f ? (double) gHz.v : baseFreq;   // (no Portamento: the note's pitch exactly, as before)
 
     wave1 = kWaveChoiceToId[clampv (s.i (P_osc1Wave), 0, 9)];
     wave2 = kWaveChoiceToId[clampv (s.i (P_osc2Wave), 0, 9)];
@@ -1089,7 +1089,7 @@ void Voice::render (float* L, float* R, int numSamples, const Snapshot& s, const
         arp.fm = ps.f (P_arFm); arp.fmTarget = clampv (ps.i (P_arFmTarget), 0, 4); arp.am = ps.f (P_arAm); arp.ring = ps.f (P_arRing);
         arp.shiftHz = ps.f (P_arShift); arp.shiftMix = ps.f (P_arShiftMix);
         const bool arFmOn = arp.fmActive(), arFxOn = arp.fxActive(), needMod = arFmOn || arFxOn;
-        const double modHz = gHz.v * pow2 (ps.bendSemis / 12.0) * arp.ratio + arp.offsetHz;   // (v0.1.72: glides with the note)
+        const double modHz = (ps.f (P_porta) > 0.0005f ? (double) gHz.v : baseFreq) * pow2 (ps.bendSemis / 12.0) * arp.ratio + arp.offsetHz;   // (v0.1.72: glides with the note)
         const float fmIndex = arp.fm * 8.0f;
         bool fmT[AD_COUNT] = {};
         if (arFmOn)

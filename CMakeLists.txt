@@ -68,12 +68,12 @@ endif()
 juce_add_plugin(MegaSynth
     COMPANY_NAME "Twisted Genetics"
     COMPANY_WEBSITE "https://github.com/TwistedGenetics/Mega-Synth"
-    BUNDLE_ID com.twistedgenetics.megasynth
+    BUNDLE_ID com.twistedgenetics.megasynthrack
     PLUGIN_MANUFACTURER_CODE TwGn
-    PLUGIN_CODE MgSy
+    PLUGIN_CODE MgSr
     FORMATS ${MEGASYNTH_FORMATS}
-    PRODUCT_NAME "Mega Synth"
-    DESCRIPTION "Mega Synth - 6 oscillators, FM/ring matrix, 17 filters, effects and sequencer"
+    PRODUCT_NAME "Mega Synth Rack"
+    DESCRIPTION "Mega Synth Rack (test skin) - 6 oscillators, FM/ring matrix, 17 filters, effects and sequencer"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE

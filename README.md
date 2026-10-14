@@ -1,5 +1,7 @@
 # Mega Synth
 
+> **This is the `skin-rack` branch: Mega Synth Rack, a test skin.** The same synth as Mega Synth v0.1.75 with a brushed-aluminium look (modules with screws, a strip of each section's colour, grey knobs with coloured caps, pill buttons, light screens). It installs as its own plug-in, **Mega Synth Rack**, beside the normal Mega Synth, so both can be used at once. Its builds are pre-releases named "Mega Synth Rack (test skin)". Projects saved with one don't open in the other (they're separate plug-ins); patches can be copied across with Copy Patch / Paste Patch. The sound is identical.
+
 A VST3 / Audio Unit port of the **Mega Browser Synth** by Twisted Genetics: six oscillators, an FM and ring-mod matrix, 17 filter flavours, three LFOs and three mod envelopes with a 6-slot assignment matrix, tape delay, 90s reverb + shimmer, Juno chorus, a reverse pitch reverb and a 32-step acid sequencer.
 
 The DSP follows the browser version closely: same oscillator shapes, the same Web Audio filter stages and formulas, the same envelopes, modulation scaling and effect routing. Patches move both ways between the two.

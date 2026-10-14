@@ -154,7 +154,7 @@ public:
                 if (ticked)
                 {
                     juce::Path tick; tick.startNewSubPath (box.getX() + 4.0f, box.getCentreY()); tick.lineTo (box.getX() + 8.0f, box.getBottom() - 4.0f); tick.lineTo (box.getRight() - 3.5f, box.getY() + 4.0f);
-                    g.setColour ((blocked ? col::muted : col::bg).withAlpha (blocked ? 0.8f : 1.0f)); g.strokePath (tick, juce::PathStrokeType (2.0f));
+                    g.setColour ((blocked ? col::muted : col::text).withAlpha (blocked ? 0.8f : 1.0f)); g.strokePath (tick, juce::PathStrokeType (2.0f));
                 }
                 if (blocked) { g.setColour (col::complex.withAlpha (0.8f)); g.drawLine (box.getX() - 1.0f, box.getBottom() + 1.0f, box.getRight() + 1.0f, box.getY() - 1.0f, 1.5f); }
             }
@@ -245,7 +245,7 @@ public:
             const auto c = colourFor (valueFor (r));
             g.setColour (on ? c.withAlpha (0.85f) : col::panel2); g.fillRoundedRectangle (rc, 4.0f);
             g.setColour (on ? c : col::border); g.drawRoundedRectangle (rc, 4.0f, 1.0f);
-            g.setColour (on ? col::bg : col::muted);
+            g.setColour (on ? col::text : col::muted);
             g.setFont (juce::Font (juce::FontOptions (11.0f, on ? juce::Font::bold : juce::Font::plain)));
             g.drawText (juce::String ("Keys: ") + names[r], rc, juce::Justification::centred);
         }

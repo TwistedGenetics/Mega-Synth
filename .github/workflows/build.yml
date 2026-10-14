@@ -2,7 +2,7 @@ name: Build plugin
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, skin-rack ]
     tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
@@ -26,9 +26,9 @@ jobs:
       - name: Ad-hoc sign the bundles
         run: |
           cd "build/MegaSynth_artefacts/Release"
-          codesign --force --deep --sign - "VST3/Mega Synth.vst3"
-          codesign --force --deep --sign - "AU/Mega Synth.component"
-          codesign --force --deep --sign - "Standalone/Mega Synth.app"
+          codesign --force --deep --sign - "VST3/Mega Synth Rack.vst3"
+          codesign --force --deep --sign - "AU/Mega Synth Rack.component"
+          codesign --force --deep --sign - "Standalone/Mega Synth Rack.app"
 
       - name: Validate with pluginval
         continue-on-error: true
@@ -36,42 +36,43 @@ jobs:
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pluginval.zip
           pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --timeout-ms 600000 \
-            --validate "build/MegaSynth_artefacts/Release/VST3/Mega Synth.vst3"
+            --validate "build/MegaSynth_artefacts/Release/VST3/Mega Synth Rack.vst3"
 
       - name: Validate the Audio Unit (auval)
         continue-on-error: true
         run: |
           mkdir -p ~/Library/Audio/Plug-Ins/Components
-          cp -R "build/MegaSynth_artefacts/Release/AU/Mega Synth.component" ~/Library/Audio/Plug-Ins/Components/
+          cp -R "build/MegaSynth_artefacts/Release/AU/Mega Synth Rack.component" ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar || true
           auval -v aumu MgSy TwGn
 
       - name: Package
         run: |
-          mkdir -p dist/MegaSynth-macOS
-          cp -R "build/MegaSynth_artefacts/Release/VST3/Mega Synth.vst3" dist/MegaSynth-macOS/
-          cp -R "build/MegaSynth_artefacts/Release/AU/Mega Synth.component" dist/MegaSynth-macOS/
-          cp -R "build/MegaSynth_artefacts/Release/Standalone/Mega Synth.app" dist/MegaSynth-macOS/
-          cp INSTALL-mac.txt dist/MegaSynth-macOS/
-          cd dist && ditto -c -k --keepParent MegaSynth-macOS MegaSynth-macOS.zip
+          mkdir -p dist/MegaSynthRack-macOS
+          cp -R "build/MegaSynth_artefacts/Release/VST3/Mega Synth Rack.vst3" dist/MegaSynthRack-macOS/
+          cp -R "build/MegaSynth_artefacts/Release/AU/Mega Synth Rack.component" dist/MegaSynthRack-macOS/
+          cp -R "build/MegaSynth_artefacts/Release/Standalone/Mega Synth Rack.app" dist/MegaSynthRack-macOS/
+          cp INSTALL-mac.txt dist/MegaSynthRack-macOS/
+          cd dist && ditto -c -k --keepParent MegaSynthRack-macOS MegaSynthRack-macOS.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MegaSynth-macOS
-          path: dist/MegaSynth-macOS.zip
+          name: MegaSynthRack-macOS
+          path: dist/MegaSynthRack-macOS.zip
 
       - name: Publish release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/skin-rack'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.${{ github.run_number }}
-          name: Mega Synth v0.1.${{ github.run_number }}
+          tag_name: rack-v0.1.${{ github.run_number }}
+          name: Mega Synth Rack (test skin) v0.1.${{ github.run_number }}
+          prerelease: true
           target_commitish: ${{ github.sha }}
-          make_latest: true
+          make_latest: false
           body: |
-            Download **MegaSynth-macOS.zip** for Mac (VST3, AU and standalone app; universal for Apple Silicon and Intel).
-            Install steps are in INSTALL-mac.txt inside the zip. MegaSynth-Windows.zip has the Windows VST3.
-          files: dist/MegaSynth-macOS.zip
+            Download **MegaSynthRack-macOS.zip** for Mac (VST3, AU and standalone app; universal for Apple Silicon and Intel).
+            Install steps are in INSTALL-mac.txt inside the zip. MegaSynthRack-Windows.zip has the Windows VST3.
+          files: dist/MegaSynthRack-macOS.zip
 
   windows:
     name: Windows (VST3 + Standalone)
@@ -95,21 +96,22 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/MegaSynth-Windows | Out-Null
-          Copy-Item -Recurse "build/MegaSynth_artefacts/Release/VST3/Mega Synth.vst3" dist/MegaSynth-Windows/
-          Copy-Item "build/MegaSynth_artefacts/Release/Standalone/Mega Synth.exe" dist/MegaSynth-Windows/
-          Compress-Archive -Path dist/MegaSynth-Windows -DestinationPath dist/MegaSynth-Windows.zip
+          New-Item -ItemType Directory -Force dist/MegaSynthRack-Windows | Out-Null
+          Copy-Item -Recurse "build/MegaSynth_artefacts/Release/VST3/Mega Synth Rack.vst3" dist/MegaSynthRack-Windows/
+          Copy-Item "build/MegaSynth_artefacts/Release/Standalone/Mega Synth Rack.exe" dist/MegaSynthRack-Windows/
+          Compress-Archive -Path dist/MegaSynthRack-Windows -DestinationPath dist/MegaSynthRack-Windows.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MegaSynth-Windows
-          path: dist/MegaSynth-Windows.zip
+          name: MegaSynthRack-Windows
+          path: dist/MegaSynthRack-Windows.zip
 
       - name: Publish release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/skin-rack'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.${{ github.run_number }}
-          name: Mega Synth v0.1.${{ github.run_number }}
+          tag_name: rack-v0.1.${{ github.run_number }}
+          name: Mega Synth Rack (test skin) v0.1.${{ github.run_number }}
+          prerelease: true
           target_commitish: ${{ github.sha }}
-          files: dist/MegaSynth-Windows.zip
+          files: dist/MegaSynthRack-Windows.zip

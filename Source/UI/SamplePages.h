@@ -76,7 +76,7 @@ public:
         const float norm = 1.0f / std::max (0.05f, w->peak);
         const int cols = std::max (1, (int) in.getWidth());
         const double spp = samplesPerPixel();
-        g.setColour (colour.withAlpha (0.85f));
+        g.setColour (col::ink (colour).withAlpha (0.9f));
         if (spp < 1.5)
         {
             // close in: the samples themselves, joined up
@@ -103,7 +103,7 @@ public:
             {
                 if (m.frac < viewStart - 0.001 || m.frac > viewStart + viewLen + 0.001) continue;
                 const float x = xFor (m.frac);
-                g.setColour (m.colour);
+                g.setColour (col::ink (m.colour));
                 if (m.handle)
                 {
                     juce::Path tri; tri.addTriangle (x - 5.0f, in.getBottom(), x + 5.0f, in.getBottom(), x, in.getBottom() - 9.0f);

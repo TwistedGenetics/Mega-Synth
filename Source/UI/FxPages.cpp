@@ -179,7 +179,7 @@ void FxLight::paint (juce::Graphics& g)
         auto gr = juce::Rectangle<float> (x, r.getCentreY() - 7.0f, 40.0f, 14.0f);
         g.setColour (gate > 0.05f ? c.withAlpha (0.35f + 0.65f * gate) : col::panel3);
         g.fillRoundedRectangle (gr, 3.0f);
-        g.setColour (gate > 0.05f ? col::bg : col::muted);
+        g.setColour (gate > 0.05f ? col::text : col::muted);
         g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
         g.drawText ("GATE", gr, juce::Justification::centred);
         x = gr.getRight() + 6.0f;

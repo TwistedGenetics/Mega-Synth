@@ -16,7 +16,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        const auto bg = juce::Colour (0xff141a24), grid = juce::Colour (0xff2a3444), text = juce::Colour (0xff8a97ab), curve = juce::Colour (0xff8b7cf6);
+        const auto bg = juce::Colour (0xfff4f4f5), grid = juce::Colour (0xffc9cbcd), text = juce::Colour (0xff4c5055), curve = juce::Colour (0xff6a55e0);   // (Rack: a light screen)
         auto r = getLocalBounds().toFloat();
         g.setColour (bg); g.fillRoundedRectangle (r, 6.0f);
         const auto st = settings();

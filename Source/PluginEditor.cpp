@@ -34,7 +34,7 @@ Look::Look()
     setColour (juce::ComboBox::arrowColourId, col::muted);
     setColour (juce::PopupMenu::backgroundColourId, col::panel2);
     setColour (juce::PopupMenu::textColourId, col::text);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, col::accent.withAlpha (0.35f));
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, col::accent.withAlpha (0.25f));
     setColour (juce::PopupMenu::highlightedTextColourId, col::text);
     setColour (juce::TextButton::buttonColourId, col::panel3);
     setColour (juce::TextButton::textColourOffId, col::text);
@@ -43,6 +43,7 @@ Look::Look()
     setColour (juce::ToggleButton::tickColourId, col::accent);
     setColour (juce::ToggleButton::tickDisabledColourId, col::muted);
     setColour (juce::Slider::textBoxTextColourId, col::muted);
+    setColour (juce::Slider::backgroundColourId, col::panel3);
     setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
     setColour (juce::Slider::textBoxHighlightColourId, col::accent.withAlpha (0.4f));
@@ -51,9 +52,9 @@ Look::Look()
     setColour (juce::TabbedComponent::backgroundColourId, col::bg);
     setColour (juce::TabbedComponent::outlineColourId, col::border);
     setColour (juce::TabbedButtonBar::tabOutlineColourId, col::border);
-    setColour (juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour (0xfff7f8fa));
-    setColour (juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour (0xff12171d));
-    setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colour (0xff3f83b7).withAlpha (0.75f));
+    setColour (juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour (0xfff3f3f3));
+    setColour (juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour (0xff151515));
+    setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colour (0xff3fc8e8).withAlpha (0.8f));
     setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour (0xffc6e6ff).withAlpha (0.5f));
     setColour (juce::AlertWindow::backgroundColourId, col::panel);
     setColour (juce::AlertWindow::textColourId, col::text);
@@ -61,33 +62,58 @@ Look::Look()
 
 void Look::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float start, float end, juce::Slider& s)
 {
-    const auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (3.0f);
+    // (Rack) a knurled aluminium knob with a cap in the section's colour, a black pointer, a printed scale and a thin value arc
+    const auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (2.0f);
     const float radius = std::min (bounds.getWidth(), bounds.getHeight()) * 0.5f;
     const auto c = bounds.getCentre();
-    const float lineW = 3.5f;
-    const float arcR = radius - lineW * 0.5f;
     const juce::Colour fill = s.findColour (juce::Slider::rotarySliderFillColourId);
-
-    juce::Path track;
-    track.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, start, end, true);
-    g.setColour (col::panel3);
-    g.strokePath (track, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-    // bipolar sliders draw from the centre
+    const float a1 = start + pos * (end - start);
+    // the printed scale: 11 ticks
+    g.setColour (juce::Colour (0xff2a2b2d));
+    for (int t = 0; t <= 10; ++t)
+    {
+        const float a = start + (end - start) * (float) t / 10.0f;
+        const float r0 = radius - (t % 5 == 0 ? 3.5f : 2.5f), r1 = radius;
+        g.drawLine (c.x + r0 * std::sin (a), c.y - r0 * std::cos (a), c.x + r1 * std::sin (a), c.y - r1 * std::cos (a), t % 5 == 0 ? 1.4f : 1.0f);
+    }
+    // the value: a thin arc inside the scale (bipolar ones from the centre)
+    const float arcR = radius - 5.0f;
     const bool bipolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;
     const float zeroPos = bipolar ? (float) s.valueToProportionOfLength (0.0) : 0.0f;
     const float a0 = start + zeroPos * (end - start);
-    const float a1 = start + pos * (end - start);
-    juce::Path val;
-    val.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, std::min (a0, a1), std::max (a0, a1), true);
-    g.setColour (fill);
-    g.strokePath (val, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-    g.setColour (col::panel2);
-    g.fillEllipse (juce::Rectangle<float> (radius * 1.25f, radius * 1.25f).withCentre (c));
-    const juce::Point<float> tip (c.x + (radius * 0.55f) * std::sin (a1), c.y - (radius * 0.55f) * std::cos (a1));
-    g.setColour (col::text);
-    g.drawLine (c.x, c.y, tip.x, tip.y, 2.0f);
+    juce::Path track; track.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, start, end, true);
+    g.setColour (juce::Colour (0x33000000));
+    g.strokePath (track, juce::PathStrokeType (2.0f));
+    if (std::abs (a1 - a0) > 0.001f)
+    {
+        juce::Path val; val.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, std::min (a0, a1), std::max (a0, a1), true);
+        g.setColour (fill.darker (0.25f));
+        g.strokePath (val, juce::PathStrokeType (2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    // the skirt (aluminium) and the cap
+    const float skirt = radius - 7.0f;
+    if (skirt > 3.0f)
+    {
+        auto sk = juce::Rectangle<float> (skirt * 2.0f, skirt * 2.0f).withCentre (c);
+        g.setColour (juce::Colour (0x40000000));
+        g.fillEllipse (sk.translated (0.0f, 1.2f));
+        juce::ColourGradient al (juce::Colour (0xfff6f6f6), c.x - skirt * 0.4f, c.y - skirt * 0.6f, juce::Colour (0xff8e9093), c.x + skirt * 0.5f, c.y + skirt, true);
+        g.setGradientFill (al);
+        g.fillEllipse (sk);
+        g.setColour (juce::Colour (0xff6d6f72));
+        g.drawEllipse (sk, 0.8f);
+        const float capR = skirt * 0.62f;
+        auto cap = juce::Rectangle<float> (capR * 2.0f, capR * 2.0f).withCentre (c);
+        const juce::Colour cc = fill.interpolatedWith (juce::Colour (0xffc9c9c9), 0.22f);
+        juce::ColourGradient cg (cc.brighter (0.25f), c.x, c.y - capR, cc.darker (0.2f), c.x, c.y + capR, false);
+        g.setGradientFill (cg);
+        g.fillEllipse (cap);
+        g.setColour (cc.darker (0.5f).withAlpha (0.6f));
+        g.drawEllipse (cap, 0.8f);
+        // the pointer: across the cap to the skirt's edge
+        g.setColour (juce::Colour (0xff111111));
+        g.drawLine (c.x + 1.5f * std::sin (a1), c.y - 1.5f * std::cos (a1), c.x + (skirt - 1.0f) * std::sin (a1), c.y - (skirt - 1.0f) * std::cos (a1), 2.2f);
+    }
 }
 
 void Look::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos,
@@ -117,14 +143,31 @@ void Look::drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, i
 {
     const auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h).reduced (0.5f);
     g.setColour (box.findColour (juce::ComboBox::backgroundColourId));
-    g.fillRoundedRectangle (r, 5.0f);
+    g.fillRoundedRectangle (r, 3.0f);
     g.setColour (box.findColour (juce::ComboBox::outlineColourId));
-    g.drawRoundedRectangle (r, 5.0f, 1.0f);
+    g.drawRoundedRectangle (r, 3.0f, 1.0f);
     juce::Path arrow;
     const float ax = (float) w - 12.0f, ay = (float) h * 0.5f;
     arrow.addTriangle (ax - 4, ay - 2, ax + 4, ay - 2, ax, ay + 3);
-    g.setColour (col::muted);
+    g.setColour (col::text);
     g.fillPath (arrow);
+}
+
+void Look::drawLabel (juce::Graphics& g, juce::Label& l)
+{
+    g.fillAll (l.findColour (juce::Label::backgroundColourId));
+    if (! l.isBeingEdited())
+    {
+        const float alpha = l.isEnabled() ? 1.0f : 0.5f;
+        const auto font = getLabelFont (l);
+        g.setColour (readable (l.findColour (juce::Label::textColourId)).withMultipliedAlpha (alpha));
+        g.setFont (font);
+        const auto area = getLabelBorderSize (l).subtractedFrom (l.getLocalBounds());
+        g.drawFittedText (l.getText(), area, l.getJustificationType(), juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight())), l.getMinimumHorizontalScale());
+        g.setColour (l.findColour (juce::Label::outlineColourId).withMultipliedAlpha (alpha));
+    }
+    else if (l.isEnabled()) g.setColour (l.findColour (juce::Label::outlineColourId));
+    g.drawRect (l.getLocalBounds());
 }
 
 void Look::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
@@ -135,26 +178,44 @@ void Look::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
 
 void Look::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour& base, bool over, bool down)
 {
+    // (Rack) pill buttons: aluminium, or the button's own colour when it has one (a lit / chosen button)
     auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-    auto c = base;
-    if (down) c = c.brighter (0.25f); else if (over) c = c.brighter (0.12f);
-    g.setColour (c);
-    g.fillRoundedRectangle (r, 7.0f);
-    g.setColour (col::border);
-    g.drawRoundedRectangle (r, 7.0f, 1.0f);
+    const float rad = std::min (r.getHeight() * 0.5f, 12.0f);
+    const bool plain = base == col::panel3 || base.getAlpha() == 0;
+    if (plain)
+    {
+        juce::ColourGradient gr (juce::Colour (0xfffbfbfb), 0.0f, r.getY(), juce::Colour (0xffd5d6d8), 0.0f, r.getBottom(), false);
+        if (down) gr = juce::ColourGradient (juce::Colour (0xffc9cacc), 0.0f, r.getY(), juce::Colour (0xffe9eaeb), 0.0f, r.getBottom(), false);
+        g.setGradientFill (gr);
+    }
+    else g.setColour (down ? base.darker (0.15f) : (over ? base.brighter (0.08f) : base));
+    g.fillRoundedRectangle (r, rad);
+    if (over && plain) { g.setColour (juce::Colour (0x10000000)); g.fillRoundedRectangle (r, rad); }
+    g.setColour (juce::Colour (0xff7b7d80));
+    g.drawRoundedRectangle (r, rad, 1.0f);
 }
 
 void Look::drawTabButton (juce::TabBarButton& b, juce::Graphics& g, bool over, bool)
 {
     auto r = b.getLocalBounds().toFloat().reduced (1.5f, 3.0f);
     const bool front = b.isFrontTab();
-    g.setColour (front ? col::panel3 : (over ? col::panel2.brighter (0.05f) : col::panel2));
-    g.fillRoundedRectangle (r, 7.0f);
-    g.setColour (front ? col::accent : col::border);
-    g.drawRoundedRectangle (r, 7.0f, front ? 2.0f : 1.0f);
-    g.setColour (front ? col::text : col::muted);
+    if (front)
+    {
+        g.setColour (juce::Colour (0xfff7f7f8));
+        g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (col::border);
+        g.drawRoundedRectangle (r, 3.0f, 1.0f);
+        g.setColour (col::accent);
+        g.fillRect (r.removeFromBottom (3.0f).reduced (4.0f, 0.0f));
+    }
+    else if (over)
+    {
+        g.setColour (juce::Colour (0x22ffffff));
+        g.fillRoundedRectangle (r, 3.0f);
+    }
+    g.setColour (front ? col::text : juce::Colour (0xff26282b));
     g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
-    g.drawFittedText (b.getButtonText(), r.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+    g.drawFittedText (b.getButtonText().toUpperCase(), b.getLocalBounds().reduced (3, 3), juce::Justification::centred, 1, 0.7f);
 }
 
 //==============================================================================
@@ -611,18 +672,44 @@ void Section::add (juce::Component* c, int w, int h)
 
 void Section::newRow() { pendingBreak = true; }
 
+static juce::Font sectionTitleFont()
+{
+    auto f = juce::Font (juce::FontOptions (12.5f, juce::Font::bold));
+    f.setExtraKerningFactor (0.12f);
+    return f;
+}
+
 void Section::paint (juce::Graphics& g)
 {
-    auto r = getLocalBounds().toFloat().reduced (1.0f);
-    g.setColour (col::panel);
-    g.fillRoundedRectangle (r, 12.0f);
-    g.setColour (flashing ? colour : col::border);
-    g.drawRoundedRectangle (r, 12.0f, flashing ? 3.0f : 1.0f);
+    // (Rack) a brushed aluminium module: a strip of the section's colour along the top, its name printed in capitals, four screws
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    juce::ColourGradient al (juce::Colour (0xffd8dadb), r.getX(), 0.0f, juce::Colour (0xffe1e2e3), r.getRight(), 0.0f, false);
+    al.addColour (0.3, juce::Colour (0xffeeeeef));
+    al.addColour (0.62, juce::Colour (0xffdcdedf));
+    al.addColour (0.85, juce::Colour (0xffe8e9ea));
+    g.setGradientFill (al);
+    g.fillRoundedRectangle (r, 3.0f);
+    // fine brushing
+    g.setColour (juce::Colour (0x08000000));
+    for (float yy = r.getY() + 2.0f; yy < r.getBottom(); yy += 3.0f) g.drawHorizontalLine ((int) yy, r.getX() + 2.0f, r.getRight() - 2.0f);
+    g.setColour (flashing ? colour.darker (0.2f) : col::border);
+    g.drawRoundedRectangle (r, 3.0f, flashing ? 3.0f : 1.0f);
     g.setColour (colour);
-    g.fillRoundedRectangle (juce::Rectangle<float> (r.getX() + 12, r.getY() + 9, 4, 16), 2.0f);
+    g.fillRect (juce::Rectangle<float> (r.getX() + 1.0f, r.getY() + 1.0f, r.getWidth() - 2.0f, 4.0f));
+    auto screw = [&g] (float cx, float cy)
+    {
+        auto e = juce::Rectangle<float> (8.0f, 8.0f).withCentre ({ cx, cy });
+        juce::ColourGradient sg (juce::Colours::white, cx - 1.5f, cy - 2.0f, juce::Colour (0xff6c6e71), cx + 3.0f, cy + 4.0f, true);
+        g.setGradientFill (sg);
+        g.fillEllipse (e);
+        g.setColour (juce::Colour (0xff55575a));
+        g.drawLine (cx - 2.6f, cy + 1.6f, cx + 2.6f, cy - 1.6f, 1.2f);
+    };
+    screw (r.getX() + 7.0f, r.getY() + 11.0f); screw (r.getRight() - 7.0f, r.getY() + 11.0f);
+    screw (r.getX() + 7.0f, r.getBottom() - 7.0f); screw (r.getRight() - 7.0f, r.getBottom() - 7.0f);
     g.setColour (col::text);
-    g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
-    g.drawText (title, juce::Rectangle<float> (r.getX() + 22, r.getY() + 6, r.getWidth() - 30, 22), juce::Justification::centredLeft);
+    g.setFont (sectionTitleFont());
+    g.drawText (title.toUpperCase(), juce::Rectangle<float> (r.getX() + 22, r.getY() + 7, r.getWidth() - 30, 22), juce::Justification::centredLeft);
 }
 
 void Section::flash()
@@ -643,7 +730,7 @@ void Section::addTitleChip (juce::Component* c, int width)
 void Section::resized()
 {
     juce::GlyphArrangement ga;
-    ga.addLineOfText (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)), title, 0.0f, 0.0f);
+    ga.addLineOfText (sectionTitleFont(), title.toUpperCase(), 0.0f, 0.0f);
     const int tw = juce::roundToInt (ga.getBoundingBox (0, -1, true).getWidth());
     if (infoBadge != nullptr) infoBadge->setBounds (juce::jmin (getWidth() - 26, 23 + tw + 8), 9, 16, 16);
     int cx = 23 + tw + 8 + (infoBadge != nullptr ? 24 : 0);
@@ -1708,8 +1795,8 @@ namespace
             }
             // the lane: one bar, its beats, and the last 32 hits (newest brightest), a row per type
             const auto lane = juce::Rectangle<float> (128.0f, 2.0f, (float) getWidth() - 132.0f, 26.0f);
-            g.setColour (juce::Colour (0xff141a24)); g.fillRoundedRectangle (lane, 3.0f);
-            g.setColour (juce::Colours::white.withAlpha (0.12f));
+            g.setColour (juce::Colour (0xfff4f4f5)); g.fillRoundedRectangle (lane, 3.0f);
+            g.setColour (juce::Colours::black.withAlpha (0.18f));
             for (int b = 1; b < 16; ++b) g.fillRect (lane.getX() + lane.getWidth() * b / 16.0f, lane.getY() + (b % 4 == 0 ? 0.0f : 18.0f), 1.0f, b % 4 == 0 ? lane.getHeight() : 8.0f);
             const int c = en.rxLogCount.load();
             const int n = std::min (32, c);

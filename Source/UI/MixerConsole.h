@@ -92,7 +92,7 @@ public:
         {
             const auto tag = juce::Rectangle<float> (r.getX() + 8, r.getBottom() - 22, r.getWidth() - 16, 15);
             g.setColour (pEnvLit ? col::env : col::panel2); g.fillRoundedRectangle (tag, 4.0f);
-            g.setColour (pEnvLit ? col::bg : col::muted);
+            g.setColour (pEnvLit ? col::text : col::muted);
             g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
             g.drawFittedText ("PITCH ENV", tag.toNearestInt(), juce::Justification::centred, 1, 0.6f);
         }

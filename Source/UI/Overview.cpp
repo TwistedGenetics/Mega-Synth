@@ -144,7 +144,7 @@ void SignalFlowView::paint (juce::Graphics& g)
             const auto badge = juce::Rectangle<float> (rb.getRight() - 22, rb.getY() - 8, 24, 16);
             g.setColour (col::mod);
             g.fillRoundedRectangle (badge, 8.0f);
-            g.setColour (col::bg);
+            g.setColour (col::text);
             g.setFont (juce::Font (juce::FontOptions (10.5f, juce::Font::bold)));
             g.drawText (juce::String (routesTo[b]), badge, juce::Justification::centred);
         }

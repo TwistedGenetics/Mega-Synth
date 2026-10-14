@@ -22,8 +22,8 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        const auto bg = juce::Colour (0xff1b2230), line = juce::Colour (0xff334155), text = juce::Colour (0xffe2e8f0),
-                   muted = juce::Colour (0xff94a3b8), accent = juce::Colour (0xff38bdf8), warn = juce::Colour (0xfff59e0b);
+        const auto bg = juce::Colour (0xffeeeff0), line = juce::Colour (0xff8c8e91), text = juce::Colour (0xff141414),
+                   muted = juce::Colour (0xff4c5055), accent = juce::Colour (0xff0090b0), warn = juce::Colour (0xffb06a00);   // (Rack: light)
         auto r = getLocalBounds().toFloat().reduced (1.0f);
         g.setColour (bg); g.fillRoundedRectangle (r, 8.0f);
         g.setColour (line); g.drawRoundedRectangle (r, 8.0f, 1.0f);

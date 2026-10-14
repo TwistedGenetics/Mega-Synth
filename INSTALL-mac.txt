@@ -1,18 +1,19 @@
-MEGA SYNTH - installing on a Mac
+MEGA SYNTH RACK (test skin) - installing on a Mac
+It installs beside the normal Mega Synth; both can be used at once.
 ================================
 
 This folder contains:
-  Mega Synth.vst3        VST3 plugin (Ableton Live, Bitwig, Reaper, Studio One, FL Studio, Cubase...)
-  Mega Synth.component   Audio Unit plugin (Logic Pro, GarageBand, also Live/Reaper)
-  Mega Synth.app         Standalone app (plays from a MIDI keyboard or your computer keyboard)
+  Mega Synth Rack.vst3        VST3 plugin (Ableton Live, Bitwig, Reaper, Studio One, FL Studio, Cubase...)
+  Mega Synth Rack.component   Audio Unit plugin (Logic Pro, GarageBand, also Live/Reaper)
+  Mega Synth Rack.app         Standalone app (plays from a MIDI keyboard or your computer keyboard)
 
 1. Copy the plugins into place
 
    Open Finder, press Shift+Cmd+G and paste:   ~/Library/Audio/Plug-Ins/VST3
-   Drag "Mega Synth.vst3" into that folder.
+   Drag "Mega Synth Rack.vst3" into that folder.
 
    Press Shift+Cmd+G again and paste:          ~/Library/Audio/Plug-Ins/Components
-   Drag "Mega Synth.component" into that folder.
+   Drag "Mega Synth Rack.component" into that folder.
 
    (Create either folder if it doesn't exist.)
 
@@ -22,12 +23,12 @@ This folder contains:
    blocks it the first time ("damaged" or "can't be verified"). Open Terminal
    and paste these lines, then press Return:
 
-   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"Mega Synth.vst3"
-   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/"Mega Synth.component"
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"Mega Synth Rack.vst3"
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/"Mega Synth Rack.component"
 
    For the standalone app, after moving it to Applications:
 
-   xattr -dr com.apple.quarantine /Applications/"Mega Synth.app"
+   xattr -dr com.apple.quarantine /Applications/"Mega Synth Rack.app"
 
 3. Rescan in your DAW
 

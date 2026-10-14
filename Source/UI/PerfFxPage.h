@@ -57,7 +57,7 @@ public:
             g.drawRoundedRectangle (r.reduced (1.0f), 8.0f, 2.5f);
         }
         else { g.setColour (s == 2 ? colour.brighter (0.4f) : col::border); g.drawRoundedRectangle (r, 8.0f, 1.2f); }
-        const auto ink = s == 2 ? col::bg : col::text;
+        const auto ink = s == 2 ? col::text : col::text;
         g.setColour (ink.withAlpha (0.7f));
         g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
         g.drawText (juce::String (stageOf (pad)), r.reduced (7.0f, 5.0f), juce::Justification::topLeft);

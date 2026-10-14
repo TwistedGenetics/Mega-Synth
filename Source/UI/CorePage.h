@@ -102,7 +102,7 @@ public:
             const auto c = juce::Rectangle<float> (18.0f, 18.0f).withCentre (pos[k]);
             g.setColour (live ? (d[k] == 0 ? colour : colour.darker (0.5f)) : col::panel3);
             g.fillEllipse (c);
-            g.setColour (live ? col::bg : col::muted);
+            g.setColour (live ? col::text : col::muted);
             g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
             g.drawText (juce::String (k + 1), c, juce::Justification::centred);
         }

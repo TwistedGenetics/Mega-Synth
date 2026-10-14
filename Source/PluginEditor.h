@@ -10,15 +10,17 @@ namespace tgui
 
 namespace col
 {
-    const juce::Colour bg      { 0xff0d1117 };
-    const juce::Colour panel   { 0xff161b22 };
-    const juce::Colour panel2  { 0xff1f2630 };
-    const juce::Colour panel3  { 0xff27303c };
-    const juce::Colour text    { 0xffedf3fa };
-    const juce::Colour muted   { 0xff9fb0c3 };
-    const juce::Colour accent  { 0xff66b3ff };
-    const juce::Colour border  { 0xff344252 };
-    const juce::Colour master  { 0xff66b3ff };
+    // (Mega Synth Rack: the test skin - brushed aluminium modules, dark print, the sections' colours on strips and knob caps)
+    const juce::Colour bg      { 0xffaeb1b5 };   // the rack between modules
+    const juce::Colour panel   { 0xffe4e5e6 };   // a module's aluminium
+    const juce::Colour panel2  { 0xfff7f7f8 };   // fields (menus, text boxes)
+    const juce::Colour panel3  { 0xffcfd1d3 };   // knob tracks, quiet fills
+    const juce::Colour text    { 0xff141414 };
+    const juce::Colour muted   { 0xff4c5055 };
+    const juce::Colour accent  { 0xff0090b0 };
+    const juce::Colour border  { 0xff8c8e91 };
+    const juce::Colour screen  { 0xff0b0c0d };   // displays (waveforms, scopes)
+    const juce::Colour master  { 0xff2f7fd6 };
     const juce::Colour osc     { 0xffff9f43 };
     const juce::Colour wavetable { 0xfff368e0 };
     const juce::Colour complex { 0xffff6b6b };
@@ -30,6 +32,8 @@ namespace col
     const juce::Colour mod     { 0xff00d2d3 };
     const juce::Colour fx      { 0xffff9ff3 };
     const juce::Colour seq     { 0xff54a0ff };
+    // (Rack) a bright colour drawn on aluminium or a light screen: darkened enough to read
+    inline juce::Colour ink (juce::Colour c) { return (c.getSaturation() > 0.25f && c.getPerceivedBrightness() > 0.5f) ? c.withBrightness (juce::jmin (c.getBrightness(), 0.62f)) : c; }
 }
 
 class Look : public juce::LookAndFeel_V4
@@ -42,6 +46,8 @@ public:
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;
     juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::Font (juce::FontOptions (12.5f)); }
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
+    void drawLabel (juce::Graphics&, juce::Label&) override;   // (Rack: bright coloured text darkened so it reads on aluminium)
+    static juce::Colour readable (juce::Colour c) { return (c.getSaturation() > 0.25f && c.getPerceivedBrightness() > 0.5f) ? c.withBrightness (juce::jmin (c.getBrightness(), 0.52f)) : c; }
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawTabButton (juce::TabBarButton&, juce::Graphics&, bool over, bool down) override;
     int getTabButtonBestWidth (juce::TabBarButton& b, int) override
@@ -430,7 +436,19 @@ private:
     MegaSynthProcessor& proc;
     tgui::Look look;
 
-    juce::Component content;   // fixed 1200x800 design, scaled to the window
+    // fixed 1200x800 design, scaled to the window. (Rack) It paints the rack and the header plate behind everything.
+    struct RackContent : juce::Component
+    {
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (tgui::col::bg);
+            juce::ColourGradient hg (juce::Colour (0xffeeeff0), 0.0f, 0.0f, juce::Colour (0xffcbcdcf), 0.0f, 88.0f, false);
+            g.setGradientFill (hg);
+            g.fillRect (0, 0, getWidth(), 88);
+            g.setColour (juce::Colour (0xff6b6d70));
+            g.fillRect (0, 87, getWidth(), 2);
+        }
+    } content;
     juce::Label title, subtitle, status;
     tgui::SampleBar* sampleBars[2] { nullptr, nullptr };   // owned by the Oscillators page
     juce::TextButton undoBtn { "Undo" }, redoBtn { "Redo" }, originalBtn { "Original" };
